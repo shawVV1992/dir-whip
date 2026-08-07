@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+
+# Test artifacts
+.pytest_cache/
+
+# Temp files
+.tmp/
+
+# Internal (not public): dev docs, specs, feedback, tooling archive
+internal/
+
+# Local tool state
+.cortexkit/

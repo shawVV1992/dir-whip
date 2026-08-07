@@ -1,0 +1,9 @@
+# workspace-guard configuration
+# User-managed. See after-install.md for configuration instructions.
+
+# Optional fallback: Default Working Directory, used ONLY when auto-detection
+# from the Hermes profile config (terminal.cwd) or the TERMINAL_CWD
+# environment variable fails. Never overrides auto-detection.
+# working_dir_root: E:/HermesWorkspace/default
+
+exempt_paths: []

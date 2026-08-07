@@ -1,0 +1,9 @@
+name: workspace-guard
+version: 1.0.0
+description: Enforce session directory discipline in Hermes Default Working Directories
+author: shawVV1992
+license: MIT
+provides_hooks:
+  - pre_tool_call
+  - on_session_start
+entry: __init__.py
