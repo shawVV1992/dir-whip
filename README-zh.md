@@ -15,6 +15,14 @@ workspace-guard 为 Hermes 智能体的工作目录强制执行文件纪律。He
 
 ## 安装
 
+### 技能
+
+```bash
+hermes skills install <repo-url>/src/workspace-organization
+```
+
+技能的脚本以档案备忘录（`profile-workspaces.json`）校验工作区，而非规则文件存在性检查。
+
 ### 插件
 
 ```bash
@@ -23,21 +31,14 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 重启 Hermes 后守卫即开始生效。
 
-### 技能（手动复制）
+### 快捷命令
 
-技能位于 `src/workspace-organization/`，需要复制到 Hermes 的 skills 目录。
+插件安装后，会话内可用以下命令：
 
-Windows:
+- `/workspace-guard workspace_status` — 查看档案备忘录（档案 + 工作区 + 状态 + 变更时间）
+- `/workspace-guard workspace_update` — 手动重建备忘录
 
-```powershell
-Copy-Item -Recurse "src\workspace-organization" "$env:LOCALAPPDATA\hermes\skills\workspace-organization"
-```
-
-Linux/macOS:
-
-```bash
-cp -r src/workspace-organization ~/.hermes/skills/workspace-organization
-```
+`workspace_guard_auto_update_workspace` 工具自动同步同一备忘录。
 
 ### 验证
 
@@ -45,7 +46,7 @@ cp -r src/workspace-organization ~/.hermes/skills/workspace-organization
 
 ## 配置
 
-插件从自身目录读取 `guard-config.yaml`。该文件由用户维护、完全可选，插件默认即可使用。
+插件从 `~/.hermes/workspace-guard/` 读取 `guard-config.yaml`（与备忘录同目录、位于插件目录之外，强制重装不会丢失）。该文件由用户维护、完全可选，插件默认即可使用。
 
 ```yaml
 # workspace-guard configuration
@@ -84,14 +85,14 @@ exempt_paths: []
 
 ## 脚本
 
-随插件捆绑的四个脚本是各自独立的命令行工具。除 `init_workspace.py`（它本身用于创建工作目录）外，每个脚本在操作前都会校验目标目录中包含 `AGENTS.md`。
+随插件捆绑的四个脚本是各自独立的命令行工具。除 `init_workspace.py`（它创建并登记新工作区）外，每个脚本在操作前都会校验目标是否匹配档案备忘录中登记的档案工作区。
 
 | 脚本 | 用途 | 关键参数 |
 |------|------|----------|
 | `create_session_dir.py` | 创建会话目录 `YYYYMMDD_HHMMSS[_TaskName]/`（含 `Outputs/` 和 `.tmp/`），并输出其绝对路径 | `--workspace <path>` |
 | `audit_workspace.py` | 只读的结构合规审计；发现违规时退出码为 1 | `--workspace`, `--json`, `--gate` |
 | `clean_tmp.py` | 清理各会话 `.tmp/` 目录中过期的文件（默认 dry-run） | `--days N`, `--workspace`, `--confirm` |
-| `init_workspace.py` | 初始化一个新的默认工作目录，写入 `AGENTS.md` 规则文件 | `--workspace`, `--template <file>` |
+| `init_workspace.py` | 创建新的工作目录并在备忘录中登记该档案 | `--workspace` |
 
 示例：
 
@@ -108,7 +109,7 @@ python init_workspace.py learn --workspace <WORKSPACE_PATH>
 
 ```
 <WORKSPACE_PATH>/
-├── AGENTS.md
+├── <rules file>          <- 可选的工作区规则文件（名称由用户自行决定）
 ├── 20260802_143000_my-task/
 │   ├── Outputs/    <- 正式交付物
 │   └── .tmp/       <- 中间文件，可安全清理
@@ -118,7 +119,7 @@ python init_workspace.py learn --workspace <WORKSPACE_PATH>
 └── .hermes/        <- Hermes 内部使用，已加入白名单
 ```
 
-工作目录根部只允许存在 `AGENTS.md` 和 `.hermes/`；其余任何根级条目都必须是会话目录。
+工作目录根部只允许存在会话目录和 `.hermes/`；可存在一个可选的规则文件，但并非必需、不由工具写入、也不影响工作区校验（SCR-011：校验使用档案备忘录）。
 
 ## 开发
 

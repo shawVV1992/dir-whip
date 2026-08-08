@@ -13,6 +13,15 @@ Neither layer depends on the other at runtime. The skill works alone as a teachi
 
 ## Installation
 
+### Skill
+
+```bash
+hermes skills install <repo-url>/src/workspace-organization
+```
+
+The skill's scripts validate workspaces against the profile workspace memo
+(`profile-workspaces.json`), not a rules-file presence check.
+
 ### Plugin
 
 ```bash
@@ -21,21 +30,15 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 The guard becomes active after the next Hermes restart.
 
-### Skill (manual copy)
+### Quick commands
 
-The skill lives in `src/workspace-organization/` and must be copied to the Hermes skills directory.
+Once the plugin is installed, these in-session commands are available:
 
-Windows:
+- `/workspace-guard workspace_status` — show the profile workspace memo
+  (profiles + workspaces + status + changed_at)
+- `/workspace-guard workspace_update` — rebuild the memo manually
 
-```powershell
-Copy-Item -Recurse "src\workspace-organization" "$env:LOCALAPPDATA\hermes\skills\workspace-organization"
-```
-
-Linux/macOS:
-
-```bash
-cp -r src/workspace-organization ~/.hermes/skills/workspace-organization
-```
+The `workspace_guard_auto_update_workspace` tool auto-syncs the same memo.
 
 ### Verify
 
@@ -43,7 +46,9 @@ Start a new Hermes session and try writing a file to the workspace root. It shou
 
 ## Configuration
 
-The plugin reads `guard-config.yaml` from its own directory. The file is user-managed and optional; the plugin works out of the box.
+The plugin reads `guard-config.yaml` from `~/.hermes/workspace-guard/` (shared
+with the memo; outside the plugin dir so forced reinstalls do not wipe it).
+The file is user-managed and optional; the plugin works out of the box.
 
 ```yaml
 # workspace-guard configuration
@@ -83,14 +88,17 @@ On Windows, MSYS-style paths (`/e/...`, `//e/...`, `/cygdrive/e/...`) are normal
 
 ## Scripts
 
-The bundled scripts are self-contained CLI tools. Each one validates that its target directory contains an `AGENTS.md` before operating on it (except `init_workspace.py`, which creates workspaces).
+The bundled scripts are self-contained CLI tools. Each one validates that its
+target matches a profile workspace recorded in the workspace memo
+(`profile-workspaces.json`) before operating on it (except `init_workspace.py`,
+which creates and registers new workspaces).
 
 | Script | Purpose | Key flags |
 |--------|---------|-----------|
 | `create_session_dir.py` | Create a Session Directory `YYYYMMDD_HHMMSS[_TaskName]/` with `Outputs/` and `.tmp/`, print its absolute path | `--workspace <path>` |
 | `audit_workspace.py` | Read-only compliance audit against the workspace rules; exit code 1 when violations are found | `--workspace`, `--json`, `--gate` |
 | `clean_tmp.py` | Delete expired files inside session `.tmp/` directories (dry-run by default) | `--days N`, `--workspace`, `--confirm` |
-| `init_workspace.py` | Initialize a new Default Working Directory with an `AGENTS.md` rules file | `--workspace`, `--template <file>` |
+| `init_workspace.py` | Create a new workspace directory and register its profile in the memo | `--workspace` |
 
 Example:
 
@@ -107,7 +115,7 @@ Every Hermes conversation that produces files gets one Session Directory. The na
 
 ```
 <WORKSPACE_PATH>/
-├── AGENTS.md
+├── <rules file>          <- optional workspace rules (name is user-chosen)
 ├── 20260802_143000_my-task/
 │   ├── Outputs/    <- formal deliverables
 │   └── .tmp/       <- intermediate files, safe to clean
@@ -117,7 +125,10 @@ Every Hermes conversation that produces files gets one Session Directory. The na
 └── .hermes/        <- Hermes-internal, whitelisted
 ```
 
-Only `AGENTS.md` and `.hermes/` are allowed at the workspace root; every other root entry must be a Session Directory.
+Only session directories and `.hermes/` are allowed at the workspace root; a
+single optional rules file may exist but is not required, is not written by the
+tool, and does not affect workspace validation (SCR-011: validation uses the
+profile workspace memo).
 
 ## Development
 
