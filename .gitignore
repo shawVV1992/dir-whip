@@ -17,3 +17,6 @@ internal/
 
 # Local tool state
 .cortexkit/
+
+# Tests (not published)
+tests/

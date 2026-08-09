@@ -147,18 +147,6 @@ python init_workspace.py learn --workspace <WORKSPACE_PATH>
 
 工作目录根部只允许存在会话目录和 `.hermes/`；可存在一个可选的规则文件（列于 `allowed_root_files`），但并非必需、不由工具写入、也不影响工作区校验（SCR-011：校验使用档案备忘录）。
 
-## 开发
-
-- Python 3.11（命令：`python`）
-- 测试框架：pytest，在项目根目录、激活虚拟环境后运行
-- 测试结构：插件测试 `tests/test_config.py`、`tests/test_guard.py`；脚本测试 `tests/test_create_session_dir.py`、`tests/test_audit_workspace.py`、`tests/test_clean_tmp.py`、`tests/test_init_workspace.py`
-
-```bash
-python -m pytest
-```
-
-脚本位于 `src/workspace-organization/scripts/`。所有技能内容的修改都在 `src/workspace-organization/` 内进行；插件代码在 `src/workspace-guard/`。
-
 ## License
 
 MIT

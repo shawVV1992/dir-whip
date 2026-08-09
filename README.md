@@ -179,18 +179,6 @@ single optional rules file (listed in `allowed_root_files`) may exist but is
 not required, is not written by the tool, and does not affect workspace
 validation (SCR-011: validation uses the profile workspace memo).
 
-## Development
-
-- Python 3.11 (command: `python`)
-- Tests: pytest, run from the project root with the virtual environment active
-- Test layout: plugin tests `tests/test_config.py`, `tests/test_guard.py`; script tests `tests/test_create_session_dir.py`, `tests/test_audit_workspace.py`, `tests/test_clean_tmp.py`, `tests/test_init_workspace.py`
-
-```bash
-python -m pytest
-```
-
-Scripts live in `src/workspace-organization/scripts/`. All skill content changes go in `src/workspace-organization/`; plugin code goes in `src/workspace-guard/`.
-
 ## License
 
 MIT
