@@ -68,6 +68,24 @@ resolve_repo_url() {
     printf '%s' "$DEFAULT_REPO_URL"
 }
 
+# Extract owner/repo from a full repo URL. hermes skills install expects the
+# short "owner/repo/path" identifier (GitHubSource splits on "/" and treats
+# parts[0]/parts[1] as the repo) -- a full URL with scheme + ".git" suffix
+# breaks that parsing. The plugin installer, by contrast, expects the full
+# URL (plugins_cmd._resolve_git_url). So skill commands use the slug and
+# plugin commands keep the full URL.
+repo_slug() {
+    local url="$1" slug
+    slug="${url#*://}"          # strip scheme (https://, git://, ssh://)
+    slug="${slug%%#*}"          # strip any #fragment
+    case "$slug" in
+        git@*) slug="${slug#*:}" ;;  # scp-like: git@host:owner/repo.git -> owner/repo.git (host already stripped)
+        *)    slug="${slug#*/}" ;;   # https-like: host/owner/repo -> owner/repo
+    esac
+    slug="${slug%.git}"         # strip .git suffix
+    printf '%s' "$slug"
+}
+
 preflight() {
     # warn-and-continue on local/remote drift; skip unpushed check without upstream
     git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null | grep -q . && \
@@ -191,7 +209,8 @@ cmd_install() {
     parse_install_flags "$@"
     preflight
     local root; root=$(hermes_root)
-    local url; url=$(resolve_repo_url)
+    local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
+    local slug; slug=$(repo_slug "$url")
     log "repo URL: $url"
     local p home
     for p in $(discover_profiles "$root"); do
@@ -211,7 +230,7 @@ cmd_install() {
         local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
-                log "  would run: hermes ${hargs:+$hargs }skills install $url/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                log "  would run: hermes ${hargs:+$hargs }skills install $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_PLUGIN" = 1 ]; then
                 log "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
@@ -224,7 +243,7 @@ cmd_install() {
         fi
         # real execution
         if [ "$NEED_SKILL" = 1 ]; then
-            hermes $hargs skills install "$url/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
+            hermes $hargs skills install "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
         fi
         if [ "$NEED_PLUGIN" = 1 ]; then
             hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
