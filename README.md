@@ -7,7 +7,7 @@ workspace-guard enforces file discipline for Hermes agent workspaces. Hermes age
 The two layers have zero runtime coupling:
 
 - **Skill (teach)**: The `workspace-organization` skill instructs the agent to place every file inside a Session Directory named `YYYYMMDD_HHMMSS_TaskName/`, which contains exactly two subdirectories: `Outputs/` for formal deliverables and `.tmp/` for intermediate files. Session Directories are created lazily at the first file write, so conversations that produce no files create no directories. Destructive operations (delete, overwrite, move) follow a two-step confirmation protocol: instruction is not confirmation.
-- **Plugin (enforce)**: The `workspace-guard` plugin registers a `pre_tool_call` hook that intercepts `write_file`, `patch`, and `terminal` operations. A write inside the Default Working Directory is allowed only if the target path is inside a valid Session Directory, is exempted, or is `AGENTS.md` itself. Anything else is blocked with instructions on how to fix it. Terminal commands are classified by a lightweight tokenizer into three tiers: writes to the workspace root are blocked, lower-confidence writes request human approval, and everything else passes. The guard is fail-open: if the working directory cannot be resolved, it disables itself and warns the user once instead of breaking the agent.
+- **Plugin (enforce)**: The `workspace-guard` plugin registers a `pre_tool_call` hook that intercepts `write_file`, `patch`, and `terminal` operations. A write inside the Default Working Directory is allowed only if the target path is inside a valid Session Directory, is exempted, or is a root file on the `allowed_root_files` whitelist (the same key the audit reads, so guard and audit always agree on which root files are permitted). Anything else is blocked with instructions on how to fix it. Terminal commands are classified by a lightweight tokenizer into three tiers: writes to the workspace root are blocked, lower-confidence writes request human approval, and everything else passes. The guard is fail-open: if the working directory cannot be resolved, it disables itself and warns the user once instead of breaking the agent.
 
 Neither layer depends on the other at runtime. The skill works alone as a teaching layer; the plugin works alone as an enforcement layer. Together they ensure the agent both knows the rules and cannot bypass them.
 
@@ -19,7 +19,9 @@ Neither layer depends on the other at runtime. The skill works alone as a teachi
 hermes skills install <repo-url>/src/workspace-organization
 ```
 
-The skill's scripts validate workspaces against the profile workspace memo
+The skill package contains no rules-file literal, so the skills_guard scan
+returns a `safe` verdict and `--force` is not needed. The skill's scripts
+validate workspaces against the profile workspace memo
 (`profile-workspaces.json`), not a rules-file presence check.
 
 ### Plugin
@@ -30,7 +32,27 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 The guard becomes active after the next Hermes restart.
 
-### Quick commands
+### One-click install (optional)
+
+`tools/install/install.py` wraps the native commands in a single idempotent
+flow:
+
+```bash
+python tools/install/install.py --dry-run [--url <repo-url>] [--hermes-home <dir>]
+python tools/install/install.py --apply   [--url <repo-url>] [--hermes-home <dir>]
+```
+
+`--dry-run` prints the full plan (paths + commands) without changing anything;
+`--apply` executes it: plugin install (`--enable`, with `--force` appended only
+when the installed plugin version differs), skill install, and writing the
+runtime config to `HERMES_HOME/workspace-guard/guard-config.yaml` (including
+`allowed_root_files` and `terminal_guard`). An existing plugin-dir config copy
+is migrated FIRST (copy + remove) so a forced reinstall can never wipe user
+config; a fresh default config is written only when no prior config exists.
+Memo readiness is the plugin's job (full sync on first load after restart),
+not install.py's.
+
+### Quick commands and tools
 
 Once the plugin is installed, these in-session commands are available:
 
@@ -38,7 +60,16 @@ Once the plugin is installed, these in-session commands are available:
   (profiles + workspaces + status + changed_at)
 - `/workspace-guard workspace_update` — rebuild the memo manually
 
-The `workspace_guard_auto_update_workspace` tool auto-syncs the same memo.
+Tools:
+
+- `workspace_guard_auto_update_workspace` — auto-syncs the same memo
+  (agent-triggered when the memo is stale)
+- `workspace_guard_register_workspace(profile, workspace)` — registers a new
+  workspace for the current profile (two-step init flow: run
+  `init_workspace.py` to create the directory, then call this tool in the
+  target profile's own session). It sets the profile's `terminal.cwd`
+  (durable, config-first) and writes the memo entry; because sync derives
+  `terminal.cwd`, a registration is never clobbered.
 
 ### Verify
 
@@ -46,12 +77,20 @@ Start a new Hermes session and try writing a file to the workspace root. It shou
 
 ## Configuration
 
-The plugin reads `guard-config.yaml` from `~/.hermes/workspace-guard/` (shared
-with the memo; outside the plugin dir so forced reinstalls do not wipe it).
-The file is user-managed and optional; the plugin works out of the box.
+The plugin reads `guard-config.yaml` from
+`HERMES_HOME/workspace-guard/guard-config.yaml` (Windows:
+`%LOCALAPPDATA%/hermes/workspace-guard/guard-config.yaml`; POSIX:
+`~/.hermes/workspace-guard/guard-config.yaml`) — the same directory as the
+profile workspace memo, outside the plugin directory so forced reinstalls
+never wipe it. The copy inside the plugin directory is a shipped template
+only, not the runtime config source. The file is user-managed and optional;
+the plugin works out of the box.
 
 ```yaml
 # workspace-guard configuration
+# Runtime location: HERMES_HOME/workspace-guard/guard-config.yaml
+# (Windows: %LOCALAPPDATA%/hermes/workspace-guard/guard-config.yaml;
+#  POSIX: ~/.hermes/workspace-guard/guard-config.yaml)
 # Paths listed here are exempt from session directory enforcement.
 # Use absolute paths with forward slashes.
 
@@ -61,10 +100,16 @@ exempt_paths: []
 # Optional fallback: working_dir_root (used ONLY if auto-detection from the
 # profile config or TERMINAL_CWD fails; never overrides auto-detection)
 # working_dir_root: <WORKSPACE_PATH>
+
+# Root files allowed at the Default Working Directory root (the optional
+# workspace rules file). Shared by the plugin guard and the audit.
+# Missing key -> strict fallback: empty whitelist (fail-closed).
+allowed_root_files: ["AGENTS.md"]
 ```
 
 - `exempt_paths`: A whitelist of paths inside the Default Working Directory that bypass guard enforcement, e.g. project directories that live inside the workspace. Matching is a prefix match after normalizing to forward slashes.
 - `working_dir_root`: A manual fallback for the Default Working Directory. Only used when auto-detection from the Hermes profile configuration or the `TERMINAL_CWD` environment variable fails. It never overrides a resolvable profile workspace.
+- `allowed_root_files`: A whitelist of file names permitted at the Default Working Directory root (the optional workspace rules file). The plugin guard's root exemption and the audit read the SAME key, so they never disagree about which root files are allowed. If the key (or the whole config) is missing, the strict fallback is an empty whitelist: every root file is flagged (fail-closed).
 
 By default the plugin resolves `working_dir_root` automatically from the active Hermes profile's `terminal.cwd`. If it cannot resolve a working directory at all, the guard disables itself (fail-open) and shows a one-time warning, so a broken configuration never silently turns off the protection.
 
@@ -88,17 +133,23 @@ On Windows, MSYS-style paths (`/e/...`, `//e/...`, `/cygdrive/e/...`) are normal
 
 ## Scripts
 
-The bundled scripts are self-contained CLI tools. Each one validates that its
-target matches a profile workspace recorded in the workspace memo
-(`profile-workspaces.json`) before operating on it (except `init_workspace.py`,
-which creates and registers new workspaces).
+The bundled scripts are self-contained CLI tools. Each one validates its
+target against the profile workspace memo (`profile-workspaces.json`): the
+target must exactly match a profile's recorded workspace (separator- and
+case-normalized) or the script exits 2 with a registration prompt. When the
+memo is missing/corrupt and no plugin is installed, the scripts fall back to a
+standalone mode (the provided `--workspace` is trusted, with one concise
+stderr warning); when the plugin is installed but the memo is broken, they
+fail closed with a prompt to run `/workspace-guard workspace_update`.
+`init_workspace.py` is exempt from memo validation (it creates new workspaces;
+registration is a separate plugin-tool step).
 
 | Script | Purpose | Key flags |
 |--------|---------|-----------|
-| `create_session_dir.py` | Create a Session Directory `YYYYMMDD_HHMMSS[_TaskName]/` with `Outputs/` and `.tmp/`, print its absolute path | `--workspace <path>` |
-| `audit_workspace.py` | Read-only compliance audit against the workspace rules; exit code 1 when violations are found | `--workspace`, `--json`, `--gate` |
-| `clean_tmp.py` | Delete expired files inside session `.tmp/` directories (dry-run by default) | `--days N`, `--workspace`, `--confirm` |
-| `init_workspace.py` | Create a new workspace directory and register its profile in the memo | `--workspace` |
+| `create_session_dir.py` | Create a Session Directory `YYYYMMDD_HHMMSS[_TaskName]/` with `Outputs/` and `.tmp/`, print its absolute path | `--workspace <path>`, `--profile` |
+| `audit_workspace.py` | Read-only compliance audit against the workspace rules; exit code 1 when violations are found | `--workspace`, `--profile`, `--json`, `--gate` |
+| `clean_tmp.py` | Delete expired files inside session `.tmp/` directories (dry-run by default) | `--days N`, `--workspace`, `--profile`, `--confirm` |
+| `init_workspace.py` | Create a new workspace directory (mkdir + sanitize only; no memo write, no template file); output includes the registration next-step | `--workspace` |
 
 Example:
 
@@ -126,9 +177,9 @@ Every Hermes conversation that produces files gets one Session Directory. The na
 ```
 
 Only session directories and `.hermes/` are allowed at the workspace root; a
-single optional rules file may exist but is not required, is not written by the
-tool, and does not affect workspace validation (SCR-011: validation uses the
-profile workspace memo).
+single optional rules file (listed in `allowed_root_files`) may exist but is
+not required, is not written by the tool, and does not affect workspace
+validation (SCR-011: validation uses the profile workspace memo).
 
 ## Development
 
