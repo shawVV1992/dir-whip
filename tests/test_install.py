@@ -355,3 +355,27 @@ class TestInstallPlan:
         r = run_install(hh, "install", "--dry-run", "--all-profiles")
         assert r.returncode == 0
         assert snapshot(hh) == before
+
+
+# ---------------------------------------------------------------- Uninstall plan (SCR-015 Task 7)
+
+class TestUninstallPlan:
+    def test_dry_run_uninstall_prints_commands(self, tmp_path):
+        hh = tmp_path / "hh"
+        (hh / "skills").mkdir(parents=True)
+        (hh / "plugins" / "workspace-guard").mkdir(parents=True)
+        r = run_install(hh, "uninstall", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert "skills uninstall" in r.stdout
+        assert "plugins remove" in r.stdout
+
+    def test_uninstall_removes_config_by_default(self, tmp_path):
+        # dry-run: plan must state config deletion
+        r = run_install(tmp_path, "uninstall", "--dry-run", "--all-profiles")
+        assert "delete guard-config.yaml" in r.stdout
+        assert "delete memo" in r.stdout
+
+    def test_keep_config_preserves(self, tmp_path):
+        r = run_install(tmp_path, "uninstall", "--dry-run", "--all-profiles", "--keep-config")
+        assert r.returncode == 0
+        assert "keep config" in r.stdout

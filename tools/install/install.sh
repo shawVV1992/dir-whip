@@ -215,7 +215,63 @@ cmd_install() {
     log "Restart Hermes for changes to take effect."
     return 0
 }
-cmd_uninstall() { err "not implemented yet"; return 2; }
+parse_uninstall_flags() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all-profiles) ALL_PROFILES=1 ;;
+            --profile) [ $# -ge 2 ] || die "--profile needs a value"; TARGET_PROFILES+=("$2"); shift ;;
+            --keep-config) KEEP_CONFIG=1 ;;
+            --dry-run) DRY_RUN=1 ;;
+            *) die "unknown uninstall flag: $1" ;;
+        esac
+        shift
+    done
+}
+
+cmd_uninstall() {
+    parse_uninstall_flags "$@"
+    local root; root=$(hermes_root)
+    local p home hargs
+    for p in $(discover_profiles "$root"); do
+        if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
+            local keep=0 q
+            for q in "${TARGET_PROFILES[@]}"; do [ "$q" = "$p" ] && keep=1; done
+            [ "$keep" = 1 ] || continue
+        else
+            is_tty || die "no TTY and no --profile/--all-profiles"
+            err "interactive selection not implemented yet; use --profile or --all-profiles"
+            return 1
+        fi
+        home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
+        hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        if [ "$DRY_RUN" = 1 ]; then
+            [ -d "$home/skills" ] && log "  would run: hermes $hargs skills uninstall workspace-organization" || log "  [$p] skill not installed, skip"
+            [ -d "$home/plugins/workspace-guard" ] && log "  would run: hermes $hargs plugins remove workspace-guard" || log "  [$p] plugin not installed, skip"
+            if [ "$KEEP_CONFIG" = 1 ]; then
+                log "  keep config (--keep-config)"
+            else
+                log "  would delete guard-config.yaml: $home/workspace-guard/guard-config.yaml"
+                log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+            fi
+            continue
+        fi
+        if [ -d "$home/skills" ]; then
+            hermes $hargs skills uninstall workspace-organization || { err "skill uninstall failed for $p"; return 2; }
+        else
+            log "  [$p] skill not installed, skip"
+        fi
+        if [ -d "$home/plugins/workspace-guard" ]; then
+            hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; return 2; }
+        else
+            log "  [$p] plugin not installed, skip"
+        fi
+        if [ "$KEEP_CONFIG" != 1 ] && [ -d "$home/workspace-guard" ]; then
+            rm -f "$home/workspace-guard/guard-config.yaml" "$home/workspace-guard/profile-workspaces.json"
+            rmdir "$home/workspace-guard" 2>/dev/null || true
+        fi
+    done
+    return 0
+}
 cmd_status() {
     local root; root=$(hermes_root)
     local p
