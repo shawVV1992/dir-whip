@@ -10,19 +10,31 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-INSTALL = Path(__file__).parent.parent / "tools" / "install" / "install.py"
-PYTHON = Path(__file__).parent.parent / ".venv" / "Scripts" / "python.exe"
+INSTALL = Path(__file__).parent.parent / "tools" / "install" / "install.sh"
+
+
+def _find_bash():
+    """Prefer Git Bash on Windows: plain "bash" may resolve to WSL's
+    System32 launcher, which cannot execute absolute Windows paths.
+    Falls back to "bash" on POSIX/CI."""
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if os.name == "nt" and git_bash.is_file():
+        return str(git_bash)
+    return "bash"
+
+
+BASH = _find_bash()
 
 
 def run_install(hh, *extra):
-    """Run install.py in dry-run mode against an isolated Hermes home."""
     env = os.environ.copy()
     env["HERMES_HOME"] = str(hh)
     return subprocess.run(
-        [str(PYTHON), str(INSTALL), "--dry-run", "--hermes-home", str(hh)] + list(extra),
+        [BASH, str(INSTALL)] + list(extra),
         capture_output=True,
         text=True,
         env=env,
+        timeout=60,
     )
 
 
@@ -214,3 +226,26 @@ class TestRegression:
         skill_md = Path(__file__).parent.parent / "src" / "workspace-organization" / "SKILL.md"
         frontmatter = skill_md.read_text(encoding="utf-8").split("---", 2)[1]
         assert "version: 1.0.0" in frontmatter
+
+
+# ---------------------------------------------------------------- CLI parsing (SCR-015 Task 2)
+
+class TestCli:
+    def test_help_flag(self, tmp_path):
+        r = run_install(tmp_path, "--help")
+        assert r.returncode == 0
+        assert "install" in r.stdout and "uninstall" in r.stdout and "status" in r.stdout
+
+    def test_non_tty_no_target_exits_error(self, tmp_path):
+        # stdin is not a TTY in pytest; no --profile/--all-profiles -> error, NOT the menu
+        r = run_install(tmp_path)
+        assert r.returncode != 0
+        assert "--profile" in r.stderr or "--all-profiles" in r.stderr
+
+    def test_unknown_subcommand_exits_1(self, tmp_path):
+        r = run_install(tmp_path, "bogus")
+        assert r.returncode == 1
+
+    def test_status_ok(self, tmp_path):
+        r = run_install(tmp_path, "status")
+        assert r.returncode == 0
