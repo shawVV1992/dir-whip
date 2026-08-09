@@ -8,31 +8,45 @@ import re
 
 try:
     from .config import (
+        AUTO_UPDATE_TOOL_SCHEMA,
+        REGISTER_TOOL_SCHEMA,
+        _format_memo,
+        _get_hermes_home,
         _list_profiles,
         get_cached_config,
         is_exempt,
         is_inside_session_dir,
         is_runtime_allowlisted,
+        load_guard_config,
         load_memo,
         reset_cache,
         runtime_allowlist_clear,
         sync_memo,
         terminal_guard_enabled,
         workspace_guard_allow_path,
+        workspace_guard_auto_update_workspace,
+        workspace_guard_register_workspace,
     )
 except ImportError:
     from config import (
+        AUTO_UPDATE_TOOL_SCHEMA,
+        REGISTER_TOOL_SCHEMA,
+        _format_memo,
+        _get_hermes_home,
         _list_profiles,
         get_cached_config,
         is_exempt,
         is_inside_session_dir,
         is_runtime_allowlisted,
+        load_guard_config,
         load_memo,
         reset_cache,
         runtime_allowlist_clear,
         sync_memo,
         terminal_guard_enabled,
         workspace_guard_allow_path,
+        workspace_guard_auto_update_workspace,
+        workspace_guard_register_workspace,
     )
 
 # get_session_cwd is a Hermes runtime API (tools/terminal_tool.py) absent
@@ -112,6 +126,10 @@ def register(ctx):
     SCR-002 (task 9.6): registers the runtime allowlist tool
     (workspace_guard_allow_path) when the ctx supports register_tool; a ctx
     without it must not break registration.
+    SCR-011 (task 14.6): registers the /workspace-guard quick command
+    (workspace_status | workspace_update) and the two memo tools
+    (workspace_guard_auto_update_workspace,
+    workspace_guard_register_workspace), guarded the same way.
     """
     global _registered_ctx
     try:
@@ -140,9 +158,42 @@ def register(ctx):
                     schema=ALLOW_PATH_TOOL_SCHEMA,
                     handler=workspace_guard_allow_path,
                 )
+                # SCR-011 (task 14.6): memo sync tool + registration tool.
+                # The registration handler gets ctx injected at call time so
+                # it stays ACTIVE-PROFILE-ONLY (SCR-011 2.2); a ctx-less
+                # dispatch (e.g. tests) is rejected by the handler itself.
+                ctx.register_tool(
+                    "workspace_guard_auto_update_workspace",
+                    toolset="workspace-guard",
+                    schema=AUTO_UPDATE_TOOL_SCHEMA,
+                    handler=workspace_guard_auto_update_workspace,
+                )
+                ctx.register_tool(
+                    "workspace_guard_register_workspace",
+                    toolset="workspace-guard",
+                    schema=REGISTER_TOOL_SCHEMA,
+                    handler=lambda args, **kw: workspace_guard_register_workspace(
+                        args, ctx=_registered_ctx, **kw
+                    ),
+                )
             except Exception as exc:
                 logger.warning(
                     "workspace-guard: register_tool failed: %s", exc
+                )
+
+        # SCR-011 (task 14.6): /workspace-guard quick command. Guarded so a
+        # ctx without register_command still registers.
+        if hasattr(ctx, "register_command"):
+            try:
+                ctx.register_command(
+                    "workspace-guard",
+                    _workspace_guard_cmd,
+                    description="Show or update the profile workspace memo",
+                    args_hint="workspace_status|workspace_update",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "workspace-guard: register_command failed: %s", exc
                 )
 
         logger.debug("workspace-guard: registered successfully")
@@ -268,8 +319,9 @@ def classify_target(target, working_dir_root, exempt_paths):
     exemption wins, SCR-001). Targets outside working_dir_root that fall
     under another valid profile's workspace (per the memo) return an
     approve dict (human-approval gate); other external targets -> allow
-    (jurisdiction). Under working_dir_root: AGENTS.md at root and valid
-    Session Directories allow; everything else blocks.
+    (jurisdiction). Under working_dir_root: root files listed in
+    allowed_root_files and valid Session Directories allow; everything
+    else blocks.
     """
     # Tier 0: explicit user-specified paths always allow (SCR-001);
     # exempt prefix match is case-insensitive on Windows (SCR-006, task 9.10)
@@ -325,15 +377,20 @@ def classify_target(target, working_dir_root, exempt_paths):
             )
         return None
 
-    # Under working_dir_root: AGENTS.md at root is allowed (any case on
-    # Windows, SCR-006 task 9.10; exact on POSIX)
-    agents_md = os.path.normpath(os.path.join(working_dir_root, "AGENTS.md"))
-    target_norm = os.path.normpath(target)
-    if (
-        target_norm == agents_md
-        or (os.name == "nt" and _paths_equal_ci(target_norm, agents_md))
-    ):
-        return None
+    # Under working_dir_root: a root file (directly under the root, i.e.
+    # relpath without separators) whose basename is in allowed_root_files is
+    # allowed; any other root file blocks. D1 (SCR-011 2.2): the guard reads
+    # the SAME allowed_root_files key the audit reads, so guard and audit
+    # never disagree about root files. STRICT: config/key absent -> empty
+    # whitelist -> every root file blocks (fail-closed). Basename match is
+    # case-insensitive on Windows (SCR-006 task 9.10 style), exact on POSIX.
+    if "/" not in rel.replace("\\", "/"):
+        base = os.path.basename(target)
+        for allowed in _allowed_root_files():
+            if base == allowed or (
+                os.name == "nt" and base.casefold() == allowed.casefold()
+            ):
+                return None
 
     # Inside a valid session directory -> allowed
     if is_inside_session_dir(target, working_dir_root):
@@ -347,7 +404,11 @@ def classify_target(target, working_dir_root, exempt_paths):
                      "..", "..", "skills", "productivity",
                      "workspace-organization", "scripts")
     ).replace(os.sep, "/")
-    plugin_dir = os.path.dirname(os.path.abspath(__file__)).replace(os.sep, "/")
+    # SCR-013 (task 16.6): the runtime config lives at
+    # HERMES_HOME/workspace-guard/, not inside the plugin directory.
+    config_dir = os.path.normpath(
+        str(_get_hermes_home() / "workspace-guard")
+    ).replace(os.sep, "/")
     message = (
         "BLOCKED: File operations in the Default Working Directory require "
         "a Session Directory.\n"
@@ -357,7 +418,7 @@ def classify_target(target, working_dir_root, exempt_paths):
         "--workspace %s\n"
         "Then write to its Outputs/ or .tmp/ subdirectory.\n"
         "If this is a project directory, add it to exempt_paths in "
-        "%s/guard-config.yaml" % (target_fwd, scripts_dir, wdr_fwd, plugin_dir)
+        "%s/guard-config.yaml" % (target_fwd, scripts_dir, wdr_fwd, config_dir)
     )
     logger.warning("workspace-guard: BLOCKED write to %s", target_fwd)
     return {"action": "block", "message": message}
@@ -627,6 +688,44 @@ def _session_start_hook(session_id=None, model=None, platform=None, **kwargs):
 def _get_ctx():
     """Return the registered ctx."""
     return _registered_ctx
+
+
+# ---------------------------------------------------------------- SCR-011: quick command + root exemption
+
+def _allowed_root_files():
+    """Root-file whitelist from guard-config.yaml (D1, SCR-011 2.2).
+
+    Reads the SAME allowed_root_files key the audit reads (via
+    workspace_resolver.py), so guard and audit never disagree about root
+    files. STRICT fallback: config missing/unreadable -> empty list ->
+    every root file blocks (fail-closed, matching the audit's
+    over-report).
+    """
+    try:
+        return load_guard_config().get("allowed_root_files") or []
+    except Exception:
+        return []
+
+
+def _workspace_guard_cmd(raw_args):
+    """Slash command handler (SCR-011 2.6): /workspace-guard.
+
+    workspace_status (default): read-only memo display (synced_at +
+    per-profile workspace / status / changed_at). workspace_update: full
+    memo sync (user-triggered), returns the full memo display. Unknown
+    subcommand: usage line. Never raises (errors become the message).
+    """
+    try:
+        tokens = (raw_args or "").strip().split()
+        sub = tokens[0].lower() if tokens else "workspace_status"
+        if sub == "workspace_status":
+            return _format_memo(load_memo())
+        if sub == "workspace_update":
+            memo = sync_memo()
+            return "[workspace-guard] Memo updated.\n" + _format_memo(memo)
+        return "Usage: /workspace-guard workspace_status | workspace_update"
+    except Exception as exc:
+        return "[workspace-guard] Command failed: %s" % exc
 
 
 # ---------------------------------------------------------------- Terminal parsing

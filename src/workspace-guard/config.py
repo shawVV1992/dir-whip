@@ -16,12 +16,16 @@ SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 # hermes_cli is a Hermes runtime package; absent in the test venv. Guarded
 # module-level import so config.py never crashes when it is unavailable
 # (fail-open: callers treat a missing hermes_cli as "no profiles to sync").
+# set_config_value backs the SCR-011 registration tool's config-first step;
+# when hermes_cli is absent the tool rejects (never writes the memo).
 try:
     from hermes_cli.profiles import list_profiles
     from hermes_cli.config import read_user_config_raw
+    from hermes_cli.config import set_config_value
 except Exception:
     list_profiles = None
     read_user_config_raw = None
+    set_config_value = None
 
 _cache_lock = threading.Lock()
 _cached_result = None
@@ -39,7 +43,11 @@ def _get_hermes_home():
 
 
 def _get_plugin_dir():
-    """Return the plugin directory (where guard-config.yaml lives)."""
+    """Return the plugin directory (SCR-013: no longer the config source).
+
+    Kept for the plugin's own sibling resources; the runtime config now
+    lives at HERMES_HOME/workspace-guard/guard-config.yaml.
+    """
     return Path(__file__).parent
 
 
@@ -88,7 +96,8 @@ def _parse_terminal_cwd_fallback(config_path):
 
 
 def _parse_terminal_guard_value(value):
-    """Parse a terminal_guard config value; default enabled (fail-open)."""
+    """Parse a terminal_guard config value; default enabled (fail toward
+    enforcement: a missing/unreadable value keeps interception on)."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -107,17 +116,33 @@ def terminal_guard_enabled(config_path=None):
         return True
 
 
+def _parse_allowed_root_files(value):
+    """Parse the allowed_root_files config value (SCR-011, D1).
+
+    Accepts a YAML list; only string elements are kept. STRICT fallback:
+    None / non-list / empty -> [] (every root file blocks, fail-closed).
+    """
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def load_guard_config(config_path=None):
     """Load guard-config.yaml exemptions and overrides.
 
     Returns a dict with at least 'exempt_paths' (list), 'terminal_guard'
-    (bool, default True) and optionally 'working_dir_root' (str).
+    (bool, default True), 'allowed_root_files' (list; STRICT fallback []
+    when the key is absent) and optionally 'working_dir_root' (str).
     """
     if config_path is None:
-        config_path = _get_plugin_dir() / "guard-config.yaml"
+        config_path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
     config_path = Path(config_path)
 
-    result = {"exempt_paths": [], "terminal_guard": True}
+    result = {
+        "exempt_paths": [],
+        "terminal_guard": True,
+        "allowed_root_files": [],
+    }
 
     if not config_path.is_file():
         return result
@@ -131,6 +156,7 @@ def load_guard_config(config_path=None):
             if data.get("working_dir_root"):
                 result["working_dir_root"] = data["working_dir_root"]
             result["terminal_guard"] = _parse_terminal_guard_value(data.get("terminal_guard"))
+            result["allowed_root_files"] = _parse_allowed_root_files(data.get("allowed_root_files"))
     except ImportError:
         result = _load_guard_config_fallback(config_path)
     except Exception as exc:
@@ -139,19 +165,35 @@ def load_guard_config(config_path=None):
     return result
 
 
+def _parse_inline_list(text):
+    """Parse an inline YAML list of quoted strings (e.g. '["AGENTS.md"]')."""
+    items = []
+    for part in re.split(r"[,\[\]]", text):
+        part = part.strip().strip("'\"")
+        if part:
+            items.append(part)
+    return items
+
+
 def _load_guard_config_fallback(config_path):
     """Minimal parser for guard-config.yaml when PyYAML is unavailable."""
-    result = {"exempt_paths": [], "terminal_guard": True}
+    result = {
+        "exempt_paths": [],
+        "terminal_guard": True,
+        "allowed_root_files": [],
+    }
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         in_exempt = False
+        in_allowed = False
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
             if stripped.startswith("exempt_paths:"):
                 in_exempt = True
+                in_allowed = False
                 rest = stripped[len("exempt_paths:"):].strip()
                 if rest and rest != "[]":
                     result["exempt_paths"].append(rest)
@@ -161,17 +203,32 @@ def _load_guard_config_fallback(config_path):
                 if value:
                     result["working_dir_root"] = value
                 in_exempt = False
+                in_allowed = False
                 continue
             if stripped.startswith("terminal_guard:"):
                 value = stripped[len("terminal_guard:"):].strip().strip("'\"")
                 result["terminal_guard"] = _parse_terminal_guard_value(value)
                 continue
+            if stripped.startswith("allowed_root_files:"):
+                in_exempt = False
+                in_allowed = True
+                rest = stripped[len("allowed_root_files:"):].strip()
+                if rest and rest != "[]":
+                    result["allowed_root_files"].extend(_parse_inline_list(rest))
+                continue
             if in_exempt and stripped.startswith("- "):
                 value = stripped[2:].strip().strip("'\"")
                 if value:
                     result["exempt_paths"].append(value)
-            elif in_exempt and not stripped.startswith("-"):
+                continue
+            if in_allowed and stripped.startswith("- "):
+                value = stripped[2:].strip().strip("'\"")
+                if value:
+                    result["allowed_root_files"].append(value)
+                continue
+            if in_exempt or in_allowed:
                 in_exempt = False
+                in_allowed = False
     except Exception:
         pass
     return result
@@ -491,6 +548,190 @@ def workspace_guard_allow_path(args, **kwargs):
     """
     path = args.get("path") if isinstance(args, dict) else args
     return runtime_allowlist_add(path)
+
+
+# ---------------------------------------------------------------- SCR-011: quick command + registration tool
+
+# Schemas for the two SCR-011 tools, registered in guard.py register()
+# (OpenAI function-call format required by Hermes tools.registry, SCR-008).
+AUTO_UPDATE_TOOL_SCHEMA = {
+    "name": "workspace_guard_auto_update_workspace",
+    "description": (
+        "Rebuild the workspace-guard profile workspace memo from the Hermes "
+        "profile configurations (terminal.cwd). Use when profile workspaces "
+        "may have changed and need re-validation before writing files."
+    ),
+    "parameters": {"type": "object", "properties": {}},
+}
+
+REGISTER_TOOL_SCHEMA = {
+    "name": "workspace_guard_register_workspace",
+    "description": (
+        "Register a workspace as the Default Working Directory of the ACTIVE "
+        "profile (two-step init flow): sets the profile's terminal.cwd in "
+        "the Hermes config (durable) and records the workspace in the "
+        "profile workspace memo (immediate). Active-profile-only: any "
+        "profile other than the current session profile is rejected, and "
+        "the workspace directory must already exist (create it with "
+        "init_workspace.py first)."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "profile": {
+                "type": "string",
+                "description": (
+                    "Name of the profile to register (must be the active "
+                    "profile)"
+                ),
+            },
+            "workspace": {
+                "type": "string",
+                "description": (
+                    "Absolute path of the workspace directory (must exist)"
+                ),
+            },
+        },
+        "required": ["profile", "workspace"],
+    },
+}
+
+
+def _format_memo(memo):
+    """Format the profile workspace memo for display (SCR-011 2.6).
+
+    Output shape (profile names aligned to the widest name):
+      [workspace-guard] Profile workspace memo
+      Synced: <synced_at or "n/a">
+        <profile>: <workspace or "-"> [<status or "unknown">]  changed: <changed_at or "-">
+    Graceful degradation: a missing/corrupt memo never raises (n/a / no
+    profile lines).
+    """
+    try:
+        synced = memo.get("synced_at") or "n/a"
+        profiles = memo.get("profiles")
+        if not isinstance(profiles, dict):
+            profiles = {}
+        lines = [
+            "[workspace-guard] Profile workspace memo",
+            "Synced: %s" % synced,
+        ]
+        if profiles:
+            name_w = max(len(str(name)) for name in profiles)
+            for name in sorted(profiles):
+                entry = profiles.get(name)
+                if not isinstance(entry, dict):
+                    entry = {}
+                ws = entry.get("workspace") or "-"
+                status = entry.get("status") or "unknown"
+                changed = entry.get("changed_at") or "-"
+                lines.append(
+                    "  %s: %s [%s]  changed: %s"
+                    % (str(name).ljust(name_w), ws, status, changed)
+                )
+        return "\n".join(lines)
+    except Exception:
+        return "[workspace-guard] Profile workspace memo\nSynced: n/a"
+
+
+def workspace_guard_auto_update_workspace(args, **kwargs):
+    """Tool handler: full memo sync (SCR-011 2.2).
+
+    Uses the same sync_memo() as the /workspace-guard workspace_update
+    command. Returns a display string; never raises (errors become the
+    message).
+    """
+    try:
+        memo = sync_memo()
+        return "[workspace-guard] Memo updated.\n" + _format_memo(memo)
+    except Exception as exc:
+        return "[workspace-guard] Memo update failed: %s" % exc
+
+
+def workspace_guard_register_workspace(args, ctx=None, **kwargs):
+    """Tool handler: register a profile workspace (SCR-011 2.2/2.6).
+
+    Two-step init flow, ACTIVE-PROFILE-ONLY and CONFIG-FIRST:
+    1. Rejects when profile != ctx.profile_name (ctx None -> reject,
+       fail-safe).
+    2. Requires workspace to be an existing directory.
+    3. Config-first: sets the profile's terminal.cwd via Hermes
+       set_config_value() (durable step). Unavailable or failing -> the
+       WHOLE operation aborts with an error message, no memo write.
+    4. Then writes/overwrites the memo entry {profile: {workspace,
+       status: "valid", changed_at: now}} (immediacy for scripts).
+    5. Because step 3 makes terminal.cwd == the registered workspace,
+       sync_memo() derives the same value and can never clobber the
+       registration.
+
+    Returns a confirmation/rejection string; never raises (errors become
+    the message, so the host process survives set_config_value's
+    sys.exit-based failure paths).
+    """
+    try:
+        if isinstance(args, dict):
+            profile = args.get("profile")
+            workspace = args.get("workspace")
+        else:
+            profile = args
+            workspace = None
+        if isinstance(profile, dict):
+            profile = profile.get("name") or profile.get("id") or ""
+        profile = str(profile or "").strip()
+        workspace = str(workspace or "").strip()
+
+        active = getattr(ctx, "profile_name", None) if ctx is not None else None
+        if not profile or profile != active:
+            return (
+                "[workspace-guard] Registration rejected: profile %r is not "
+                "the active profile (active: %r). Switch to the target "
+                "profile first." % (profile, active)
+            )
+        if not workspace or not os.path.isdir(workspace):
+            return (
+                "[workspace-guard] Registration rejected: workspace %r is "
+                "not an existing directory." % workspace
+            )
+        if set_config_value is None:
+            return (
+                "[workspace-guard] Registration aborted: Hermes "
+                "set_config_value is unavailable (hermes_cli not present); "
+                "no memo entry was written."
+            )
+        try:
+            set_config_value("terminal.cwd", workspace)
+        except BaseException as exc:
+            # set_config_value fails via print + sys.exit(1) for managed
+            # keys and unparseable configs (SystemExit) or by raising on
+            # write errors; neither may kill the plugin host.
+            return (
+                "[workspace-guard] Registration aborted: failed to set "
+                "terminal.cwd (%s); no memo entry was written." % exc
+            )
+
+        memo = load_memo()
+        if not isinstance(memo, dict):
+            memo = {"synced_at": None, "profiles": {}}
+        profiles = memo.setdefault("profiles", {})
+        if not isinstance(profiles, dict):
+            profiles = {}
+            memo["profiles"] = profiles
+        profiles[profile] = {
+            "workspace": workspace,
+            "status": "valid",
+            "changed_at": _now_iso(),
+        }
+        if not save_memo(memo):
+            return (
+                "[workspace-guard] Registration aborted: memo write failed; "
+                "terminal.cwd was set but the memo was not updated."
+            )
+        return (
+            "[workspace-guard] Registered profile %r workspace: %s"
+            % (profile, workspace)
+        )
+    except Exception as exc:
+        return "[workspace-guard] Registration failed: %s" % exc
 
 
 def _resolve_config(ctx, config_path=None):

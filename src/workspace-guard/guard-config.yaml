@@ -1,5 +1,12 @@
 # workspace-guard configuration
 # User-managed. See after-install.md for configuration instructions.
+#
+# RUNTIME LOCATION (SCR-013): the config that the plugin and the audit
+# actually read lives at HERMES_HOME/workspace-guard/guard-config.yaml
+# (Windows: %LOCALAPPDATA%/hermes/workspace-guard/guard-config.yaml;
+# POSIX: ~/.hermes/workspace-guard/guard-config.yaml). This file in the
+# plugin directory is ONLY the shipped template: forced plugin reinstalls
+# never touch the runtime copy, so user settings survive.
 
 # Optional fallback: Default Working Directory, used ONLY when auto-detection
 # from the Hermes profile config (terminal.cwd) or the TERMINAL_CWD
@@ -7,3 +14,7 @@
 # working_dir_root: E:/HermesWorkspace/default
 
 exempt_paths: []
+
+# Root files allowed at the Default Working Directory root (D1: guard and
+# audit read the same key; strict fallback = empty list when absent).
+allowed_root_files: ["AGENTS.md"]
