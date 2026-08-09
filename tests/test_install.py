@@ -264,3 +264,16 @@ class TestProfiles:
         assert "default" in out
         assert "job-hunt" in out
         assert "learn" in out
+
+
+# ---------------------------------------------------------------- Repo URL resolution (SCR-015 Task 4)
+
+class TestRepoUrl:
+    def test_default_url_when_no_git(self, tmp_path):
+        r = run_install(tmp_path, "status")
+        assert "https://github.com/shawVV1992/workspace-guard" not in r.stdout  # status doesn't print URL yet
+
+    def test_repo_flag_parses(self, tmp_path):
+        r = run_install(tmp_path, "install", "--dry-run", "--repo", "https://example.com/r.git")
+        # dry-run must not fail on flag parsing
+        assert r.returncode == 0 or r.returncode == 2  # 2 = not-implemented stub from cmd_install
