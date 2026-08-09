@@ -21,6 +21,7 @@ if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
 from config import (
+    _format_memo,
     get_cached_config,
     is_exempt,
     is_inside_session_dir,
@@ -35,6 +36,8 @@ from config import (
     sync_memo,
     terminal_guard_enabled,
     workspace_guard_allow_path,
+    workspace_guard_auto_update_workspace,
+    workspace_guard_register_workspace,
 )
 
 
@@ -200,6 +203,85 @@ class TestGuardConfigLoading:
         cfg.write_text("exempt_paths: []\n")
         result = load_guard_config(str(cfg))
         assert result["exempt_paths"] == []
+
+    # -- SCR-013 (task 16.3): default path resolution --
+
+    def test_default_path_resolves_to_hermes_home_guard_config(self, tmp_path):
+        # load_guard_config() with no args resolves to
+        # HERMES_HOME/workspace-guard/guard-config.yaml (SCR-013 2.2/2.3).
+        hermes_home = tmp_path / "hermes"
+        cfg_dir = hermes_home / "workspace-guard"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "guard-config.yaml").write_text(
+            "exempt_paths:\n  - E:/ws/projects\n"
+            "allowed_root_files:\n  - AGENTS.md\n",
+            encoding="utf-8",
+        )
+        with patch("config._get_hermes_home", return_value=hermes_home):
+            result = load_guard_config()
+        assert result["exempt_paths"] == ["E:/ws/projects"]
+        assert result["allowed_root_files"] == ["AGENTS.md"]
+
+    def test_default_path_missing_returns_defaults(self, tmp_path):
+        # No config file -> default dict with the three always-present keys.
+        with patch("config._get_hermes_home", return_value=tmp_path / "hermes"):
+            result = load_guard_config()
+        assert result["exempt_paths"] == []
+        assert result["terminal_guard"] is True
+        assert result["allowed_root_files"] == []
+
+
+# ---------------------------------------------------------------- allowed_root_files parsing (SCR-011 D1, task 14.11)
+
+class TestAllowedRootFiles:
+    """allowed_root_files parsing (SCR-011 D1).
+
+    Both the YAML parser and the no-PyYAML fallback line parser must
+    accept the inline list form and the block form; the key missing ->
+    empty list (STRICT fallback, fail-closed). The sys.modules patch
+    forces the fallback parser deterministically regardless of whether
+    PyYAML is installed.
+    """
+
+    def test_yaml_block_form(self, tmp_path):
+        cfg = tmp_path / "guard-config.yaml"
+        cfg.write_text(
+            "allowed_root_files:\n  - AGENTS.md\n  - RULES.txt\n",
+            encoding="utf-8",
+        )
+        result = load_guard_config(str(cfg))
+        assert result["allowed_root_files"] == ["AGENTS.md", "RULES.txt"]
+
+    def test_yaml_inline_form(self, tmp_path):
+        cfg = tmp_path / "guard-config.yaml"
+        cfg.write_text(
+            'allowed_root_files: ["AGENTS.md", "RULES.txt"]\n', encoding="utf-8"
+        )
+        result = load_guard_config(str(cfg))
+        assert result["allowed_root_files"] == ["AGENTS.md", "RULES.txt"]
+
+    def test_fallback_inline_form(self, tmp_path):
+        cfg = tmp_path / "guard-config.yaml"
+        cfg.write_text('allowed_root_files: ["AGENTS.md"]\n', encoding="utf-8")
+        with patch.dict(sys.modules, {"yaml": None}):
+            result = load_guard_config(str(cfg))
+        assert result["allowed_root_files"] == ["AGENTS.md"]
+
+    def test_fallback_block_form(self, tmp_path):
+        cfg = tmp_path / "guard-config.yaml"
+        cfg.write_text(
+            "allowed_root_files:\n  - AGENTS.md\n  - RULES.txt\n",
+            encoding="utf-8",
+        )
+        with patch.dict(sys.modules, {"yaml": None}):
+            result = load_guard_config(str(cfg))
+        assert result["allowed_root_files"] == ["AGENTS.md", "RULES.txt"]
+
+    def test_key_missing_returns_empty_list(self, tmp_path):
+        cfg = tmp_path / "guard-config.yaml"
+        cfg.write_text("exempt_paths: []\n", encoding="utf-8")
+        result = load_guard_config(str(cfg))
+        assert result["allowed_root_files"] == []
 
 
 # ---------------------------------------------------------------- Singleton caching
@@ -539,3 +621,213 @@ class TestTerminalGuardConfig:
         cfg.write_text("exempt_paths: []\nterminal_guard: disabled\n", encoding="utf-8")
         result = load_guard_config(str(cfg))
         assert result["terminal_guard"] is False
+
+
+# ---------------------------------------------------------------- Memo display format (SCR-011 2.6, task 14.10)
+
+class TestFormatMemo:
+    """_format_memo display format (SCR-011 2.6).
+
+    Shape: header line, "Synced: <synced_at>", then one line per profile
+    "<name>: <workspace> [<status>]  changed: <changed_at>" (names
+    aligned to the widest name). Missing/corrupt memos degrade to
+    "Synced: n/a" without raising.
+    """
+
+    @staticmethod
+    def _two_profile_memo():
+        return {
+            "synced_at": "2026-08-08T20:29:48",
+            "profiles": {
+                "default": {
+                    "workspace": "E:/ws/default",
+                    "status": "valid",
+                    "changed_at": "2026-08-07T19:49:26",
+                },
+                "job-hunt": {
+                    "workspace": "E:/ws/job-hunt",
+                    "status": "invalid",
+                    "changed_at": "2026-08-07T19:49:26",
+                },
+            },
+        }
+
+    def test_format_shows_synced_at_and_one_line_per_profile(self):
+        result = _format_memo(self._two_profile_memo())
+        lines = result.splitlines()
+        assert lines[0] == "[workspace-guard] Profile workspace memo"
+        assert lines[1] == "Synced: 2026-08-08T20:29:48"
+        assert len(lines) == 4  # header + synced + 2 profile lines
+        # "default" is padded to the width of "job-hunt" (ljust).
+        assert "  default : E:/ws/default [valid]  changed: 2026-08-07T19:49:26" in result
+        assert "  job-hunt: E:/ws/job-hunt [invalid]  changed: 2026-08-07T19:49:26" in result
+
+    def test_format_single_profile_line(self):
+        memo = {
+            "synced_at": "2026-08-08T20:29:48",
+            "profiles": {
+                "default": {
+                    "workspace": "E:/ws/default",
+                    "status": "valid",
+                    "changed_at": "2026-08-07T19:49:26",
+                }
+            },
+        }
+        result = _format_memo(memo)
+        assert "  default: E:/ws/default [valid]  changed: 2026-08-07T19:49:26" in result
+
+    def test_format_empty_memo(self):
+        result = _format_memo({"synced_at": None, "profiles": {}})
+        assert result == "[workspace-guard] Profile workspace memo\nSynced: n/a"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            None,
+            "garbage",
+            [],
+            {"synced_at": "t"},
+            {"profiles": []},
+            {"profiles": {"a": "not a dict"}},
+        ],
+    )
+    def test_format_corrupt_inputs_never_raises(self, bad):
+        result = _format_memo(bad)
+        assert isinstance(result, str)
+        assert result.startswith("[workspace-guard] Profile workspace memo")
+
+
+# ---------------------------------------------------------------- Registration tool (SCR-011 2.2/2.6, task 14.10)
+
+class TestRegisterWorkspace:
+    """workspace_guard_register_workspace handler (config-level).
+
+    ACTIVE-PROFILE-ONLY + CONFIG-FIRST: rejects non-current profiles,
+    missing ctx, non-existent workspaces; sets terminal.cwd via Hermes
+    set_config_value BEFORE writing the memo; a config failure aborts
+    with no memo write; set_config_value unavailable -> reject.
+    """
+
+    @staticmethod
+    def _make_ws(tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        return ws
+
+    def test_rejects_non_current_profile(self, tmp_path):
+        ws = self._make_ws(tmp_path)
+        ctx = make_mock_ctx("default")
+        result = workspace_guard_register_workspace(
+            {"profile": "job-hunt", "workspace": str(ws)}, ctx=ctx
+        )
+        assert "Registration rejected" in result
+        assert "not the active profile" in result
+        assert "Registered" not in result
+
+    def test_rejects_missing_ctx(self, tmp_path):
+        # Fail-safe: a ctx-less dispatch (e.g. tests) is rejected.
+        ws = self._make_ws(tmp_path)
+        result = workspace_guard_register_workspace(
+            {"profile": "default", "workspace": str(ws)}, ctx=None
+        )
+        assert "Registration rejected" in result
+        assert "not the active profile" in result
+
+    def test_rejects_nonexistent_workspace(self, tmp_path):
+        ctx = make_mock_ctx("default")
+        missing = tmp_path / "no_such"
+        with patch("config.set_config_value", MagicMock()) as setter:
+            result = workspace_guard_register_workspace(
+                {"profile": "default", "workspace": str(missing)}, ctx=ctx
+            )
+        assert "Registration rejected" in result
+        assert "not an existing directory" in result
+        setter.assert_not_called()
+
+    def test_success_sets_terminal_cwd_and_writes_memo(self, tmp_path):
+        ws = self._make_ws(tmp_path)
+        ctx = make_mock_ctx("default")
+        hermes_home = tmp_path / "hermes"
+        with patch("config.set_config_value", MagicMock()) as setter:
+            with patch("config._get_hermes_home", return_value=hermes_home):
+                result = workspace_guard_register_workspace(
+                    {"profile": "default", "workspace": str(ws)}, ctx=ctx
+                )
+        assert "Registered profile 'default'" in result
+        # Config-first: the durable terminal.cwd write happened.
+        setter.assert_called_once_with("terminal.cwd", str(ws))
+        # Then the real memo file was written (immediacy for scripts).
+        memo_file = hermes_home / "workspace-guard" / "profile-workspaces.json"
+        assert memo_file.is_file()
+        disk = json.loads(memo_file.read_text(encoding="utf-8"))
+        entry = disk["profiles"]["default"]
+        assert entry["workspace"] == str(ws)
+        assert entry["status"] == "valid"
+        assert entry["changed_at"]
+
+    def test_config_write_failure_aborts_without_memo_write(self, tmp_path):
+        ws = self._make_ws(tmp_path)
+        ctx = make_mock_ctx("default")
+        hermes_home = tmp_path / "hermes"
+        with patch("config.set_config_value", side_effect=RuntimeError("boom")):
+            with patch("config._get_hermes_home", return_value=hermes_home):
+                result = workspace_guard_register_workspace(
+                    {"profile": "default", "workspace": str(ws)}, ctx=ctx
+                )
+        assert "Registration aborted" in result
+        assert "no memo entry was written" in result
+        assert not (hermes_home / "workspace-guard" / "profile-workspaces.json").exists()
+
+    def test_set_config_value_unavailable_rejects(self, tmp_path):
+        ws = self._make_ws(tmp_path)
+        ctx = make_mock_ctx("default")
+        with patch("config.set_config_value", None):
+            result = workspace_guard_register_workspace(
+                {"profile": "default", "workspace": str(ws)}, ctx=ctx
+            )
+        assert "set_config_value is unavailable" in result
+        assert "no memo entry was written" in result
+
+
+# ---------------------------------------------------------------- Auto-update tool (SCR-011 2.2/2.6, task 14.10)
+
+class TestAutoUpdateWorkspace:
+    """workspace_guard_auto_update_workspace handler (config-level).
+
+    Rebuilds the memo through the same sync_memo() the update command
+    uses; returns "[workspace-guard] Memo updated." plus the formatted
+    memo display. Errors become the message (never raises).
+    """
+
+    def test_auto_update_rebuilds_memo_via_real_sync(self, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        home = make_profile_home(tmp_path, "default")
+        hermes_home = tmp_path / "hermes"
+        with patch("config._get_hermes_home", return_value=hermes_home):
+            with patch("config._list_profiles", return_value=[("default", home)]):
+                with patch("config._profile_workspace", return_value=str(ws)):
+                    result = workspace_guard_auto_update_workspace({})
+        assert result.startswith("[workspace-guard] Memo updated.")
+        assert "[workspace-guard] Profile workspace memo" in result
+        assert "Synced:" in result
+        assert "default: %s [valid]" % str(ws) in result
+        # The real memo file was rebuilt.
+        memo_file = hermes_home / "workspace-guard" / "profile-workspaces.json"
+        assert memo_file.is_file()
+        disk = json.loads(memo_file.read_text(encoding="utf-8"))
+        assert disk["profiles"]["default"]["status"] == "valid"
+        assert disk["profiles"]["default"]["workspace"] == str(ws)
+
+    def test_auto_update_calls_sync_memo(self):
+        memo = {"synced_at": "2026-08-08T20:29:48", "profiles": {}}
+        with patch("config.sync_memo", return_value=memo) as sync:
+            result = workspace_guard_auto_update_workspace({})
+        sync.assert_called_once_with()
+        assert result.startswith("[workspace-guard] Memo updated.")
+        assert "Synced: 2026-08-08T20:29:48" in result
+
+    def test_auto_update_sync_failure_returns_error_message(self):
+        with patch("config.sync_memo", side_effect=RuntimeError("boom")):
+            result = workspace_guard_auto_update_workspace({})
+        assert result == "[workspace-guard] Memo update failed: boom"

@@ -24,8 +24,15 @@ import config
 from config import reset_cache
 
 
-def _configure(working_dir_root, exempt_paths=None):
-    """Patch config resolution so get_cached_config returns controlled values."""
+def _configure(working_dir_root, exempt_paths=None, allowed_root_files=None):
+    """Patch config resolution so get_cached_config returns controlled values.
+
+    allowed_root_files drives the D1 root-file whitelist (SCR-011):
+    guard._allowed_root_files reads guard.load_guard_config, which guard.py
+    binds at import time -- patch it at guard level too, so no test ever
+    touches the real HERMES_HOME config. Default None -> strict empty
+    whitelist (fail-closed: every root file blocks).
+    """
     stack = ExitStack()
     stack.enter_context(
         patch("config.resolve_working_dir_root", return_value=working_dir_root)
@@ -34,6 +41,16 @@ def _configure(working_dir_root, exempt_paths=None):
         patch(
             "config.load_guard_config",
             return_value={"exempt_paths": exempt_paths or []},
+        )
+    )
+    stack.enter_context(
+        patch.object(
+            guard,
+            "load_guard_config",
+            return_value={
+                "exempt_paths": exempt_paths or [],
+                "allowed_root_files": allowed_root_files or [],
+            },
         )
     )
     return stack
@@ -74,8 +91,10 @@ class TestGuardHookAllow:
         assert result is None
 
     def test_write_file_agents_md_at_root_returns_none(self, tmp_path):
+        # D1 (SCR-011): the root exemption is config-driven -- AGENTS.md is
+        # allowed only when allowed_root_files lists it.
         root = str(tmp_path)
-        with _configure(root):
+        with _configure(root, allowed_root_files=["AGENTS.md"]):
             result = guard._guard_hook(
                 "write_file", {"path": str(tmp_path / "AGENTS.md")}
             )
@@ -147,13 +166,53 @@ class TestGuardHookBlock:
 
     def test_block_message_contains_fix_instructions(self, tmp_path):
         root = str(tmp_path)
-        with _configure(root):
-            result = guard._guard_hook(
-                "write_file", {"path": str(tmp_path / "notes.txt")}
-            )
+        with patch.object(guard, "_get_hermes_home", return_value=tmp_path / "hermes"):
+            with _configure(root, allowed_root_files=["AGENTS.md"]):
+                result = guard._guard_hook(
+                    "write_file", {"path": str(tmp_path / "notes.txt")}
+                )
         assert "BLOCKED" in result["message"]
         assert "create_session_dir.py" in result["message"]
-        assert "guard-config.yaml" in result["message"]
+        hermes_fwd = str(tmp_path / "hermes").replace("\\", "/")
+        assert "%s/workspace-guard/guard-config.yaml" % hermes_fwd in result["message"]
+
+    def test_block_message_config_path_points_to_hermes_home(self, tmp_path):
+        # SCR-013 (task 16.6): the BLOCK message names the NEW config
+        # location HERMES_HOME/workspace-guard/guard-config.yaml; the
+        # plugin-dir path must not appear.
+        root = str(tmp_path)
+        with patch.object(guard, "_get_hermes_home", return_value=tmp_path / "hermes"):
+            with _configure(root, allowed_root_files=["AGENTS.md"]):
+                result = guard._guard_hook(
+                    "write_file", {"path": str(tmp_path / "notes.txt")}
+                )
+        assert result is not None
+        assert result["action"] == "block"
+        message = result["message"]
+        hermes_fwd = str(tmp_path / "hermes").replace("\\", "/")
+        assert "%s/workspace-guard/guard-config.yaml" % hermes_fwd in message
+        assert "src/workspace-guard" not in message
+
+    def test_write_file_root_file_blocked_when_no_whitelist(self, tmp_path):
+        # STRICT fallback (D1, SCR-011): config/key absent -> empty
+        # whitelist -> every root file (incl. AGENTS.md) blocks (fail-closed).
+        root = str(tmp_path)
+        with _configure(root):
+            result = guard._guard_hook(
+                "write_file", {"path": str(tmp_path / "AGENTS.md")}
+            )
+        assert result is not None
+        assert result["action"] == "block"
+
+    def test_non_whitelisted_root_file_blocked(self, tmp_path):
+        # Whitelist present but the file is not listed -> block.
+        root = str(tmp_path)
+        with _configure(root, allowed_root_files=["AGENTS.md"]):
+            result = guard._guard_hook(
+                "write_file", {"path": str(tmp_path / "RULES.txt")}
+            )
+        assert result is not None
+        assert result["action"] == "block"
 
 
 # ---------------------------------------------------------------- Fail open
@@ -244,12 +303,75 @@ class TestRegisterSync:
             with patch.object(guard, "get_cached_config", return_value=(None, [])):
                 with patch.object(guard, "sync_memo", return_value={}):
                     guard.register(ctx)
-        ctx.register_tool.assert_called_once_with(
+        ctx.register_tool.assert_any_call(
             "workspace_guard_allow_path",
             toolset="workspace-guard",
             schema=guard.ALLOW_PATH_TOOL_SCHEMA,
             handler=guard.workspace_guard_allow_path,
         )
+
+    def test_register_registers_all_three_tools_and_command(self):
+        # SCR-011 (task 14.6): allow_path + auto_update + register_workspace
+        # tools and the /workspace-guard quick command, in registration order.
+        ctx = MagicMock()
+        with patch.object(guard, "_registered_ctx", None):
+            with patch.object(guard, "get_cached_config", return_value=(None, [])):
+                with patch.object(guard, "sync_memo", return_value={}):
+                    guard.register(ctx)
+        tool_calls = ctx.register_tool.call_args_list
+        assert len(tool_calls) == 3
+        assert [c.args[0] for c in tool_calls] == [
+            "workspace_guard_allow_path",
+            "workspace_guard_auto_update_workspace",
+            "workspace_guard_register_workspace",
+        ]
+        assert tool_calls[1].kwargs["schema"] == guard.AUTO_UPDATE_TOOL_SCHEMA
+        assert tool_calls[2].kwargs["schema"] == guard.REGISTER_TOOL_SCHEMA
+        assert tool_calls[1].kwargs["handler"] is guard.workspace_guard_auto_update_workspace
+        ctx.register_command.assert_called_once_with(
+            "workspace-guard",
+            guard._workspace_guard_cmd,
+            description="Show or update the profile workspace memo",
+            args_hint="workspace_status|workspace_update",
+        )
+
+    def test_register_without_register_command_still_registers(self):
+        # A ctx with register_tool but without register_command must not
+        # break registration (hasattr guard, SCR-011 2.6).
+        ctx = MagicMock(spec=["register_hook", "register_tool"])
+        with patch.object(guard, "_registered_ctx", None):
+            with patch.object(guard, "get_cached_config", return_value=(None, [])):
+                with patch.object(guard, "sync_memo", return_value={}):
+                    guard.register(ctx)
+        ctx.register_hook.assert_called()
+        assert ctx.register_tool.call_count == 3
+
+    def test_register_workspace_handler_injects_registered_ctx(self, tmp_path):
+        # The register_workspace tool's handler is a wrapper lambda that
+        # injects ctx=_registered_ctx at call time (SCR-011 2.6); calling
+        # it must behave like the real tool (active-profile check passes,
+        # terminal.cwd set, memo written).
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        ctx = MagicMock()
+        ctx.profile_name = "default"
+        with patch.object(guard, "_registered_ctx", ctx):
+            with patch.object(guard, "get_cached_config", return_value=(None, [])):
+                with patch.object(guard, "sync_memo", return_value={}):
+                    guard.register(ctx)
+        handler = None
+        for call in ctx.register_tool.call_args_list:
+            if call.args[0] == "workspace_guard_register_workspace":
+                handler = call.kwargs["handler"]
+        assert handler is not None
+        with patch.object(guard, "_registered_ctx", ctx):
+            with patch("config._get_hermes_home", return_value=tmp_path / "hermes"):
+                with patch("config.set_config_value", MagicMock()) as setter:
+                    result = handler({"profile": "default", "workspace": str(ws)})
+        assert "Registered profile 'default'" in result
+        setter.assert_called_once_with("terminal.cwd", str(ws))
+        memo_file = tmp_path / "hermes" / "workspace-guard" / "profile-workspaces.json"
+        assert memo_file.is_file()
 
     def test_register_without_register_tool_still_registers(self):
         ctx = MagicMock(spec=["register_hook"])
@@ -314,6 +436,72 @@ class TestRegisterSync:
             with patch.object(guard, "sync_memo", return_value={}) as sync:
                 guard._session_start_hook()
         sync.assert_called_once_with()
+
+
+# ---------------------------------------------------------------- Quick command (SCR-011 2.6, task 14.10)
+
+class TestWorkspaceGuardCommand:
+    """/workspace-guard quick command handler (SCR-011 2.6).
+
+    workspace_status (default): read-only memo display (synced_at +
+    per-profile workspace / status / changed_at). workspace_update: full
+    memo sync via sync_memo, prefixed with "[workspace-guard] Memo
+    updated.". Unknown subcommand: usage line. Subcommands are
+    case-insensitive; errors become the message (never raises).
+    """
+
+    @staticmethod
+    def _memo():
+        return {
+            "synced_at": "2026-08-08T20:29:48",
+            "profiles": {
+                "default": {
+                    "workspace": "E:/ws/default",
+                    "status": "valid",
+                    "changed_at": "2026-08-07T19:49:26",
+                }
+            },
+        }
+
+    def test_status_no_args_returns_memo_display(self):
+        with patch.object(guard, "load_memo", return_value=self._memo()):
+            result = guard._workspace_guard_cmd(None)
+        assert result.startswith("[workspace-guard] Profile workspace memo")
+        assert "Synced: 2026-08-08T20:29:48" in result
+        assert "default: E:/ws/default [valid]  changed: 2026-08-07T19:49:26" in result
+
+    def test_status_explicit_subcommand(self):
+        with patch.object(guard, "load_memo", return_value=self._memo()):
+            result = guard._workspace_guard_cmd("workspace_status")
+        assert "[workspace-guard] Profile workspace memo" in result
+        assert "Synced: 2026-08-08T20:29:48" in result
+
+    def test_status_reads_real_memo_file(self, tmp_path):
+        # Real-flow: memo file under HERMES_HOME/workspace-guard/.
+        hermes_home = tmp_path / "hermes"
+        config.save_memo(self._memo(), hermes_home=str(hermes_home))
+        with patch("config._get_hermes_home", return_value=hermes_home):
+            result = guard._workspace_guard_cmd("")
+        assert "Synced: 2026-08-08T20:29:48" in result
+        assert "E:/ws/default [valid]" in result
+
+    def test_update_calls_sync_memo_and_returns_display(self):
+        with patch.object(guard, "sync_memo", return_value=self._memo()) as sync:
+            result = guard._workspace_guard_cmd("workspace_update")
+        sync.assert_called_once_with()
+        assert result.startswith("[workspace-guard] Memo updated.")
+        assert "[workspace-guard] Profile workspace memo" in result
+        assert "Synced: 2026-08-08T20:29:48" in result
+        assert "E:/ws/default [valid]" in result
+
+    def test_update_subcommand_is_case_insensitive(self):
+        with patch.object(guard, "sync_memo", return_value=self._memo()):
+            result = guard._workspace_guard_cmd("WORKSPACE_UPDATE")
+        assert result.startswith("[workspace-guard] Memo updated.")
+
+    def test_unknown_subcommand_returns_usage(self):
+        result = guard._workspace_guard_cmd("frobnicate")
+        assert result == "Usage: /workspace-guard workspace_status | workspace_update"
 
 
 # ---------------------------------------------------------------- Fail-open warning (SCR-004, task 11.3)
@@ -524,7 +712,7 @@ class TestMsysIntegration:
 
     WORKSPACE = "E:/HermesWorkspace/default"
 
-    def _setup(self, root=WORKSPACE, exempt_paths=None):
+    def _setup(self, root=WORKSPACE, exempt_paths=None, allowed_root_files=None):
         """Open all patch contexts for a full-hook MSYS integration test."""
         stack = ExitStack()
         stack.enter_context(patch.object(
@@ -533,11 +721,13 @@ class TestMsysIntegration:
         stack.enter_context(patch.object(
             guard, "load_memo", return_value={"synced_at": None, "profiles": {}}
         ))
-        stack.enter_context(_configure(root, exempt_paths=exempt_paths))
+        stack.enter_context(_configure(
+            root, exempt_paths=exempt_paths, allowed_root_files=allowed_root_files
+        ))
         return stack
 
-    def _hook(self, target, root=WORKSPACE):
-        with self._setup(root):
+    def _hook(self, target, root=WORKSPACE, allowed_root_files=None):
+        with self._setup(root, allowed_root_files=allowed_root_files):
             return guard._guard_hook(
                 "write_file", {"path": target}, task_id="task-1"
             )
@@ -575,8 +765,12 @@ class TestMsysIntegration:
     @pytest.mark.parametrize("name", ["AGENTS.md", "agents.md", "AgEnTs.Md"])
     def test_msys_agents_md_any_case_allowed(self, name):
         # /e/HermesWorkspace/default/<name> maps to the workspace-root
-        # AGENTS.md; any case is allowed on Windows (SCR-006 task 9.10).
-        result = self._hook("/e/HermesWorkspace/default/%s" % name)
+        # rules file; whitelisted via allowed_root_files, any case is
+        # allowed on Windows (D1 SCR-011 + SCR-006 task 9.10).
+        result = self._hook(
+            "/e/HermesWorkspace/default/%s" % name,
+            allowed_root_files=["AGENTS.md"],
+        )
         assert result is None
 
     def test_unmappable_path_fails_open(self):
@@ -664,7 +858,12 @@ class TestClassifyTarget:
     def test_in_workspace_root_file_returns_block(self, tmp_path):
         root = str(tmp_path)
         target = str(tmp_path / "notes.txt")
-        result = guard.classify_target(target, root, [])
+        with patch.object(
+            guard,
+            "load_guard_config",
+            return_value={"exempt_paths": [], "allowed_root_files": []},
+        ):
+            result = guard.classify_target(target, root, [])
         assert result is not None
         assert result["action"] == "block"
         assert "BLOCKED" in result["message"]
@@ -675,9 +874,16 @@ class TestClassifyTarget:
         assert guard.classify_target(target, root, []) is None
 
     def test_agents_md_at_root_returns_none(self, tmp_path):
+        # D1 (SCR-011): the root exemption is config-driven -- AGENTS.md is
+        # allowed only when allowed_root_files lists it.
         root = str(tmp_path)
         target = str(tmp_path / "AGENTS.md")
-        assert guard.classify_target(target, root, []) is None
+        with patch.object(
+            guard,
+            "load_guard_config",
+            return_value={"exempt_paths": [], "allowed_root_files": ["AGENTS.md"]},
+        ):
+            assert guard.classify_target(target, root, []) is None
 
     def test_external_target_returns_none(self, tmp_path):
         root = str(tmp_path)
@@ -1041,33 +1247,44 @@ class TestCasefold:
 
     def test_classify_target_agents_md_any_case_when_windows(self):
         with patch.object(guard.os, "name", "nt"):
-            assert guard.classify_target(
-                "E:/HermesWorkspace/default/agents.md",
-                "E:/HermesWorkspace/default",
-                [],
-            ) is None
-            assert guard.classify_target(
-                "E:/HermesWorkspace/default/Agents.Md",
-                "E:/HermesWorkspace/default",
-                [],
-            ) is None
+            with patch.object(
+                guard,
+                "load_guard_config",
+                return_value={"exempt_paths": [], "allowed_root_files": ["AGENTS.md"]},
+            ):
+                assert guard.classify_target(
+                    "E:/HermesWorkspace/default/agents.md",
+                    "E:/HermesWorkspace/default",
+                    [],
+                ) is None
+                assert guard.classify_target(
+                    "E:/HermesWorkspace/default/Agents.Md",
+                    "E:/HermesWorkspace/default",
+                    [],
+                ) is None
 
-    def test_agents_md_exact_comparison_when_posix(self):
+    def test_agents_md_exact_comparison_when_posix(self, tmp_path):
         with patch.object(guard.os, "name", "posix"):
-            # Lowercase agents.md is NOT the root AGENTS.md on POSIX.
-            result = guard.classify_target(
-                "E:/HermesWorkspace/default/agents.md",
-                "E:/HermesWorkspace/default",
-                [],
-            )
-            assert result is not None
-            assert result["action"] == "block"
-            # Exact-case AGENTS.md stays allowed.
-            assert guard.classify_target(
-                "E:/HermesWorkspace/default/AGENTS.md",
-                "E:/HermesWorkspace/default",
-                [],
-            ) is None
+            with patch.object(
+                guard,
+                "load_guard_config",
+                return_value={"exempt_paths": [], "allowed_root_files": ["AGENTS.md"]},
+            ):
+                with patch.object(guard, "_get_hermes_home", return_value=tmp_path):
+                    # Lowercase agents.md is NOT the root AGENTS.md on POSIX.
+                    result = guard.classify_target(
+                        "E:/HermesWorkspace/default/agents.md",
+                        "E:/HermesWorkspace/default",
+                        [],
+                    )
+                    assert result is not None
+                    assert result["action"] == "block"
+                    # Exact-case AGENTS.md stays allowed.
+                    assert guard.classify_target(
+                        "E:/HermesWorkspace/default/AGENTS.md",
+                        "E:/HermesWorkspace/default",
+                        [],
+                    ) is None
 
     # -- Memo cross-profile prefix --
 
@@ -1532,3 +1749,70 @@ class TestTerminalTier:
         assert result is not None
         assert result["action"] == "approve"
         assert result["rule_key"] == "cross-profile-write:job-hunt"
+
+
+# ---------------------------------------------------------------- Root-file whitelist (SCR-011 D1, task 14.11)
+
+class TestAllowedRootFiles:
+    """classify_target root-file exemption reads allowed_root_files (D1).
+
+    Real-flow: config._get_hermes_home points at a tmp HERMES_HOME whose
+    workspace-guard/guard-config.yaml carries the whitelist, so the whole
+    load chain (default path -> parse -> _allowed_root_files) is
+    exercised. STRICT fallback: config missing / key missing -> empty
+    whitelist -> every root file blocks (fail-closed, guard and audit
+    agree).
+    """
+
+    @staticmethod
+    def _write_config(tmp_path, content):
+        cfg_dir = tmp_path / "workspace-guard"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "guard-config.yaml").write_text(content, encoding="utf-8")
+
+    def _classify(self, tmp_path, target):
+        with patch("config._get_hermes_home", return_value=tmp_path):
+            return guard.classify_target(str(target), str(tmp_path), [])
+
+    def test_whitelisted_root_file_allowed(self, tmp_path):
+        self._write_config(tmp_path, "allowed_root_files:\n  - AGENTS.md\n")
+        assert self._classify(tmp_path, tmp_path / "AGENTS.md") is None
+
+    def test_non_whitelisted_root_file_blocked(self, tmp_path):
+        self._write_config(tmp_path, "allowed_root_files:\n  - AGENTS.md\n")
+        result = self._classify(tmp_path, tmp_path / "NOTES.txt")
+        assert result is not None
+        assert result["action"] == "block"
+
+    def test_config_missing_fail_closed_blocks_root_file(self, tmp_path):
+        # No guard-config.yaml at the default location -> strict [].
+        result = self._classify(tmp_path, tmp_path / "AGENTS.md")
+        assert result is not None
+        assert result["action"] == "block"
+
+    def test_key_missing_fail_closed_blocks_root_file(self, tmp_path):
+        self._write_config(tmp_path, "exempt_paths: []\n")
+        result = self._classify(tmp_path, tmp_path / "AGENTS.md")
+        assert result is not None
+        assert result["action"] == "block"
+
+    def test_windows_casefold_whitelist_matches_uppercase_target(self, tmp_path):
+        # Config "agents.md" (lowercase) exempts an "AGENTS.md" write on
+        # the Windows comparison path (SCR-006 task 9.10 style).
+        self._write_config(tmp_path, 'allowed_root_files: ["agents.md"]\n')
+        with patch("config._get_hermes_home", return_value=tmp_path):
+            with patch.object(guard.os, "name", "nt"):
+                result = guard.classify_target(
+                    str(tmp_path / "AGENTS.md"), str(tmp_path), []
+                )
+        assert result is None
+
+    def test_root_file_outside_whitelist_still_blocks_with_casefold(self, tmp_path):
+        self._write_config(tmp_path, 'allowed_root_files: ["AGENTS.md"]\n')
+        with patch("config._get_hermes_home", return_value=tmp_path):
+            with patch.object(guard.os, "name", "nt"):
+                result = guard.classify_target(
+                    str(tmp_path / "README.md"), str(tmp_path), []
+                )
+        assert result is not None
+        assert result["action"] == "block"
