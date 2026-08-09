@@ -193,8 +193,10 @@ cmd_install() {
             if [ "$NEED_PLUGIN" = 1 ]; then
                 log "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
-            log "  would copy: src/workspace-guard/guard-config.yaml -> $home/workspace-guard/guard-config.yaml"
-            log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+            if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
+                log "  would copy: src/workspace-guard/guard-config.yaml -> $home/workspace-guard/guard-config.yaml"
+                log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+            fi
             continue
         fi
         # real execution
@@ -204,9 +206,11 @@ cmd_install() {
         if [ "$NEED_PLUGIN" = 1 ]; then
             hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
         fi
-        mkdir -p "$home/workspace-guard"
-        cp "$SCRIPT_DIR/src/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
-        rm -f "$home/workspace-guard/profile-workspaces.json"
+        if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
+            mkdir -p "$home/workspace-guard"
+            cp "$SCRIPT_DIR/src/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
+            rm -f "$home/workspace-guard/profile-workspaces.json"
+        fi
     done
     log "Restart Hermes for changes to take effect."
     return 0

@@ -276,7 +276,7 @@ class TestRepoUrl:
     def test_repo_flag_parses(self, tmp_path):
         r = run_install(tmp_path, "install", "--dry-run", "--profile", "default", "--repo", "https://example.com/r.git")
         # dry-run must not fail on flag parsing
-        assert r.returncode == 0 or r.returncode == 2  # 2 = not-implemented stub from cmd_install
+        assert r.returncode == 0 or r.returncode == 2  # returns 0 when flag parsing succeeds
 
 
 # ---------------------------------------------------------------- Semver compare (SCR-015 Task 5)
@@ -323,6 +323,21 @@ class TestInstallPlan:
         r = run_install(hh, "install", "--dry-run", "--all-profiles")
         assert r.returncode == 0
         assert "up to date" in r.stdout
+
+    def test_plan_up_to_date_skips_config_and_memo(self, tmp_path):
+        # I-1 ruling A: a fully up-to-date profile must not touch config/memo.
+        hh = tmp_path / "hh"
+        skill = hh / "skills" / "workspace-organization" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("---\nversion: 1.0.0\n---\n", encoding="utf-8")
+        manifest = hh / "plugins" / "workspace-guard" / "plugin.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("version: 1.0.0\n", encoding="utf-8")
+        r = run_install(hh, "install", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert "up to date" in r.stdout
+        assert "would copy" not in r.stdout
+        assert "would delete memo" not in r.stdout
 
     def test_force_overrides_skip(self, tmp_path):
         hh = tmp_path / "hh"
