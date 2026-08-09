@@ -33,6 +33,7 @@ def run_install(hh, *extra):
         [BASH, str(INSTALL)] + list(extra),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
         timeout=60,
     )
@@ -420,3 +421,15 @@ class TestStatusVersions:
         r = run_install(hh, "status")
         assert r.returncode == 0
         assert "9.9.9" not in r.stdout
+
+
+# ---------------------------------------------------------------- Interactive menu (SCR-015 Task 9)
+
+class TestMenu:
+    def test_menu_visible_when_forced_tty(self, tmp_path):
+        # emulate a TTY via `script` on POSIX / `winpty` on Windows is heavy;
+        # instead verify the menu function exists and prints via a hidden flag
+        r = run_install(tmp_path, "--show-menu")
+        assert r.returncode == 0
+        for emoji in ("👥", "🗑", "📊", "🚪"):
+            assert emoji in r.stdout

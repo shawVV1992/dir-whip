@@ -123,6 +123,31 @@ ver_gt() {
 }
 
 # --- subcommands -----------------------------------------------------------
+show_menu() {
+    cat <<'EOF'
+🔧 workspace-guard installer
+👥 1) Install/Update (skill + plugin)
+🗑️ 2) Uninstall
+📊 3) Status
+🚪 4) Quit
+EOF
+}
+
+interactive_menu() {
+    local choice
+    while true; do
+        show_menu
+        read -r -p "Choose [1-4]: " choice
+        case "$choice" in
+            1) cmd_install;;
+            2) cmd_uninstall;;
+            3) cmd_status;;
+            4) return 0;;
+            *) err "invalid choice: $choice";;
+        esac
+    done
+}
+
 discover_profiles() {
     local root="$1" name
     [ -d "$root" ] || return 0
@@ -305,13 +330,13 @@ main() {
         fi
         die "semver comparison broken"
     fi
+    if [ "$sub" = "--show-menu" ]; then show_menu; return 0; fi
     if [ -z "$sub" ]; then
         if ! is_tty; then
             die "no TTY and no --profile/--all-profiles; refusing to enter the menu"
         fi
-        # interactive menu body lands in Task 9; for now fall through to usage
-        usage
-        return 1
+        interactive_menu
+        return 0
     fi
     shift
     case "$sub" in
