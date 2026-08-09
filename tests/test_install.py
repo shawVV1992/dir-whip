@@ -393,3 +393,30 @@ class TestUninstallPlan:
         r = run_install(tmp_path, "uninstall", "--dry-run", "--all-profiles", "--keep-config")
         assert r.returncode == 0
         assert "keep config" in r.stdout
+
+
+# ---------------------------------------------------------------- Status versions (SCR-015 Task 8)
+
+class TestStatusVersions:
+    def test_status_shows_versions(self, tmp_path):
+        hh = tmp_path / "hh"
+        manifest = hh / "plugins" / "workspace-guard" / "plugin.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("version: 1.0.0\n", encoding="utf-8")
+        skill = hh / "skills" / "productivity" / "workspace-organization" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("---\nversion: 1.0.0\n---\n", encoding="utf-8")
+        r = run_install(hh, "status")
+        assert r.returncode == 0
+        assert "default" in r.stdout
+        assert "skill: 1.0.0" in r.stdout
+        assert "plugin: 1.0.0" in r.stdout
+
+    def test_status_archived_skill_not_read(self, tmp_path):
+        hh = tmp_path / "hh"
+        archived = hh / "skills" / ".archive" / "workspace-organization" / "SKILL.md"
+        archived.parent.mkdir(parents=True)
+        archived.write_text("---\nversion: 9.9.9\n---\n", encoding="utf-8")
+        r = run_install(hh, "status")
+        assert r.returncode == 0
+        assert "9.9.9" not in r.stdout

@@ -279,10 +279,17 @@ cmd_uninstall() {
 }
 cmd_status() {
     local root; root=$(hermes_root)
-    local p
+    local repo_skill repo_plugin
+    repo_skill=$(read_repo_version workspace-organization SKILL.md)
+    repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
     log "HERMES root: $root"
+    log "repo skill: $repo_skill | repo plugin: $repo_plugin"
+    local p home is ip
     for p in $(discover_profiles "$root"); do
-        log "  profile: $p"
+        home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
+        is=$(read_installed_version "$home" skill); [ -z "$is" ] && is="-"
+        ip=$(read_installed_version "$home" plugin); [ -z "$ip" ] && ip="-"
+        log "  $p: skill $is | plugin $ip"
     done
     return 0
 }
