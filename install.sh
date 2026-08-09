@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # repo root (src/ lives there; scr
 log()  { printf '%s\n' "$*"; }
 err()  { printf '%s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
+sep()  { printf '%s\n' '----------------------------------------'; }
 
 usage() {
     cat <<'EOF'
@@ -196,6 +197,7 @@ ver_gt() {
 
 # --- subcommands -----------------------------------------------------------
 show_menu() {
+    sep
     cat <<'EOF'
 🔧 workspace-guard installer
 👥 1) Install/Update (skill + plugin)
@@ -203,6 +205,7 @@ show_menu() {
 📊 3) Status
 🚪 4) Quit
 EOF
+    sep
 }
 
 interactive_menu() {
@@ -213,9 +216,12 @@ interactive_menu() {
         case "$choice" in
             1) ASK_CONFIRM=1
                if select_profiles; then cmd_install; fi
-               ASK_CONFIRM=0 ;;
-            2) if select_profiles; then cmd_uninstall; fi ;;
-            3) cmd_status;;
+               ASK_CONFIRM=0
+               sep ;;
+            2) if select_profiles; then cmd_uninstall; fi
+               sep ;;
+            3) cmd_status
+               sep ;;
             4) return 0;;
             *) err "invalid choice: $choice";;
         esac
@@ -229,18 +235,19 @@ select_profiles() {
     local root; root=$(hermes_root)
     local -a names=()
     local name n=0 sel num
+    sep
     while IFS= read -r name; do
         n=$((n + 1))
         names+=("$name")
         log "  $n) $name"
     done < <(discover_profiles "$root")
-    [ "$n" -gt 0 ] || { err "no profiles found under $root"; return 1; }
+    [ "$n" -gt 0 ] || { err "no profiles found under $root"; sep; return 1; }
     ALL_PROFILES=0
     TARGET_PROFILES=()
     while true; do
         read -r -p "Select profile numbers (comma-separated, 0 = all, Enter = cancel): " sel
-        [ -z "$sel" ] && { err "cancelled"; return 1; }
-        if [ "$sel" = "0" ]; then ALL_PROFILES=1; return 0; fi
+        [ -z "$sel" ] && { err "cancelled"; sep; return 1; }
+        if [ "$sel" = "0" ]; then ALL_PROFILES=1; sep; return 0; fi
         local ok=1 nums
         IFS=, read -ra nums <<< "$sel"
         for num in "${nums[@]}"; do
@@ -254,6 +261,7 @@ select_profiles() {
             for num in "${nums[@]}"; do
                 TARGET_PROFILES+=("${names[$((num - 1))]}")
             done
+            sep
             return 0
         fi
         err "invalid selection: $sel (use 1-$n, comma-separated; 0 = all)"
@@ -263,7 +271,9 @@ select_profiles() {
 confirm_yn() {
     # $1 = prompt; returns 0 on y/Y, 1 otherwise
     local ans
+    sep
     read -r -p "$1 [y/N] " ans
+    sep
     [ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
@@ -320,6 +330,7 @@ cmd_install() {
     local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
     log "repo URL: $url"
     local p home
+    sep
     for p in $(discover_profiles "$root"); do
         if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
             # filter: only listed profiles
@@ -374,6 +385,7 @@ cmd_install() {
         fi
     done
     log "Restart Hermes for changes to take effect."
+    sep
     return 0
 }
 parse_uninstall_flags() {
@@ -394,6 +406,7 @@ cmd_uninstall() {
     require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
     local p home hargs
+    sep
     for p in $(discover_profiles "$root"); do
         if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
             local keep=0 q
@@ -437,6 +450,7 @@ cmd_uninstall() {
             rmdir "$home/workspace-guard" 2>/dev/null || true
         fi
     done
+    sep
     return 0
 }
 cmd_status() {
@@ -444,6 +458,7 @@ cmd_status() {
     local repo_skill repo_plugin
     repo_skill=$(read_repo_version workspace-organization SKILL.md)
     repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
+    sep
     log "HERMES root: $root"
     log "repo skill: $repo_skill | repo plugin: $repo_plugin"
     local p home is ip
@@ -453,6 +468,7 @@ cmd_status() {
         ip=$(read_installed_version "$home" plugin); [ -z "$ip" ] && ip="-"
         log "  $p: skill $is | plugin $ip"
     done
+    sep
     return 0
 }
 
