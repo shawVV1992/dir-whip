@@ -274,7 +274,7 @@ class TestRepoUrl:
         assert "https://github.com/shawVV1992/workspace-guard" not in r.stdout  # status doesn't print URL yet
 
     def test_repo_flag_parses(self, tmp_path):
-        r = run_install(tmp_path, "install", "--dry-run", "--repo", "https://example.com/r.git")
+        r = run_install(tmp_path, "install", "--dry-run", "--profile", "default", "--repo", "https://example.com/r.git")
         # dry-run must not fail on flag parsing
         assert r.returncode == 0 or r.returncode == 2  # 2 = not-implemented stub from cmd_install
 
@@ -291,3 +291,52 @@ class TestSemverCompare:
         assert r.returncode == 0
         assert "1.10.0 > 1.9.0: ok" in r.stdout
         assert "1.0.0 > 1.0.0: no" in r.stdout
+
+
+# ---------------------------------------------------------------- Install plan (SCR-015 Task 6)
+
+class TestInstallPlan:
+    def test_plan_not_installed_prints_commands(self, tmp_path):
+        r = run_install(tmp_path, "install", "--dry-run", "--profile", "default", "--all-profiles")
+        assert r.returncode == 0
+        assert "repo URL: https://github.com/shawVV1992/workspace-guard" in r.stdout
+        assert "hermes skills install" in r.stdout
+        assert "hermes plugins install" in r.stdout
+        assert "--force" not in r.stdout
+        assert "guard-config.yaml" in r.stdout
+        assert "memo" in r.stdout
+
+    def test_plan_outdated_uses_force(self, tmp_path):
+        hh = tmp_path / "hh"
+        manifest = hh / "plugins" / "workspace-guard" / "plugin.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("version: 0.9.0\n", encoding="utf-8")
+        r = run_install(hh, "install", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert "--force" in r.stdout
+
+    def test_plan_up_to_date_skips(self, tmp_path):
+        hh = tmp_path / "hh"
+        manifest = hh / "plugins" / "workspace-guard" / "plugin.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("version: 1.0.0\n", encoding="utf-8")
+        r = run_install(hh, "install", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert "up to date" in r.stdout
+
+    def test_force_overrides_skip(self, tmp_path):
+        hh = tmp_path / "hh"
+        manifest = hh / "plugins" / "workspace-guard" / "plugin.yaml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("version: 1.0.0\n", encoding="utf-8")
+        r = run_install(hh, "install", "--dry-run", "--all-profiles", "--force")
+        assert r.returncode == 0
+        assert "--force" in r.stdout
+
+    def test_dry_run_touches_nothing(self, tmp_path):
+        hh = tmp_path / "hh"
+        (hh / "profiles" / "job-hunt").mkdir(parents=True)
+        before = snapshot(hh)
+        r = run_install(hh, "install", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert snapshot(hh) == before

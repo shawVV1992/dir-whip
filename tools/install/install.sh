@@ -136,7 +136,81 @@ discover_profiles() {
     done
 }
 
-cmd_install() { parse_install_flags "$@"; preflight; err "plan not implemented"; return 2; }
+plan_profile() {
+    # $1 = profile name, $2 = profile home; prints plan lines; sets NEED_SKILL/NEED_PLUGIN/NEED_FORCE
+    local prof="$1" home="$2"
+    local repo_skill repo_plugin inst_skill inst_plugin
+    repo_skill=$(read_repo_version workspace-organization SKILL.md)
+    repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
+    inst_skill=$(read_installed_version "$home" skill)
+    inst_plugin=$(read_installed_version "$home" plugin)
+
+    NEED_SKILL=0; NEED_PLUGIN=0; NEED_FORCE=0
+    if [ -z "$inst_skill" ]; then
+        NEED_SKILL=1; log "  [$prof] skill: not installed -> install"
+    elif [ "$FORCE" = 1 ] || ver_gt "$repo_skill" "$inst_skill"; then
+        NEED_SKILL=1; NEED_FORCE=1
+        log "  [$prof] skill: $inst_skill -> $repo_skill (update)"
+    else
+        log "  [$prof] skill: $inst_skill (up to date)"
+    fi
+    if [ -z "$inst_plugin" ]; then
+        NEED_PLUGIN=1; log "  [$prof] plugin: not installed -> install"
+    elif [ "$FORCE" = 1 ] || ver_gt "$repo_plugin" "$inst_plugin"; then
+        NEED_PLUGIN=1; NEED_FORCE=1
+        log "  [$prof] plugin: $inst_plugin -> $repo_plugin (update)"
+    else
+        log "  [$prof] plugin: $inst_plugin (up to date)"
+    fi
+}
+
+cmd_install() {
+    parse_install_flags "$@"
+    preflight
+    local root; root=$(hermes_root)
+    local url; url=$(resolve_repo_url)
+    log "repo URL: $url"
+    local p home
+    for p in $(discover_profiles "$root"); do
+        if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
+            # filter: only listed profiles
+            local keep=0 q
+            for q in "${TARGET_PROFILES[@]}"; do [ "$q" = "$p" ] && keep=1; done
+            [ "$keep" = 1 ] || continue
+        else
+            is_tty || die "no TTY and no --profile/--all-profiles"
+            err "interactive selection not implemented yet; use --profile or --all-profiles"
+            return 1
+        fi
+        home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
+        [ -d "$home" ] || { err "  [$p] profile home missing: $home"; continue; }
+        plan_profile "$p" "$home"
+        local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        if [ "$DRY_RUN" = 1 ]; then
+            if [ "$NEED_SKILL" = 1 ]; then
+                log "  would run: hermes ${hargs:+$hargs }skills install $url/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
+            fi
+            if [ "$NEED_PLUGIN" = 1 ]; then
+                log "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
+            fi
+            log "  would copy: src/workspace-guard/guard-config.yaml -> $home/workspace-guard/guard-config.yaml"
+            log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+            continue
+        fi
+        # real execution
+        if [ "$NEED_SKILL" = 1 ]; then
+            hermes $hargs skills install "$url/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
+        fi
+        if [ "$NEED_PLUGIN" = 1 ]; then
+            hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
+        fi
+        mkdir -p "$home/workspace-guard"
+        cp "$SCRIPT_DIR/src/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
+        rm -f "$home/workspace-guard/profile-workspaces.json"
+    done
+    log "Restart Hermes for changes to take effect."
+    return 0
+}
 cmd_uninstall() { err "not implemented yet"; return 2; }
 cmd_status() {
     local root; root=$(hermes_root)
