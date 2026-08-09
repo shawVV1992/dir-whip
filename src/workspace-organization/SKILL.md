@@ -127,7 +127,7 @@ reports what would be deleted (dry-run is the default).
 
 ```
 <Default Working Directory>/
-├── AGENTS.md                          <- workspace rules (root whitelist)
+├── <rules-file>                       <- workspace rules file (root whitelist)
 ├── .hermes/                           <- optional Hermes internal
 ├── YYYYMMDD_HHMMSS_TaskName/          <- session directory
 │   ├── Outputs/                       <- formal deliverables only
@@ -139,7 +139,8 @@ reports what would be deleted (dry-run is the default).
 ```
 
 Rules:
-- Root allows ONLY: AGENTS.md (file) and .hermes/ (directory)
+- Root allows ONLY: the workspace rules file (its name comes from the
+  allowed_root_files whitelist) and .hermes/ (directory)
 - Every other root entry must match `YYYYMMDD_HHMMSS[_TaskName]` format
 - Each session dir MUST contain both Outputs/ and .tmp/
 - Outputs/ blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
@@ -156,11 +157,13 @@ All scripts: Python 3.11, `--help` support, forward-slash output paths.
 | create_session_dir.py | Create session dir with Outputs/ + .tmp/ | `--workspace` |
 | audit_workspace.py | 7-point compliance audit (read-only) | `--workspace`, `--json`, `--gate` |
 | clean_tmp.py | Remove expired .tmp/ contents | `--workspace`, `--days N`, `--confirm` |
-| init_workspace.py | Initialize new profile workspace | `--workspace`, `--template` |
+| init_workspace.py | Create new profile workspace dir (mkdir only; no rules file, no memo write; output ends with the registration next-step) | `<name>`, `--workspace` |
 
-Boundary validation: all scripts (except init_workspace.py) verify the target
-directory contains AGENTS.md before proceeding. This prevents accidental
-operations outside a valid Default Working Directory.
+Boundary validation: all scripts (except init_workspace.py) validate the
+target against the profile workspace memo (see "Profile Workspace Memo") --
+exact match of a profile's workspace value. An unregistered target is rejected
+(exit 2), preventing accidental operations outside a valid Default Working
+Directory.
 
 ---
 
@@ -203,9 +206,13 @@ Only place files after explicit user confirmation.
 
 ### Phase 5: Implement
 
-1. Initialize: `python scripts/init_workspace.py <name> --workspace <parent>`
-2. Create sessions: `python scripts/create_session_dir.py <task> --workspace <dir>`
-3. Set terminal.cwd: `hermes config set terminal.cwd "<path>"`
+Two-step init flow (see "Profile Workspace Memo"):
+1. Create the directory (mkdir only):
+   `python scripts/init_workspace.py <name> --workspace <parent>`
+2. Register it in the target profile's own session: call the tool
+   `workspace_guard_register_workspace('<name>', '<created path>')` (sets that
+   profile's `terminal.cwd` and writes the memo entry)
+3. Create sessions: `python scripts/create_session_dir.py <task> --workspace <dir>`
 
 ---
 
@@ -216,10 +223,12 @@ Never assume a hardcoded workspace path.
 
 Key principles:
 1. One subdirectory per profile under a shared root
-2. AGENTS.md at each level (top-level for navigation, per-profile for rules)
+2. A workspace rules file at each level (top-level for navigation, per-profile
+   for rules); the root file name comes from the allowed_root_files whitelist
 3. No cross-profile file pollution
 4. Security isolation (redact_pii/redact_secrets profiles stay in their own tree)
-5. Existing repos don't move -- use AGENTS.md to point at existing paths
+5. Existing repos don't move -- use a workspace rules file to point at
+   existing paths
 
 ### Setting terminal.cwd
 
@@ -232,6 +241,81 @@ Pitfalls:
   unrecognized top-level key. Only `terminal.cwd` controls the working directory.
 - Do not edit config.yaml directly -- Hermes blocks writes to config files.
 - Changes take effect on the NEXT session, not the current one.
+- After changing `terminal.cwd`, run `/workspace-guard workspace_update`
+  (plugin installed) so the profile workspace memo reflects the new value --
+  scripts validate against the memo.
+
+---
+
+## Profile Workspace Memo
+
+Scripts validate a working directory against the profile workspace memo
+(`HERMES_HOME/workspace-guard/profile-workspaces.json`): a target is a valid
+Default Working Directory iff it exactly matches a profile's recorded workspace
+value -- that profile's `terminal.cwd`. The memo stores `synced_at` plus, per
+profile, `workspace`, `status`, and `changed_at`.
+
+Write ownership: the PLUGIN is the memo's only writer. The skill and its
+scripts only READ the memo -- they never rebuild or edit it.
+
+Quick commands:
+
+```
+/workspace-guard workspace_status
+```
+
+Read-only display of the memo: `synced_at` plus each profile's workspace,
+status, and `changed_at`.
+
+```
+/workspace-guard workspace_update
+```
+
+Manual rebuild (user-triggered): re-derives the memo from each profile's
+`terminal.cwd` and returns the full display. Use it after manually changing
+`terminal.cwd`.
+
+Tools:
+
+- `workspace_guard_auto_update_workspace` -- automatic memo sync
+  (tool/agent-triggered; the same rebuild as the update command).
+- `workspace_guard_register_workspace(profile, workspace)` -- registration:
+  sets the profile's `terminal.cwd` first (config-first, durable), then writes
+  the memo entry. Active-profile-only: it rejects a profile other than the
+  current session's profile.
+
+Validation semantics:
+
+- Memo present and the target exactly matches a profile workspace -> pass.
+- Target exists but is not registered -> reject (exit 2, "not a registered
+  profile workspace"); for a NEW workspace, register it via the
+  `workspace_guard_register_workspace` tool.
+- Memo missing/corrupt with the plugin installed -> reject (exit 2) and prompt
+  to run `/workspace-guard workspace_update`.
+- Memo missing/corrupt with NO plugin trace -> standalone mode.
+
+### Standalone Mode
+
+Without the plugin there is no memo to validate against. Every script
+invocation then emits one concise stderr warning ("memo unavailable, standalone
+mode") and trusts the provided `--workspace`. When you see that warning,
+explain standalone mode to the user ONCE per session: the guard is absent, so
+discipline is enforced by this skill's teaching only. Registration is skipped
+in standalone mode (the tool is plugin-owned).
+
+### Two-Step Init Flow
+
+Creating a new profile workspace is two steps:
+
+1. Create the directory (mkdir only -- no rules file, no memo write):
+   `python scripts/init_workspace.py <name> --workspace <parent>`. If the
+   directory already exists, the script exits 2 without creating or changing
+   anything. The output ends with the registration next-step.
+2. Register it in the TARGET profile's own session: call
+   `workspace_guard_register_workspace('<name>', '<created path>')`.
+   Registration is active-profile-only, so switch to the target profile
+   first. The tool sets that profile's `terminal.cwd` (config-first) and
+   writes the memo entry; the new workspace then passes script validation.
 
 ---
 
@@ -247,8 +331,15 @@ To audit and fix violations:
 
 ## Path Classification
 
-The plugin guard classifies every file write into one of three outcomes.
+The plugin guard classifies every file write into one of four outcomes.
 Know these so a block message or an approval prompt never surprises you.
+
+### Root Rules File -> Allowed
+
+A write to the workspace rules file at the workspace root is exempted. The
+permitted name is config-driven: the `allowed_root_files` whitelist in
+`HERMES_HOME/workspace-guard/guard-config.yaml`, read by BOTH the guard and the
+audit (same key), so the two never disagree about which root files are allowed.
 
 ### External Path -> Allowed
 
@@ -301,8 +392,9 @@ Rules:
 
 - Don't assume project file rules from one context apply to general workspace design
 - When existing code repos are outside the workspace root, add instructions in
-  AGENTS.md instead of relocating them
-- AGENTS.md rules for one profile should not leak into another profile's context
+  the workspace rules file instead of relocating them
+- Rules from one profile's workspace rules file should not leak into another
+  profile's context
 - Session directory creation is lazy -- do NOT create one at conversation start
 - In project mode, this skill does not apply at all -- defer to project conventions
 - Confirmation protocol: listing files is NOT the same as confirming deletion
