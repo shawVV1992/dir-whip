@@ -36,44 +36,54 @@ logfile() {
 }
 
 # Run a hermes command with full output captured to the log. Terminal shows a
-# step-level progress line with a spinner (TTY) or a plain status line
+# per-profile progress line with a spinner (TTY) or a plain status line
 # (non-TTY). Command stderr is never shown unless it fails.
-#   $1 = step index, $2 = total steps, $3 = label
+#   $1 = profile, $2 = component (skill|plugin)
+#   $3 = actioning (installing|updating|uninstalling)
+#   $4 = actioned  (installed|updated|uninstalled)
+#   $5 = failed    (install failed|update failed|uninstall failed)
 #   remaining args = the command to run
 progress_run() {
-    local i="$1" total="$2" label="$3"; shift 3
-    logfile "== [${i}/${total}] ${label}: $*"
+    local prof="$1" comp="$2" actioning="$3" actioned="$4" failed="$5"; shift 5
+    logfile "== [${prof}] ${comp} ${actioning}: $*"
     if [ -t 1 ]; then
         local spin=('|' '/' '-' '\') s=0 pid rc
-        printf '\r  [%d/%d] %s ...' "$i" "$total" "$label"
+        printf '\r[%s] %s %s %s' "$prof" "$comp" "$actioning" "${spin[0]}"
         "$@" >> "$LOG_FILE" 2>&1 &
         pid=$!
         while kill -0 "$pid" 2>/dev/null; do
-            printf '\r  [%d/%d] %s %s' "$i" "$total" "$label" "${spin[$((s % 4))]}"
+            printf '\r[%s] %s %s %s' "$prof" "$comp" "$actioning" "${spin[$((s % 4))]}"
             s=$((s + 1))
             sleep 0.1
         done
         wait "$pid"; rc=$?
         if [ "$rc" -eq 0 ]; then
-            printf '\r  [%d/%d] %s 完成\n' "$i" "$total" "$label"
+            printf '\r[%s] %s %s \033[32m\u2713\033[0m\n' "$prof" "$comp" "$actioned"
         else
-            printf '\r  [%d/%d] %s 失败 (rc=%d)\n' "$i" "$total" "$label" "$rc"
-            tail -n 3 "$LOG_FILE" >&2
+            printf '\r[%s] %s %s \033[31m\u2717\033[0m\n' "$prof" "$comp" "$failed"
         fi
-        logfile "== [${i}/${total}] ${label} exit=$rc"
+        logfile "== [${prof}] ${comp} ${actioning} exit=$rc"
         return "$rc"
     fi
     # Non-TTY: plain status line, output only to the log
-    log "  [${i}/${total}] ${label} ..."
+    log "  [${prof}] ${comp} ${actioning} ..."
     if "$@" >> "$LOG_FILE" 2>&1; then
-        log "  [${i}/${total}] ${label} 完成"
+        log "  [${prof}] ${comp} ${actioned} OK"
         return 0
     else
         local rc=$?
-        log "  [${i}/${total}] ${label} 失败 (rc=$rc)"
-        tail -n 3 "$LOG_FILE" >&2
+        log "  [${prof}] ${comp} ${failed}"
         return "$rc"
     fi
+}
+
+# Print a one-line failure cause plus the absolute log path (stderr).
+# Call after a progress_run failure; $LOG_FILE must already be resolved.
+fail_report() {
+    local cause
+    cause=$(tail -n 1 "$LOG_FILE" 2>/dev/null)
+    [ -n "$cause" ] && err "  reason: $cause"
+    err "  log: $LOG_FILE"
 }
 
 usage() {
@@ -273,6 +283,7 @@ show_menu() {
 🚪 4) Quit
 EOF
     sep
+    printf '\n'
 }
 
 interactive_menu() {
@@ -280,18 +291,17 @@ interactive_menu() {
     while true; do
         show_menu
         read -r -p "Choose [1-4]: " choice
+        choice="${choice%$'\r'}"   # strip CR from Windows-piped input
         case "$choice" in
             1) ASK_CONFIRM=1
                if select_profiles; then cmd_install; fi
-               ASK_CONFIRM=0
-               sep ;;
-            2) if select_profiles; then cmd_uninstall; fi
-               sep ;;
-            3) cmd_status
-               sep ;;
+               ASK_CONFIRM=0 ;;
+            2) if select_profiles; then cmd_uninstall; fi ;;
+            3) cmd_status;;
             4) return 0;;
             *) err "invalid choice: $choice";;
         esac
+        printf '\n'
     done
 }
 
@@ -308,13 +318,14 @@ select_profiles() {
         names+=("$name")
         log "  $n) $name"
     done < <(discover_profiles "$root")
-    [ "$n" -gt 0 ] || { err "no profiles found under $root"; sep; return 1; }
+    [ "$n" -gt 0 ] || { err "no profiles found under $root"; sep; printf '\n'; return 1; }
     ALL_PROFILES=0
     TARGET_PROFILES=()
     while true; do
-        read -r -p "Select profile numbers (comma-separated, 0 = all, Enter = cancel): " sel
-        [ -z "$sel" ] && { err "cancelled"; sep; return 1; }
-        if [ "$sel" = "0" ]; then ALL_PROFILES=1; sep; return 0; fi
+        read -r -p "Select profile numbers (comma-separated, Enter = all, 0 = cancel): " sel
+        sel="${sel%$'\r'}"   # strip CR from Windows-piped input
+        if [ -z "$sel" ]; then ALL_PROFILES=1; sep; printf '\n'; return 0; fi
+        if [ "$sel" = "0" ]; then err "cancelled"; sep; printf '\n'; return 1; fi
         local ok=1 nums
         IFS=, read -ra nums <<< "$sel"
         for num in "${nums[@]}"; do
@@ -329,18 +340,17 @@ select_profiles() {
                 TARGET_PROFILES+=("${names[$((num - 1))]}")
             done
             sep
+            printf '\n'
             return 0
         fi
-        err "invalid selection: $sel (use 1-$n, comma-separated; 0 = all)"
+        err "invalid selection: $sel (use 1-$n, comma-separated; Enter = all, 0 = cancel)"
     done
 }
 
 confirm_yn() {
     # $1 = prompt; returns 0 on y/Y, 1 otherwise
     local ans
-    sep
     read -r -p "$1 [y/N] " ans
-    sep
     [ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
@@ -372,7 +382,7 @@ plan_profile() {
     NEED_SKILL=0; NEED_PLUGIN=0; NEED_FORCE=0
     NEED_SKILL_UPDATE=0; NEED_PLUGIN_UPDATE=0
     if [ -z "$inst_skill" ]; then
-        NEED_SKILL=1; log "  [$prof] skill: not installed -> install"
+        NEED_SKILL=1
     elif [ "$FORCE" = 1 ] || ver_gt "$repo_skill" "$inst_skill"; then
         NEED_SKILL=1; NEED_SKILL_UPDATE=1; NEED_FORCE=1
         log "  [$prof] skill: $inst_skill -> $repo_skill (update)"
@@ -380,7 +390,7 @@ plan_profile() {
         log "  [$prof] skill: $inst_skill (up to date)"
     fi
     if [ -z "$inst_plugin" ]; then
-        NEED_PLUGIN=1; log "  [$prof] plugin: not installed -> install"
+        NEED_PLUGIN=1
     elif [ "$FORCE" = 1 ] || ver_gt "$repo_plugin" "$inst_plugin"; then
         NEED_PLUGIN=1; NEED_PLUGIN_UPDATE=1; NEED_FORCE=1
         log "  [$prof] plugin: $inst_plugin -> $repo_plugin (update)"
@@ -392,7 +402,7 @@ plan_profile() {
 cmd_install() {
     parse_install_flags "$@"
     preflight
-    require_hermes_cli
+    [ "$DRY_RUN" = 1 ] || require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
     local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
     logfile "install: repo=$url slug=$slug mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live)"
@@ -426,16 +436,13 @@ cmd_install() {
             fi
         fi
         local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
-        local step=0 total=2
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
-                step=$((step + 1))
-                log "  [${step}/${total}] 将安装 skill"
+                log "  [$p] skill will $([ "$NEED_SKILL_UPDATE" = 1 ] && echo update || echo install)"
                 logfile "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_PLUGIN" = 1 ]; then
-                step=$((step + 1))
-                log "  [${step}/${total}] 将安装 plugin"
+                log "  [$p] plugin will $([ "$NEED_PLUGIN_UPDATE" = 1 ] && echo update || echo install)"
                 logfile "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
@@ -446,12 +453,18 @@ cmd_install() {
         fi
         # real execution
         if [ "$NEED_SKILL" = 1 ]; then
-            step=$((step + 1))
-            progress_run "$step" "$total" "安装 skill" hermes $hargs skills install --yes "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
+            if [ "$NEED_SKILL_UPDATE" = 1 ]; then
+                progress_run "$p" skill updating updated "update failed" hermes $hargs skills install --yes "$slug/src/workspace-organization" --force || { err "skill update failed for $p"; fail_report; return 2; }
+            else
+                progress_run "$p" skill installing installed "install failed" hermes $hargs skills install --yes "$slug/src/workspace-organization" || { err "skill install failed for $p"; fail_report; return 2; }
+            fi
         fi
         if [ "$NEED_PLUGIN" = 1 ]; then
-            step=$((step + 1))
-            progress_run "$step" "$total" "安装 plugin" hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
+            if [ "$NEED_PLUGIN_UPDATE" = 1 ]; then
+                progress_run "$p" plugin updating updated "update failed" hermes $hargs plugins install "$url#src/workspace-guard" --enable --force || { err "plugin update failed for $p"; fail_report; return 2; }
+            else
+                progress_run "$p" plugin installing installed "install failed" hermes $hargs plugins install "$url#src/workspace-guard" --enable || { err "plugin install failed for $p"; fail_report; return 2; }
+            fi
         fi
         if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
             mkdir -p "$home/workspace-guard"
@@ -463,6 +476,7 @@ cmd_install() {
     log "Restart Hermes for changes to take effect."
     logfile "install finished (exit 0)"
     sep
+    printf '\n'
     return 0
 }
 parse_uninstall_flags() {
@@ -481,7 +495,7 @@ parse_uninstall_flags() {
 
 cmd_uninstall() {
     parse_uninstall_flags "$@"
-    require_hermes_cli
+    [ "$DRY_RUN" = 1 ] || require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
     local p home hargs
     logfile "uninstall: mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live) keep_config=$KEEP_CONFIG"
@@ -499,24 +513,21 @@ cmd_uninstall() {
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         hargs=""; [ "$p" != "default" ] && hargs="-p $p"
         logfile "== profile: $p home=$home"
-        local step=0 total=2
         if [ "$DRY_RUN" = 1 ]; then
             if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
-                step=$((step + 1))
-                log "  [${step}/${total}] 将卸载 skill"
+                log "  [$p] skill will uninstall"
                 logfile "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
             else
                 log "  [$p] skill not installed, skip"
             fi
             if [ -d "$home/plugins/workspace-guard" ]; then
-                step=$((step + 1))
-                log "  [${step}/${total}] 将卸载 plugin"
+                log "  [$p] plugin will uninstall"
                 logfile "  would run: hermes ${hargs:+$hargs }plugins remove workspace-guard"
             else
                 log "  [$p] plugin not installed, skip"
             fi
             if [ "$KEEP_CONFIG" = 1 ]; then
-                log "  保留配置 (--keep-config)"
+                log "  [$p] keep config (--keep-config)"
                 logfile "  keep config"
             else
                 logfile "  would delete config + memo under $home/workspace-guard/"
@@ -525,19 +536,17 @@ cmd_uninstall() {
         fi
         if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
             # warn and continue on failure: tolerate missing/removed skills
-            step=$((step + 1))
             # `hermes skills uninstall` has no --yes flag (skills_hub.py
             # hardcodes skip_confirm=False) and prompts "Confirm [y/N]"; feed
             # "y" via stdin so the progress step cannot hang on the prompt.
             # The uninstall intent was already confirmed by the menu/profile
             # selection or an explicit --all-profiles invocation.
-            progress_run "$step" "$total" "卸载 skill" sh -c "printf 'y\n' | hermes $hargs skills uninstall workspace-organization" || err "warning: skill uninstall failed for $p (continuing)"
+            progress_run "$p" skill uninstalling uninstalled "uninstall failed" sh -c "printf 'y\n' | hermes $hargs skills uninstall workspace-organization" || { err "warning: skill uninstall failed for $p (continuing)"; fail_report; }
         else
             log "  [$p] skill not installed, skip"
         fi
         if [ -d "$home/plugins/workspace-guard" ]; then
-            step=$((step + 1))
-            progress_run "$step" "$total" "卸载 plugin" hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; return 2; }
+            progress_run "$p" plugin uninstalling uninstalled "uninstall failed" hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; fail_report; return 2; }
         else
             log "  [$p] plugin not installed, skip"
         fi
@@ -549,6 +558,7 @@ cmd_uninstall() {
     done
     logfile "uninstall finished (exit 0)"
     sep
+    printf '\n'
     return 0
 }
 cmd_status() {
@@ -567,6 +577,7 @@ cmd_status() {
         log "  $p: skill $is | plugin $ip"
     done
     sep
+    printf '\n'
     return 0
 }
 
