@@ -249,3 +249,18 @@ class TestCli:
     def test_status_ok(self, tmp_path):
         r = run_install(tmp_path, "status")
         assert r.returncode == 0
+
+
+# ---------------------------------------------------------------- Profile discovery (SCR-015 Task 3)
+
+class TestProfiles:
+    def test_discovers_default_and_named(self, tmp_path):
+        root = tmp_path / "hh"
+        (root / "profiles" / "job-hunt").mkdir(parents=True)
+        (root / "profiles" / "learn").mkdir(parents=True)
+        r = run_install(root, "status")
+        assert r.returncode == 0
+        out = r.stdout
+        assert "default" in out
+        assert "job-hunt" in out
+        assert "learn" in out

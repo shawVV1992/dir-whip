@@ -41,11 +41,28 @@ hermes_root() {
 is_tty() { [ -t 0 ]; }
 
 # --- subcommands -----------------------------------------------------------
+discover_profiles() {
+    local root="$1" name
+    [ -d "$root" ] || return 0
+    printf 'default\n'
+    for dir in "$root"/profiles/*/; do
+        [ -d "$dir" ] || continue
+        name=$(basename "$dir")
+        case "$name" in
+            [a-z0-9]*[a-z0-9_-]*) printf '%s\n' "$name" ;;
+        esac
+    done
+}
+
 cmd_install() { err "not implemented yet"; return 2; }
 cmd_uninstall() { err "not implemented yet"; return 2; }
 cmd_status() {
     local root; root=$(hermes_root)
-    if [ -n "$root" ]; then log "HERMES root: $root"; fi
+    local p
+    log "HERMES root: $root"
+    for p in $(discover_profiles "$root"); do
+        log "  profile: $p"
+    done
     return 0
 }
 
