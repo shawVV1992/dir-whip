@@ -245,8 +245,12 @@ cmd_uninstall() {
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         hargs=""; [ "$p" != "default" ] && hargs="-p $p"
         if [ "$DRY_RUN" = 1 ]; then
-            [ -d "$home/skills" ] && log "  would run: hermes $hargs skills uninstall workspace-organization" || log "  [$p] skill not installed, skip"
-            [ -d "$home/plugins/workspace-guard" ] && log "  would run: hermes $hargs plugins remove workspace-guard" || log "  [$p] plugin not installed, skip"
+            if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
+                log "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
+            else
+                log "  [$p] skill not installed, skip"
+            fi
+            [ -d "$home/plugins/workspace-guard" ] && log "  would run: hermes ${hargs:+$hargs }plugins remove workspace-guard" || log "  [$p] plugin not installed, skip"
             if [ "$KEEP_CONFIG" = 1 ]; then
                 log "  keep config (--keep-config)"
             else
@@ -255,8 +259,9 @@ cmd_uninstall() {
             fi
             continue
         fi
-        if [ -d "$home/skills" ]; then
-            hermes $hargs skills uninstall workspace-organization || { err "skill uninstall failed for $p"; return 2; }
+        if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
+            # warn and continue on failure: tolerate missing/removed skills
+            hermes $hargs skills uninstall workspace-organization || err "warning: skill uninstall failed for $p (continuing)"
         else
             log "  [$p] skill not installed, skip"
         fi

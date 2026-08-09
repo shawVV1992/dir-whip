@@ -362,11 +362,25 @@ class TestInstallPlan:
 class TestUninstallPlan:
     def test_dry_run_uninstall_prints_commands(self, tmp_path):
         hh = tmp_path / "hh"
-        (hh / "skills").mkdir(parents=True)
+        skill = hh / "skills" / "workspace-organization" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("---\n", encoding="utf-8")
         (hh / "plugins" / "workspace-guard").mkdir(parents=True)
         r = run_install(hh, "uninstall", "--dry-run", "--all-profiles")
         assert r.returncode == 0
         assert "skills uninstall" in r.stdout
+        assert "plugins remove" in r.stdout
+
+    def test_dry_run_skips_missing_skill_despite_skills_dir(self, tmp_path):
+        # I-1 ruling A: a skills/ dir without the workspace-organization skill
+        # is treated as not installed (find-level detection, not dir-level).
+        hh = tmp_path / "hh"
+        (hh / "skills").mkdir(parents=True)
+        (hh / "plugins" / "workspace-guard").mkdir(parents=True)
+        r = run_install(hh, "uninstall", "--dry-run", "--all-profiles")
+        assert r.returncode == 0
+        assert "skill not installed, skip" in r.stdout
+        assert "skills uninstall" not in r.stdout
         assert "plugins remove" in r.stdout
 
     def test_uninstall_removes_config_by_default(self, tmp_path):
