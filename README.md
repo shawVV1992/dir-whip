@@ -46,14 +46,17 @@ bash install.sh uninstall --all-profiles        # uninstall + delete config
 bash install.sh uninstall --profile learn --keep-config
 ```
 
-**Windows note**: PowerShell/CMD's `bash` is the WSL launcher and cannot see
-Windows paths. Run with Git Bash instead:
+**Environment detection**: the script auto-detects where Hermes lives and
+installs there:
 
-```bash
-& "C:\Program Files\Git\bin\bash.exe" install.sh status
-```
-
-or open a Git Bash terminal and run `./install.sh` directly.
+- **Git Bash** (or any POSIX shell): installs into the Windows Hermes
+  (`%LOCALAPPDATA%\hermes`).
+- **PowerShell/CMD** `bash install.sh`: `bash` is the WSL launcher there. If
+  WSL has its own Hermes (`~/.hermes` + `hermes` on PATH) it installs into WSL;
+  otherwise the script re-executes itself under Git Bash and installs into the
+  Windows Hermes automatically.
+- **WSL**: if WSL has Hermes, it installs into the WSL Hermes and never falls
+  back to the Windows one; otherwise it re-launches under Git Bash.
 
 Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).

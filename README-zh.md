@@ -44,13 +44,11 @@ bash install.sh uninstall --all-profiles        # 卸载并删除配置
 bash install.sh uninstall --profile learn --keep-config
 ```
 
-**Windows 注意**：PowerShell/CMD 的 `bash` 是 WSL 启动器，无法访问 Windows 路径。请改用 Git Bash 运行：
+**环境自动检测**：脚本自动检测 Hermes 所在环境并安装到对应位置：
 
-```bash
-& "C:\Program Files\Git\bin\bash.exe" install.sh status
-```
-
-或打开 Git Bash 终端直接运行 `./install.sh`。
+- **Git Bash**（或任意 POSIX shell）：安装到 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`）。
+- **PowerShell/CMD** 敲 `bash install.sh`：此处的 `bash` 是 WSL 启动器。若 WSL 内自有 Hermes（`~/.hermes` 且 PATH 中有 `hermes`），则安装到 WSL；否则脚本自动以 Git Bash 重新执行，安装到 Windows 侧 Hermes。
+- **WSL**：若 WSL 内自有 Hermes，安装到 WSL 侧（不再回退检测 Windows）；否则自动以 Git Bash 重新执行。
 
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
