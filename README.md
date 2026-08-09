@@ -46,6 +46,15 @@ bash install.sh uninstall --all-profiles        # uninstall + delete config
 bash install.sh uninstall --profile learn --keep-config
 ```
 
+**Windows note**: PowerShell/CMD's `bash` is the WSL launcher and cannot see
+Windows paths. Run with Git Bash instead:
+
+```bash
+& "C:\Program Files\Git\bin\bash.exe" install.sh status
+```
+
+or open a Git Bash terminal and run `./install.sh` directly.
+
 Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).
 Run `bash install.sh --help` for all flags.

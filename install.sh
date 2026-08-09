@@ -39,6 +39,22 @@ hermes_root() {
 
 is_tty() { [ -t 0 ]; }
 
+detect_wsl() {
+    [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+    uname -r 2>/dev/null | grep -qi microsoft && return 0
+    return 1
+}
+
+# Every subcommand needs a real HERMES root; fail loudly instead of silently
+# looping over zero discovered profiles (which used to print a fake "Restart"
+# success line).
+require_hermes_root() {
+    local root; root=$(hermes_root)
+    [ -d "$root" ] || die "HERMES root not found: $root
+(on Windows run with Git Bash: & 'C:\Program Files\Git\bin\bash.exe' install.sh)"
+    printf '%s' "$root"
+}
+
 # --- install/uninstall flag state -------------------------------------------
 REPO_URL=""
 DRY_RUN=0
@@ -208,9 +224,8 @@ plan_profile() {
 cmd_install() {
     parse_install_flags "$@"
     preflight
-    local root; root=$(hermes_root)
+    local root; root=$(require_hermes_root) || return 1
     local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
-    local slug; slug=$(repo_slug "$url")
     log "repo URL: $url"
     local p home
     for p in $(discover_profiles "$root"); do
@@ -272,7 +287,7 @@ parse_uninstall_flags() {
 
 cmd_uninstall() {
     parse_uninstall_flags "$@"
-    local root; root=$(hermes_root)
+    local root; root=$(require_hermes_root) || return 1
     local p home hargs
     for p in $(discover_profiles "$root"); do
         if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
@@ -320,7 +335,7 @@ cmd_uninstall() {
     return 0
 }
 cmd_status() {
-    local root; root=$(hermes_root)
+    local root; root=$(require_hermes_root) || return 1
     local repo_skill repo_plugin
     repo_skill=$(read_repo_version workspace-organization SKILL.md)
     repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
@@ -338,6 +353,11 @@ cmd_status() {
 
 main() {
     [ $# -eq 1 ] && [ "$1" = "--help" ] && { usage; return 0; }
+    if detect_wsl; then
+        die "detected WSL bash; on Windows run with Git Bash:
+  & 'C:\Program Files\Git\bin\bash.exe' install.sh
+  (or open a Git Bash terminal and run: ./install.sh)"
+    fi
     local sub="${1:-}"
     if [ "$sub" = "--selftest" ]; then
         if ver_gt 1.10.0 1.9.0 && ! ver_gt 1.0.0 1.0.0 && ! ver_gt 0.9.0 1.0.0; then

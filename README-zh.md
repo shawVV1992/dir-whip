@@ -44,6 +44,14 @@ bash install.sh uninstall --all-profiles        # 卸载并删除配置
 bash install.sh uninstall --profile learn --keep-config
 ```
 
+**Windows 注意**：PowerShell/CMD 的 `bash` 是 WSL 启动器，无法访问 Windows 路径。请改用 Git Bash 运行：
+
+```bash
+& "C:\Program Files\Git\bin\bash.exe" install.sh status
+```
+
+或打开 Git Bash 终端直接运行 `./install.sh`。
+
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
 ### 快捷命令与工具
