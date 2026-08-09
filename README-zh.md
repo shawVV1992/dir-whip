@@ -1,4 +1,4 @@
-# workspace-guard
+﻿# workspace-guard
 
 本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
 
@@ -33,18 +33,18 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 ### 安装脚本
 
-`tools/install/install.sh` 将原生命令封装为单一按档案（per-profile）、幂等的流程（技能与插件始终一起安装）：
+`install.sh` 将原生命令封装为单一按档案（per-profile）、幂等的流程（技能与插件始终一起安装）：
 
 ```bash
-bash tools/install/install.sh status          # 各档案已装版本
-bash tools/install/install.sh install --all-profiles          # 一次性安装/更新全部档案
-bash tools/install/install.sh install --profile default       # 单个档案
-bash tools/install/install.sh install --dry-run               # 只显示计划，不做任何更改
-bash tools/install/install.sh uninstall --all-profiles        # 卸载并删除配置
-bash tools/install/install.sh uninstall --profile learn --keep-config
+bash install.sh status          # 各档案已装版本
+bash install.sh install --all-profiles          # 一次性安装/更新全部档案
+bash install.sh install --profile default       # 单个档案
+bash install.sh install --dry-run               # 只显示计划，不做任何更改
+bash install.sh uninstall --all-profiles        # 卸载并删除配置
+bash install.sh uninstall --profile learn --keep-config
 ```
 
-不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash tools/install/install.sh --help`。
+不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
 ### 快捷命令与工具
 

@@ -4,7 +4,7 @@
 set -u
 
 DEFAULT_REPO_URL="https://github.com/shawVV1992/workspace-guard"
-SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root (src/ lives there)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # repo root (src/ lives there; script lives at the root)
 
 # --- helpers ---------------------------------------------------------------
 log()  { printf '%s\n' "$*"; }

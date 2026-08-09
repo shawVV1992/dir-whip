@@ -1,4 +1,4 @@
-# workspace-guard
+﻿# workspace-guard
 
 workspace-guard enforces file discipline for Hermes agent workspaces. Hermes agents do not reliably follow file placement rules: deliverables scatter across the workspace root, outputs from specific conversations become unfindable, and intermediate files accumulate without a home. workspace-guard fixes this with two complementary layers - a skill that teaches agents the rules, and a plugin that blocks violations before they happen.
 
@@ -34,21 +34,21 @@ The guard becomes active after the next Hermes restart.
 
 ### Install script
 
-`tools/install/install.sh` wraps the native commands in a single per-profile,
+`install.sh` wraps the native commands in a single per-profile,
 idempotent flow (always installs skill + plugin together):
 
 ```bash
-bash tools/install/install.sh status          # per-profile installed versions
-bash tools/install/install.sh install --all-profiles          # one-shot install/update
-bash tools/install/install.sh install --profile default       # one profile
-bash tools/install/install.sh install --dry-run               # show the plan, change nothing
-bash tools/install/install.sh uninstall --all-profiles        # uninstall + delete config
-bash tools/install/install.sh uninstall --profile learn --keep-config
+bash install.sh status          # per-profile installed versions
+bash install.sh install --all-profiles          # one-shot install/update
+bash install.sh install --profile default       # one profile
+bash install.sh install --dry-run               # show the plan, change nothing
+bash install.sh uninstall --all-profiles        # uninstall + delete config
+bash install.sh uninstall --profile learn --keep-config
 ```
 
 Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).
-Run `bash tools/install/install.sh --help` for all flags.
+Run `bash install.sh --help` for all flags.
 
 ### Quick commands and tools
 
