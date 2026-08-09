@@ -526,7 +526,12 @@ cmd_uninstall() {
         if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
             # warn and continue on failure: tolerate missing/removed skills
             step=$((step + 1))
-            progress_run "$step" "$total" "卸载 skill" hermes $hargs skills uninstall workspace-organization || err "warning: skill uninstall failed for $p (continuing)"
+            # `hermes skills uninstall` has no --yes flag (skills_hub.py
+            # hardcodes skip_confirm=False) and prompts "Confirm [y/N]"; feed
+            # "y" via stdin so the progress step cannot hang on the prompt.
+            # The uninstall intent was already confirmed by the menu/profile
+            # selection or an explicit --all-profiles invocation.
+            progress_run "$step" "$total" "卸载 skill" sh -c "printf 'y\n' | hermes $hargs skills uninstall workspace-organization" || err "warning: skill uninstall failed for $p (continuing)"
         else
             log "  [$p] skill not installed, skip"
         fi
