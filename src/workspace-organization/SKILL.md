@@ -1,5 +1,6 @@
 ---
 name: workspace-organization
+version: 1.0.0
 description: 'Use when creating, saving, writing, moving, or deleting files, organizing deliverables, designing workspace layout, or auditing workspace compliance. Enforces session directory discipline and two-step confirmation for destructive operations.'
 category: productivity
 tags: [hermes, workspace, profiles, directory-structure, file-organization, session-directory]

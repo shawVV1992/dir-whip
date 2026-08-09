@@ -207,3 +207,10 @@ class TestRegression:
             if "agents" in p.read_text(encoding="utf-8", errors="replace").lower():
                 hits.append(str(p))
         assert not hits, f"rules-file literal found in skill package: {hits}"
+
+    def test_skill_frontmatter_has_version(self):
+        # SCR-015 Task 1: SKILL.md frontmatter must carry a version field
+        # (read by install.sh version comparison; Task 5).
+        skill_md = Path(__file__).parent.parent / "src" / "workspace-organization" / "SKILL.md"
+        frontmatter = skill_md.read_text(encoding="utf-8").split("---", 2)[1]
+        assert "version: 1.0.0" in frontmatter
