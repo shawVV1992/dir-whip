@@ -32,25 +32,23 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 The guard becomes active after the next Hermes restart.
 
-### One-click install (optional)
+### Install script
 
-`tools/install/install.py` wraps the native commands in a single idempotent
-flow:
+`tools/install/install.sh` wraps the native commands in a single per-profile,
+idempotent flow (always installs skill + plugin together):
 
 ```bash
-python tools/install/install.py --dry-run [--url <repo-url>] [--hermes-home <dir>]
-python tools/install/install.py --apply   [--url <repo-url>] [--hermes-home <dir>]
+bash tools/install/install.sh status          # per-profile installed versions
+bash tools/install/install.sh install --all-profiles          # one-shot install/update
+bash tools/install/install.sh install --profile default       # one profile, interactive confirm
+bash tools/install/install.sh install --dry-run               # show the plan, change nothing
+bash tools/install/install.sh uninstall --all-profiles        # uninstall + delete config
+bash tools/install/install.sh uninstall --profile learn --keep-config
 ```
 
-`--dry-run` prints the full plan (paths + commands) without changing anything;
-`--apply` executes it: plugin install (`--enable`, with `--force` appended only
-when the installed plugin version differs), skill install, and writing the
-runtime config to `HERMES_HOME/workspace-guard/guard-config.yaml` (including
-`allowed_root_files` and `terminal_guard`). An existing plugin-dir config copy
-is migrated FIRST (copy + remove) so a forced reinstall can never wipe user
-config; a fresh default config is written only when no prior config exists.
-Memo readiness is the plugin's job (full sync on first load after restart),
-not install.py's.
+Run with no arguments for the interactive menu. Update = full overwrite
+(`--force` reinstall + config template + memo rebuild on next restart).
+Run `bash tools/install/install.sh --help` for all flags.
 
 ### Quick commands and tools
 

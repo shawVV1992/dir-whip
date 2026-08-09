@@ -31,16 +31,20 @@ hermes plugins install <repo-url>#src/workspace-guard --enable
 
 重启 Hermes 后守卫即开始生效。
 
-### 一键安装（可选）
+### 安装脚本
 
-`tools/install/install.py` 将原生命令封装为单一幂等流程：
+`tools/install/install.sh` 将原生命令封装为单一按档案（per-profile）、幂等的流程（技能与插件始终一起安装）：
 
 ```bash
-python tools/install/install.py --dry-run [--url <repo-url>] [--hermes-home <dir>]
-python tools/install/install.py --apply   [--url <repo-url>] [--hermes-home <dir>]
+bash tools/install/install.sh status          # 各档案已装版本
+bash tools/install/install.sh install --all-profiles          # 一次性安装/更新全部档案
+bash tools/install/install.sh install --profile default       # 单个档案
+bash tools/install/install.sh install --dry-run               # 只显示计划，不做任何更改
+bash tools/install/install.sh uninstall --all-profiles        # 卸载并删除配置
+bash tools/install/install.sh uninstall --profile learn --keep-config
 ```
 
-`--dry-run` 打印完整计划（路径 + 命令）而不做任何更改；`--apply` 执行计划：安装插件（`--enable`，仅当已装插件版本不同时才追加 `--force`）、安装技能，并把运行时配置写入 `HERMES_HOME/workspace-guard/guard-config.yaml`（含 `allowed_root_files` 与 `terminal_guard`）。已存在的插件目录配置副本会先被迁移（复制 + 移除），因此强制重装永远不可能抹掉用户配置；仅当不存在任何旧配置时才写入全新默认配置。备忘录就绪由插件负责（重启后首次加载时全量同步），不是 install.py 的职责。
+不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash tools/install/install.sh --help`。
 
 ### 快捷命令与工具
 
