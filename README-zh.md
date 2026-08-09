@@ -52,6 +52,8 @@ bash install.sh uninstall --profile learn --keep-config
 
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
+终端仅显示简化状态行（`[1/2] 安装 skill 完成`）；完整命令输出（hermes 拉取/扫描/元数据）与配置细节写入 `<HERMES_HOME>/workspace-guard/install.log`（可用 `--log <path>` 覆盖）。
+
 ### 快捷命令与工具
 
 插件安装后，会话内可用以下命令：

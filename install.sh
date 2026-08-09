@@ -12,6 +12,70 @@ err()  { printf '%s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 sep()  { printf '%s\n' '----------------------------------------'; }
 
+# --- logging ---------------------------------------------------------------
+LOG_FILE=""
+
+# Resolve the log file path: <HERMES_HOME>/workspace-guard/install.log
+# (--log <path> overrides). The workspace-guard dir is created if needed.
+resolve_log_file() {
+    if [ -n "$LOG_FILE" ]; then
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        return 0
+    fi
+    local root; root=$(hermes_root)
+    LOG_FILE="$root/workspace-guard/install.log"
+    mkdir -p "$root/workspace-guard" 2>/dev/null || true
+}
+
+# Timestamped append to the log file (never to the terminal).
+logfile() {
+    [ -n "$LOG_FILE" ] || resolve_log_file
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+    printf '[%s] %s\n' "$ts" "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# Run a hermes command with full output captured to the log. Terminal shows a
+# step-level progress line with a spinner (TTY) or a plain status line
+# (non-TTY). Command stderr is never shown unless it fails.
+#   $1 = step index, $2 = total steps, $3 = label
+#   remaining args = the command to run
+progress_run() {
+    local i="$1" total="$2" label="$3"; shift 3
+    logfile "== [${i}/${total}] ${label}: $*"
+    if [ -t 1 ]; then
+        local spin=('|' '/' '-' '\') s=0 pid rc
+        printf '\r  [%d/%d] %s ...' "$i" "$total" "$label"
+        "$@" >> "$LOG_FILE" 2>&1 &
+        pid=$!
+        while kill -0 "$pid" 2>/dev/null; do
+            printf '\r  [%d/%d] %s %s' "$i" "$total" "$label" "${spin[$((s % 4))]}"
+            s=$((s + 1))
+            sleep 0.1
+        done
+        wait "$pid"; rc=$?
+        if [ "$rc" -eq 0 ]; then
+            printf '\r  [%d/%d] %s 完成\n' "$i" "$total" "$label"
+        else
+            printf '\r  [%d/%d] %s 失败 (rc=%d)\n' "$i" "$total" "$label" "$rc"
+            tail -n 3 "$LOG_FILE" >&2
+        fi
+        logfile "== [${i}/${total}] ${label} exit=$rc"
+        return "$rc"
+    fi
+    # Non-TTY: plain status line, output only to the log
+    log "  [${i}/${total}] ${label} ..."
+    if "$@" >> "$LOG_FILE" 2>&1; then
+        log "  [${i}/${total}] ${label} 完成"
+        return 0
+    else
+        local rc=$?
+        log "  [${i}/${total}] ${label} 失败 (rc=$rc)"
+        tail -n 3 "$LOG_FILE" >&2
+        return "$rc"
+    fi
+}
+
 usage() {
     cat <<'EOF'
 workspace-guard installer
@@ -23,10 +87,12 @@ Usage:
       --dry-run                  show actions only
       --repo <url>               override repository URL
       --force                    reinstall even when versions match
+      --log <path>               log file (default: <HERMES_HOME>/workspace-guard/install.log)
   install.sh uninstall           uninstall skill+plugin
       --all-profiles             all profiles
       --profile <name>           target profile (repeatable)
       --keep-config              preserve guard-config.yaml + memo
+      --log <path>               log file (default: <HERMES_HOME>/workspace-guard/install.log)
   install.sh status              per-profile installed versions
 EOF
 }
@@ -102,6 +168,7 @@ parse_install_flags() {
             --dry-run) DRY_RUN=1 ;;
             --repo) [ $# -ge 2 ] || die "--repo needs a value"; REPO_URL="$2"; shift ;;
             --force) FORCE=1 ;;
+            --log) [ $# -ge 2 ] || die "--log needs a value"; LOG_FILE="$2"; shift ;;
             *) die "unknown install flag: $1" ;;
         esac
         shift
@@ -328,7 +395,7 @@ cmd_install() {
     require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
     local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
-    log "repo URL: $url"
+    logfile "install: repo=$url slug=$slug mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live)"
     local p home
     sep
     for p in $(discover_profiles "$root"); do
@@ -344,6 +411,7 @@ cmd_install() {
         fi
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         [ -d "$home" ] || { err "  [$p] profile home missing: $home"; continue; }
+        logfile "== profile: $p home=$home"
         plan_profile "$p" "$home"
         # Interactive confirmation: ask before overwriting an outdated install.
         # Fresh installs and --all-profiles one-shot runs do not ask.
@@ -358,33 +426,42 @@ cmd_install() {
             fi
         fi
         local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        local step=0 total=2
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
-                log "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                step=$((step + 1))
+                log "  [${step}/${total}] 将安装 skill"
+                logfile "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_PLUGIN" = 1 ]; then
-                log "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                step=$((step + 1))
+                log "  [${step}/${total}] 将安装 plugin"
+                logfile "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
-                log "  would copy: src/workspace-guard/guard-config.yaml -> $home/workspace-guard/guard-config.yaml"
-                log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+                logfile "  would copy guard-config template to $home/workspace-guard/"
+                logfile "  would delete memo: $home/workspace-guard/profile-workspaces.json"
             fi
             continue
         fi
         # real execution
         if [ "$NEED_SKILL" = 1 ]; then
-            hermes $hargs skills install --yes "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
+            step=$((step + 1))
+            progress_run "$step" "$total" "安装 skill" hermes $hargs skills install --yes "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
         fi
         if [ "$NEED_PLUGIN" = 1 ]; then
-            hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
+            step=$((step + 1))
+            progress_run "$step" "$total" "安装 plugin" hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
         fi
         if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
             mkdir -p "$home/workspace-guard"
             cp "$SCRIPT_DIR/src/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
             rm -f "$home/workspace-guard/profile-workspaces.json"
+            logfile "  config template copied; memo deleted for $p"
         fi
     done
     log "Restart Hermes for changes to take effect."
+    logfile "install finished (exit 0)"
     sep
     return 0
 }
@@ -395,6 +472,7 @@ parse_uninstall_flags() {
             --profile) [ $# -ge 2 ] || die "--profile needs a value"; TARGET_PROFILES+=("$2"); shift ;;
             --keep-config) KEEP_CONFIG=1 ;;
             --dry-run) DRY_RUN=1 ;;
+            --log) [ $# -ge 2 ] || die "--log needs a value"; LOG_FILE="$2"; shift ;;
             *) die "unknown uninstall flag: $1" ;;
         esac
         shift
@@ -406,6 +484,7 @@ cmd_uninstall() {
     require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
     local p home hargs
+    logfile "uninstall: mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live) keep_config=$KEEP_CONFIG"
     sep
     for p in $(discover_profiles "$root"); do
         if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
@@ -419,37 +498,51 @@ cmd_uninstall() {
         fi
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        logfile "== profile: $p home=$home"
+        local step=0 total=2
         if [ "$DRY_RUN" = 1 ]; then
             if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
-                log "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
+                step=$((step + 1))
+                log "  [${step}/${total}] 将卸载 skill"
+                logfile "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
             else
                 log "  [$p] skill not installed, skip"
             fi
-            [ -d "$home/plugins/workspace-guard" ] && log "  would run: hermes ${hargs:+$hargs }plugins remove workspace-guard" || log "  [$p] plugin not installed, skip"
-            if [ "$KEEP_CONFIG" = 1 ]; then
-                log "  keep config (--keep-config)"
+            if [ -d "$home/plugins/workspace-guard" ]; then
+                step=$((step + 1))
+                log "  [${step}/${total}] 将卸载 plugin"
+                logfile "  would run: hermes ${hargs:+$hargs }plugins remove workspace-guard"
             else
-                log "  would delete guard-config.yaml: $home/workspace-guard/guard-config.yaml"
-                log "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+                log "  [$p] plugin not installed, skip"
+            fi
+            if [ "$KEEP_CONFIG" = 1 ]; then
+                log "  保留配置 (--keep-config)"
+                logfile "  keep config"
+            else
+                logfile "  would delete config + memo under $home/workspace-guard/"
             fi
             continue
         fi
         if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
             # warn and continue on failure: tolerate missing/removed skills
-            hermes $hargs skills uninstall workspace-organization || err "warning: skill uninstall failed for $p (continuing)"
+            step=$((step + 1))
+            progress_run "$step" "$total" "卸载 skill" hermes $hargs skills uninstall workspace-organization || err "warning: skill uninstall failed for $p (continuing)"
         else
             log "  [$p] skill not installed, skip"
         fi
         if [ -d "$home/plugins/workspace-guard" ]; then
-            hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; return 2; }
+            step=$((step + 1))
+            progress_run "$step" "$total" "卸载 plugin" hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; return 2; }
         else
             log "  [$p] plugin not installed, skip"
         fi
         if [ "$KEEP_CONFIG" != 1 ] && [ -d "$home/workspace-guard" ]; then
             rm -f "$home/workspace-guard/guard-config.yaml" "$home/workspace-guard/profile-workspaces.json"
             rmdir "$home/workspace-guard" 2>/dev/null || true
+            logfile "  config + memo deleted for $p"
         fi
     done
+    logfile "uninstall finished (exit 0)"
     sep
     return 0
 }

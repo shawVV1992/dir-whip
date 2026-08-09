@@ -62,6 +62,11 @@ Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).
 Run `bash install.sh --help` for all flags.
 
+The terminal shows only simplified status lines (`[1/2] 安装 skill 完成`);
+full command output (hermes fetch/scan/metadata) and configuration details are
+written to `<HERMES_HOME>/workspace-guard/install.log` (override with
+`--log <path>`).
+
 ### Quick commands and tools
 
 Once the plugin is installed, these in-session commands are available:
