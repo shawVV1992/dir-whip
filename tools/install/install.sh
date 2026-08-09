@@ -4,8 +4,6 @@
 set -u
 
 DEFAULT_REPO_URL="https://github.com/shawVV1992/workspace-guard"
-SKILL_NAME="workspace-organization"
-PLUGIN_NAME="workspace-guard"
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root (src/ lives there)
 
 # --- helpers ---------------------------------------------------------------

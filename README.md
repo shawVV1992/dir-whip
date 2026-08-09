@@ -40,7 +40,7 @@ idempotent flow (always installs skill + plugin together):
 ```bash
 bash tools/install/install.sh status          # per-profile installed versions
 bash tools/install/install.sh install --all-profiles          # one-shot install/update
-bash tools/install/install.sh install --profile default       # one profile, interactive confirm
+bash tools/install/install.sh install --profile default       # one profile
 bash tools/install/install.sh install --dry-run               # show the plan, change nothing
 bash tools/install/install.sh uninstall --all-profiles        # uninstall + delete config
 bash tools/install/install.sh uninstall --profile learn --keep-config
