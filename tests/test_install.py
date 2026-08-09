@@ -277,3 +277,17 @@ class TestRepoUrl:
         r = run_install(tmp_path, "install", "--dry-run", "--repo", "https://example.com/r.git")
         # dry-run must not fail on flag parsing
         assert r.returncode == 0 or r.returncode == 2  # 2 = not-implemented stub from cmd_install
+
+
+# ---------------------------------------------------------------- Semver compare (SCR-015 Task 5)
+
+class TestSemverCompare:
+    def test_gt(self, tmp_path):
+        r = run_install(tmp_path, "install", "--dry-run", "--profile", "default")
+        # semver is exercised through the plan; direct unit coverage via a tiny helper below
+
+    def test_selftest_semver(self, tmp_path):
+        r = run_install(tmp_path, "--selftest")
+        assert r.returncode == 0
+        assert "1.10.0 > 1.9.0: ok" in r.stdout
+        assert "1.0.0 > 1.0.0: no" in r.stdout

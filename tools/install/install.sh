@@ -6,7 +6,7 @@ set -u
 DEFAULT_REPO_URL="https://github.com/shawVV1992/workspace-guard"
 SKILL_NAME="workspace-organization"
 PLUGIN_NAME="workspace-guard"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root (src/ lives there)
 
 # --- helpers ---------------------------------------------------------------
 log()  { printf '%s\n' "$*"; }
@@ -81,6 +81,47 @@ preflight() {
     return 0
 }
 
+# --- version helpers --------------------------------------------------------
+read_repo_version() {
+    # $1 = src subdir (workspace-organization|workspace-guard), $2 = file (SKILL.md|plugin.yaml)
+    local src_dir="$SCRIPT_DIR/src/$1/$2" v
+    [ -f "$src_dir" ] || return 1
+    v=$(grep -m1 -E '^version:' "$src_dir" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+    printf '%s' "$v"
+}
+
+read_installed_version() {
+    # $1 = profile home, $2 = skill|plugin
+    local home="$1" kind="$2" f v=""
+    if [ "$kind" = "skill" ]; then
+        f=$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)
+        [ -n "$f" ] && v=$(grep -m1 -E '^version:' "$f" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+    else
+        f="$home/plugins/workspace-guard/plugin.yaml"
+        [ -f "$f" ] && v=$(grep -m1 -E '^version:' "$f" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+    fi
+    printf '%s' "$v"
+}
+
+ver_gt() {
+    # $1 > $2 semver numeric per segment; returns 0 true
+    local a="$1" b="$2" ia ib
+    IFS=. read -ra ia <<< "$a"
+    IFS=. read -ra ib <<< "$b"
+    local i n m max
+    n=${#ia[@]}; m=${#ib[@]}
+    max=$(( n > m ? n : m ))
+    for (( i=0; i<max; i++ )); do
+        local x=0 y=0
+        [ $i -lt $n ] && x=${ia[$i]}
+        [ $i -lt $m ] && y=${ib[$i]}
+        x=$((10#$x + 0)); y=$((10#$y + 0))
+        if [ $x -gt $y ]; then return 0; fi
+        if [ $x -lt $y ]; then return 1; fi
+    done
+    return 1
+}
+
 # --- subcommands -----------------------------------------------------------
 discover_profiles() {
     local root="$1" name
@@ -110,6 +151,14 @@ cmd_status() {
 main() {
     [ $# -eq 1 ] && [ "$1" = "--help" ] && { usage; return 0; }
     local sub="${1:-}"
+    if [ "$sub" = "--selftest" ]; then
+        if ver_gt 1.10.0 1.9.0 && ! ver_gt 1.0.0 1.0.0 && ! ver_gt 0.9.0 1.0.0; then
+            echo "1.10.0 > 1.9.0: ok"
+            echo "1.0.0 > 1.0.0: no"
+            return 0
+        fi
+        die "semver comparison broken"
+    fi
     if [ -z "$sub" ]; then
         if ! is_tty; then
             die "no TTY and no --profile/--all-profiles; refusing to enter the menu"
