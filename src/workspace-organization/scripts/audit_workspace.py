@@ -4,8 +4,13 @@
 Scans a workspace root against 6 compliance checks and reports violations.
 READ-ONLY: never creates, moves, deletes or modifies any file or directory.
 
+Workspace validation (SCR-011): the target must be a registered profile
+workspace in the profile workspace memo; when the memo is unavailable and
+no plugin is present, standalone mode trusts the provided --workspace
+(with a stderr warning). A missing directory is a parameter error.
+
 Checks:
-  1. Root level may only contain AGENTS.md as a file.
+  1. Root level may only contain files on the workspace-guard allowed_root_files whitelist.
   2. No Outputs/ directory directly at workspace root.
   3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName])
      or the whitelisted .hermes/ directory.
@@ -33,7 +38,14 @@ import os
 import re
 import sys
 
-ALLOWED_ROOT_FILES = ("AGENTS.md",)
+try:
+    import workspace_resolver
+except ImportError:
+    # Dual import mode (mirrors the plugin guard): when run from outside the
+    # scripts directory, make the shared module importable from this dir.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import workspace_resolver
+
 WHITELISTED_ROOT_DIRS = (".hermes",)
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 OUTPUTS_DIR = "Outputs"
@@ -63,14 +75,14 @@ def is_session_name(name):
     return True
 
 
-def check_root_files(root, violations):
+def check_root_files(root, allowed, violations):
     for entry in os.scandir(root):
-        if entry.is_file() and entry.name not in ALLOWED_ROOT_FILES:
+        if entry.is_file() and entry.name not in allowed:
             violations.append({
                 "check": 1,
                 "name": "Root-level files",
                 "path": to_fwd(entry.path),
-                "suggestion": "Only AGENTS.md is allowed at the workspace root; move other files into a session dir.",
+                "suggestion": "Only files listed in the workspace-guard allowed_root_files whitelist are allowed at the workspace root; move other files into a session dir.",
             })
 
 
@@ -139,8 +151,9 @@ def check_session_scripts(session, violations):
 
 def audit(root):
     """Run all checks; return a list of violation dicts."""
+    allowed = workspace_resolver.allowed_root_files()
     violations = []
-    check_root_files(root, violations)
+    check_root_files(root, allowed, violations)
     check_root_outputs(root, violations)
     check_root_session_format(root, violations)
 
@@ -170,15 +183,6 @@ def print_json(violations):
     sys.stdout.write(json.dumps(violations) + "\n")
 
 
-def validate_working_directory(path):
-    """Check that path is a valid Default Working Directory."""
-    if not os.path.isdir(path):
-        return False, "directory does not exist"
-    if not os.path.isfile(os.path.join(path, "AGENTS.md")):
-        return False, "not a valid Default Working Directory (missing AGENTS.md)"
-    return True, None
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Audit a workspace root against structural compliance checks (read-only)."
@@ -194,6 +198,7 @@ def main(argv=None):
         default=None,
         help="Default Working Directory to audit (default: current working directory).",
     )
+    workspace_resolver.add_profile_arg(parser)
     parser.add_argument(
         "--json",
         action="store_true",
@@ -215,7 +220,7 @@ def main(argv=None):
         sys.stderr.write("error: target directory does not exist: %s\n" % to_fwd(root))
         return 2
 
-    valid, msg = validate_working_directory(root)
+    valid, msg = workspace_resolver.validate_workspace(root, profile=args.profile)
     if not valid:
         sys.stderr.write("error: %s\n" % msg)
         return 2

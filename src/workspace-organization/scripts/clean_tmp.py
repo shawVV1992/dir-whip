@@ -11,6 +11,11 @@ actually removed. Deletion is limited to the contents of .tmp/ directories;
 the .tmp/ directory itself, session Outputs/ directories, other session
 content and workspace root files are never touched.
 
+Workspace validation (SCR-011): the target must be a registered profile
+workspace in the profile workspace memo; when the memo is unavailable and
+no plugin is present, standalone mode trusts the provided --workspace
+(with a stderr warning). A missing directory is a parameter error.
+
 Exit codes:
   0 = completed successfully (dry-run, or all items deleted)
   1 = execution error (some items could not be deleted)
@@ -24,6 +29,14 @@ import re
 import shutil
 import sys
 import time
+
+try:
+    import workspace_resolver
+except ImportError:
+    # Dual import mode (mirrors the plugin guard): when run from outside the
+    # scripts directory, make the shared module importable from this dir.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import workspace_resolver
 
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 TMP_DIR = ".tmp"
@@ -74,15 +87,6 @@ def is_old(path, days):
     return age >= days * 86400
 
 
-def validate_working_directory(path):
-    """Check that path is a valid Default Working Directory."""
-    if not os.path.isdir(path):
-        return False, "directory does not exist"
-    if not os.path.isfile(os.path.join(path, "AGENTS.md")):
-        return False, "not a valid Default Working Directory (missing AGENTS.md)"
-    return True, None
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(
@@ -106,6 +110,7 @@ def main(argv=None):
         default=None,
         help=argparse.SUPPRESS,
     )
+    workspace_resolver.add_profile_arg(parser)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -129,7 +134,7 @@ def main(argv=None):
         sys.stderr.write("error: workspace directory does not exist: %s\n" % to_fwd(workspace))
         return 2
 
-    valid, msg = validate_working_directory(workspace)
+    valid, msg = workspace_resolver.validate_workspace(workspace, profile=args.profile)
     if not valid:
         sys.stderr.write("error: %s\n" % msg)
         return 2

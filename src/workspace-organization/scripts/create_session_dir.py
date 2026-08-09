@@ -5,10 +5,15 @@ Creates YYYYMMDD_HHMMSS[_TaskName]/ containing Outputs/ and .tmp/.
 Prints the absolute path of the created directory (forward slashes) as
 a single stdout line.
 
+Workspace validation (SCR-011): the target must be a registered profile
+workspace in the profile workspace memo; when the memo is unavailable and
+no plugin is present, standalone mode trusts the provided --workspace
+(with a stderr warning). A missing directory is a parameter error.
+
 Exit codes:
   0 = created successfully
   1 = parameter error (workspace does not exist)
-  2 = target already exists OR workspace boundary validation failed
+  2 = target already exists OR workspace validation failed
 """
 
 import argparse
@@ -16,6 +21,14 @@ import datetime
 import os
 import re
 import sys
+
+try:
+    import workspace_resolver
+except ImportError:
+    # Dual import mode (mirrors the plugin guard): when run from outside the
+    # scripts directory, make the shared module importable from this dir.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import workspace_resolver
 
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_TASK_NAME_LEN = 80
@@ -25,15 +38,6 @@ def sanitize_task_name(name):
     """Replace Windows-illegal filename chars with underscore, truncate to 80."""
     name = ILLEGAL_CHARS.sub("_", name)
     return name[:MAX_TASK_NAME_LEN]
-
-
-def validate_working_directory(path):
-    """Check that path is a valid Default Working Directory."""
-    if not os.path.isdir(path):
-        return False, "directory does not exist"
-    if not os.path.isfile(os.path.join(path, "AGENTS.md")):
-        return False, "not a valid Default Working Directory (missing AGENTS.md)"
-    return True, None
 
 
 def main(argv=None):
@@ -56,6 +60,7 @@ def main(argv=None):
         default=None,
         help=argparse.SUPPRESS,
     )
+    workspace_resolver.add_profile_arg(parser)
     args = parser.parse_args(argv)
 
     workspace = args.parent if args.parent is not None else args.workspace
@@ -65,7 +70,7 @@ def main(argv=None):
         sys.stderr.write("error: workspace directory does not exist: %s\n" % workspace)
         return 1
 
-    valid, msg = validate_working_directory(workspace)
+    valid, msg = workspace_resolver.validate_workspace(workspace, profile=args.profile)
     if not valid:
         sys.stderr.write("error: %s\n" % msg)
         return 2

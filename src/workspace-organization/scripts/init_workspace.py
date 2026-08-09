@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """S5: Initialize a profile workspace.
 
-Creates <workspace>/<sanitized_name>/ and writes an AGENTS.md rules file
-(built-in template or the content of --template). Prints the absolute
-path of the workspace directory (forward slashes) as a single stdout line.
+Creates <parent>/<sanitized_name>/ (mkdir + sanitize only; no memo write,
+no template file). Prints the absolute path of the created directory
+(forward slashes), followed by a registration next-step when the plugin
+is detected (standalone mode skips it).
 
 Boundary validation: EXEMPT (this script creates new workspaces).
 
 Exit codes:
   0 = initialized successfully
-  1 = execution error (e.g. --template file missing, permission denied)
+  1 = execution error (e.g. parent directory does not exist, permission denied)
   2 = parameter error (empty name after sanitization) or target exists
 """
 
@@ -18,38 +19,16 @@ import os
 import re
 import sys
 
+try:
+    import workspace_resolver
+except ImportError:
+    # Dual import mode (mirrors the plugin guard): when run from outside the
+    # scripts directory, make the shared module importable from this dir.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import workspace_resolver
+
 MAX_NAME_LEN = 80
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
-
-DEFAULT_TEMPLATE = """# Workspace Rules
-
-## Session Directory Structure
-
-Every conversation creates a session directory:
-
-    YYYYMMDD_HHMMSS_TaskName/
-    \u251c\u2500\u2500 Outputs/    <- formal deliverables only
-    \u2514\u2500\u2500 .tmp/       <- intermediate files, safe to clean
-
-## File Placement
-
-- All deliverables go in a session dir's Outputs/
-- Never save files to workspace root directly
-- Shared space (<SHARED_SPACE_PATH>) requires explicit user confirmation
-  # Configure your shared space path here
-
-## Prohibitions
-
-- No rm -rf, del /S/Q, bulk rename, or recursive delete
-- No overwriting existing files without reading first
-- No secrets or credentials in any file
-
-## Conventions
-
-- Absolute paths with forward slashes
-- ASCII straight quotes only
-- No emoji
-"""
 
 
 def sanitize_name(name):
@@ -60,7 +39,7 @@ def sanitize_name(name):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Initialize a profile workspace with an AGENTS.md rules file."
+        description="Initialize a profile workspace (mkdir + sanitize only)."
     )
     parser.add_argument("name", help="Workspace name (= profile name).")
     parser.add_argument(
@@ -72,11 +51,6 @@ def main(argv=None):
         "--parent",
         default=None,
         help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--template",
-        default=None,
-        help="Path to a custom AGENTS.md template file.",
     )
     args = parser.parse_args(argv)
 
@@ -95,15 +69,6 @@ def main(argv=None):
         sys.stderr.write("error: parent directory does not exist: %s\n" % parent)
         return 1
 
-    content = DEFAULT_TEMPLATE
-    if args.template:
-        template_path = os.path.abspath(args.template)
-        if not os.path.isfile(template_path):
-            sys.stderr.write("error: template file does not exist: %s\n" % template_path)
-            return 1
-        with open(template_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
     target = os.path.join(parent, name)
     if os.path.exists(target):
         sys.stdout.write(target.replace(os.sep, "/") + "\n")
@@ -111,14 +76,19 @@ def main(argv=None):
 
     try:
         os.makedirs(target)
-        # HERMES-SPECIFIC: .hermes/ directory whitelist
-        with open(os.path.join(target, "AGENTS.md"), "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
     except OSError as exc:
         sys.stderr.write("error: %s\n" % exc)
         return 1
 
     sys.stdout.write(target.replace(os.sep, "/") + "\n")
+    if workspace_resolver.plugin_trace():
+        # HERMES-SPECIFIC: registration is a plugin-owned write (active-profile
+        # only); the script only prints the next step for the agent to run.
+        sys.stdout.write(
+            "Register it: call the plugin tool "
+            "`workspace_guard_register_workspace('%s', '%s')` to add the "
+            "workspace to the memo.\n" % (name, target.replace(os.sep, "/"))
+        )
     return 0
 
 
