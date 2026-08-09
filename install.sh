@@ -90,6 +90,7 @@ DRY_RUN=0
 FORCE=0
 ALL_PROFILES=0
 KEEP_CONFIG=0
+ASK_CONFIRM=0
 declare -a TARGET_PROFILES=()
 
 parse_install_flags() {
@@ -153,15 +154,25 @@ read_repo_version() {
 
 read_installed_version() {
     # $1 = profile home, $2 = skill|plugin
+    # Skill lookup scans EVERY workspace-organization SKILL.md (excluding
+    # .archive) and prefers one that carries a `version:` field: stale copies
+    # from pre-version installs exist alongside the current one and must not
+    # shadow the real version (find|head -1 can pick the old copy).
     local home="$1" kind="$2" f v=""
     if [ "$kind" = "skill" ]; then
-        f=$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)
-        [ -n "$f" ] && v=$(grep -m1 -E '^version:' "$f" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+        local f2
+        while IFS= read -r f2; do
+            [ -n "$f2" ] || continue
+            v=$(grep -m1 -E '^version:' "$f2" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+            [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+        done < <(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null)
+        # No versioned copy: report the bare install (empty -> treated as not installed)
+        printf '%s' ""
     else
         f="$home/plugins/workspace-guard/plugin.yaml"
         [ -f "$f" ] && v=$(grep -m1 -E '^version:' "$f" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+        printf '%s' "$v"
     fi
-    printf '%s' "$v"
 }
 
 ver_gt() {
@@ -200,13 +211,60 @@ interactive_menu() {
         show_menu
         read -r -p "Choose [1-4]: " choice
         case "$choice" in
-            1) cmd_install;;
-            2) cmd_uninstall;;
+            1) ASK_CONFIRM=1
+               if select_profiles; then cmd_install; fi
+               ASK_CONFIRM=0 ;;
+            2) if select_profiles; then cmd_uninstall; fi ;;
             3) cmd_status;;
             4) return 0;;
             *) err "invalid choice: $choice";;
         esac
     done
+}
+
+# Interactive profile picker (number-based). Fills the ALL_PROFILES /
+# TARGET_PROFILES globals for cmd_install / cmd_uninstall. Returns 0 on a
+# valid selection, 1 on cancel/error.
+select_profiles() {
+    local root; root=$(hermes_root)
+    local -a names=()
+    local name n=0 sel num
+    while IFS= read -r name; do
+        n=$((n + 1))
+        names+=("$name")
+        log "  $n) $name"
+    done < <(discover_profiles "$root")
+    [ "$n" -gt 0 ] || { err "no profiles found under $root"; return 1; }
+    ALL_PROFILES=0
+    TARGET_PROFILES=()
+    while true; do
+        read -r -p "Select profile numbers (comma-separated, 0 = all, Enter = cancel): " sel
+        [ -z "$sel" ] && { err "cancelled"; return 1; }
+        if [ "$sel" = "0" ]; then ALL_PROFILES=1; return 0; fi
+        local ok=1 nums
+        IFS=, read -ra nums <<< "$sel"
+        for num in "${nums[@]}"; do
+            case "$num" in
+                *[!0-9]*) ok=0 ;;
+                *) [ "$num" -ge 1 ] && [ "$num" -le "$n" ] || ok=0 ;;
+            esac
+            [ "$ok" = 1 ] || break
+        done
+        if [ "$ok" = 1 ]; then
+            for num in "${nums[@]}"; do
+                TARGET_PROFILES+=("${names[$((num - 1))]}")
+            done
+            return 0
+        fi
+        err "invalid selection: $sel (use 1-$n, comma-separated; 0 = all)"
+    done
+}
+
+confirm_yn() {
+    # $1 = prompt; returns 0 on y/Y, 1 otherwise
+    local ans
+    read -r -p "$1 [y/N] " ans
+    [ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
 discover_profiles() {
@@ -223,7 +281,10 @@ discover_profiles() {
 }
 
 plan_profile() {
-    # $1 = profile name, $2 = profile home; prints plan lines; sets NEED_SKILL/NEED_PLUGIN/NEED_FORCE
+    # $1 = profile name, $2 = profile home; prints plan lines; sets
+    # NEED_SKILL/NEED_PLUGIN/NEED_FORCE plus per-component update flags
+    # (NEED_SKILL_UPDATE / NEED_PLUGIN_UPDATE) so the interactive menu can ask
+    # before overwriting an outdated install.
     local prof="$1" home="$2"
     local repo_skill repo_plugin inst_skill inst_plugin
     repo_skill=$(read_repo_version workspace-organization SKILL.md)
@@ -232,10 +293,11 @@ plan_profile() {
     inst_plugin=$(read_installed_version "$home" plugin)
 
     NEED_SKILL=0; NEED_PLUGIN=0; NEED_FORCE=0
+    NEED_SKILL_UPDATE=0; NEED_PLUGIN_UPDATE=0
     if [ -z "$inst_skill" ]; then
         NEED_SKILL=1; log "  [$prof] skill: not installed -> install"
     elif [ "$FORCE" = 1 ] || ver_gt "$repo_skill" "$inst_skill"; then
-        NEED_SKILL=1; NEED_FORCE=1
+        NEED_SKILL=1; NEED_SKILL_UPDATE=1; NEED_FORCE=1
         log "  [$prof] skill: $inst_skill -> $repo_skill (update)"
     else
         log "  [$prof] skill: $inst_skill (up to date)"
@@ -243,7 +305,7 @@ plan_profile() {
     if [ -z "$inst_plugin" ]; then
         NEED_PLUGIN=1; log "  [$prof] plugin: not installed -> install"
     elif [ "$FORCE" = 1 ] || ver_gt "$repo_plugin" "$inst_plugin"; then
-        NEED_PLUGIN=1; NEED_FORCE=1
+        NEED_PLUGIN=1; NEED_PLUGIN_UPDATE=1; NEED_FORCE=1
         log "  [$prof] plugin: $inst_plugin -> $repo_plugin (update)"
     else
         log "  [$prof] plugin: $inst_plugin (up to date)"
@@ -272,10 +334,22 @@ cmd_install() {
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         [ -d "$home" ] || { err "  [$p] profile home missing: $home"; continue; }
         plan_profile "$p" "$home"
+        # Interactive confirmation: ask before overwriting an outdated install.
+        # Fresh installs and --all-profiles one-shot runs do not ask.
+        if [ "$ASK_CONFIRM" = 1 ] && [ "$DRY_RUN" = 0 ]; then
+            if [ "$NEED_SKILL_UPDATE" = 1 ] && ! confirm_yn "  [$p] update skill?"; then
+                NEED_SKILL=0; NEED_SKILL_UPDATE=0
+                log "  [$p] skill update skipped"
+            fi
+            if [ "$NEED_PLUGIN_UPDATE" = 1 ] && ! confirm_yn "  [$p] update plugin?"; then
+                NEED_PLUGIN=0; NEED_PLUGIN_UPDATE=0
+                log "  [$p] plugin update skipped"
+            fi
+        fi
         local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
-                log "  would run: hermes ${hargs:+$hargs }skills install $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                log "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_PLUGIN" = 1 ]; then
                 log "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
@@ -288,7 +362,7 @@ cmd_install() {
         fi
         # real execution
         if [ "$NEED_SKILL" = 1 ]; then
-            hermes $hargs skills install "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
+            hermes $hargs skills install --yes "$slug/src/workspace-organization" $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "skill install failed for $p"; return 2; }
         fi
         if [ "$NEED_PLUGIN" = 1 ]; then
             hermes $hargs plugins install "$url#src/workspace-guard" --enable $([ "$NEED_FORCE" = 1 ] && echo --force) || { err "plugin install failed for $p"; return 2; }
@@ -405,6 +479,7 @@ Install Git for Windows (https://gitforwindows.org), or install Hermes inside WS
         die "semver comparison broken"
     fi
     if [ "$sub" = "--show-menu" ]; then show_menu; return 0; fi
+    if [ "$sub" = "--force-menu" ]; then interactive_menu; return 0; fi
     if [ -z "$sub" ]; then
         if ! is_tty; then
             die "no TTY and no --profile/--all-profiles; refusing to enter the menu"
