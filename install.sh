@@ -220,13 +220,52 @@ preflight() {
     return 0
 }
 
-# --- version helpers --------------------------------------------------------
-read_repo_version() {
-    # $1 = repo subdir (workspace-organization|workspace-guard), $2 = file (SKILL.md|plugin.yaml)
-    local src_dir="$SCRIPT_DIR/$1/$2" v
-    [ -f "$src_dir" ] || return 1
-    v=$(grep -m1 -E '^version:' "$src_dir" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
+# --- repo remote fetch (SCR-020) -------------------------------------------
+# Repo versions and the config template come from the GitHub remote ONLY --
+# install.sh works standalone (no repo checkout next to it). WG_CURL overrides
+# the curl command so tests can inject a fake (WG_FAKE_REPO feeds it files).
+
+# Convert a github.com repository URL into the raw.githubusercontent.com base
+# (https/git@ forms; strips .git). Non-GitHub sources return 1.
+github_raw_base() {
+    local url="$1" base
+    case "$url" in
+        https://github.com/*|http://github.com/*)
+            base=$(printf '%s' "$url" | sed -E 's#^(https?://)github\.com/#\1raw.githubusercontent.com/#')
+            ;;
+        git@github.com:*)
+            base=$(printf '%s' "${url#git@github.com:}" | sed 's#^#https://raw.githubusercontent.com/#')
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "${base%.git}"
+}
+
+# Fetch a repo file from the GitHub remote (HEAD = default branch). Prints the
+# file content; returns non-zero on any failure.
+fetch_repo_file() {
+    local base
+    base=$(github_raw_base "$(resolve_repo_url)") || return 1
+    "${WG_CURL:-curl}" -fsSL --max-time 15 "$base/HEAD/$1" 2>/dev/null
+}
+
+# Latest `version:` of a package file on the GitHub remote (empty on failure).
+repo_file_version() {
+    local v
+    v=$(fetch_repo_file "$1/$2" | grep -m1 -E '^version:' | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
     printf '%s' "$v"
+}
+
+# Fetch skill+plugin versions once into REPO_SKILL/REPO_PLUGIN globals. install
+# (incl. --dry-run) depends on them for its plan: fail loudly with a retry hint
+# instead of silently treating everything as up to date.
+fetch_repo_versions() {
+    REPO_SKILL=$(repo_file_version workspace-organization SKILL.md)
+    REPO_PLUGIN=$(repo_file_version workspace-guard plugin.yaml)
+    if [ -z "$REPO_SKILL" ] || [ -z "$REPO_PLUGIN" ]; then
+        err "cannot fetch workspace-guard versions from GitHub (network unreachable, or --repo source is not GitHub)."
+        die "please connect to the network and retry"
+    fi
 }
 
 read_installed_version() {
@@ -417,11 +456,10 @@ plan_profile() {
     # $1 = profile name, $2 = profile home; prints plan lines; sets
     # NEED_SKILL/NEED_PLUGIN/NEED_FORCE plus per-component update flags
     # (NEED_SKILL_UPDATE / NEED_PLUGIN_UPDATE) so the interactive menu can ask
-    # before overwriting an outdated install.
+    # before overwriting an outdated install. Repo versions come from the
+    # REPO_SKILL/REPO_PLUGIN globals (filled once by fetch_repo_versions).
     local prof="$1" home="$2"
-    local repo_skill repo_plugin inst_skill inst_plugin
-    repo_skill=$(read_repo_version workspace-organization SKILL.md)
-    repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
+    local inst_skill inst_plugin
     inst_skill=$(read_installed_version "$home" skill)
     inst_plugin=$(read_installed_version "$home" plugin)
 
@@ -429,17 +467,17 @@ plan_profile() {
     NEED_SKILL_UPDATE=0; NEED_PLUGIN_UPDATE=0
     if [ -z "$inst_skill" ]; then
         NEED_SKILL=1
-    elif [ "$FORCE" = 1 ] || ver_gt "$repo_skill" "$inst_skill"; then
+    elif [ "$FORCE" = 1 ] || ver_gt "$REPO_SKILL" "$inst_skill"; then
         NEED_SKILL=1; NEED_SKILL_UPDATE=1; NEED_FORCE=1
-        log "  [$prof] skill: $inst_skill -> $repo_skill (update)"
+        log "  [$prof] skill: $inst_skill -> $REPO_SKILL (update)"
     else
         log "  [$prof] skill: $inst_skill (up to date)"
     fi
     if [ -z "$inst_plugin" ]; then
         NEED_PLUGIN=1
-    elif [ "$FORCE" = 1 ] || ver_gt "$repo_plugin" "$inst_plugin"; then
+    elif [ "$FORCE" = 1 ] || ver_gt "$REPO_PLUGIN" "$inst_plugin"; then
         NEED_PLUGIN=1; NEED_PLUGIN_UPDATE=1; NEED_FORCE=1
-        log "  [$prof] plugin: $inst_plugin -> $repo_plugin (update)"
+        log "  [$prof] plugin: $inst_plugin -> $REPO_PLUGIN (update)"
     else
         log "  [$prof] plugin: $inst_plugin (up to date)"
     fi
@@ -452,6 +490,7 @@ cmd_install() {
     local root; root=$(require_hermes_root) || return 1
     local url slug; url=$(resolve_repo_url); slug=$(repo_slug "$url")
     logfile "install: repo=$url slug=$slug mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live)"
+    fetch_repo_versions   # exits with a connect-to-the-network hint when offline
     local p home
     sep
     for p in $(discover_profiles "$root"); do
@@ -500,7 +539,7 @@ cmd_install() {
                 logfile "  would run: hermes ${hargs:+$hargs }plugins install $url#workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
-                logfile "  would copy guard-config template to $home/workspace-guard/"
+                logfile "  would fetch guard-config template from GitHub to $home/workspace-guard/"
                 logfile "  would delete memo: $home/workspace-guard/profile-workspaces.json"
             fi
             if [ "$stale_archive" = 1 ]; then
@@ -525,9 +564,15 @@ cmd_install() {
         fi
         if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
             mkdir -p "$home/workspace-guard"
-            cp "$SCRIPT_DIR/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
+            if ! fetch_repo_file workspace-guard/guard-config.yaml > "$home/workspace-guard/guard-config.yaml"; then
+                rm -f "$home/workspace-guard/guard-config.yaml"
+                err "  [$p] could not download the guard-config template from GitHub"
+                err "  [$p] please connect to the network and retry"
+                logfile "  [$p] guard-config template download failed"
+                return 2
+            fi
             rm -f "$home/workspace-guard/profile-workspaces.json"
-            logfile "  config template copied; memo deleted for $p"
+            logfile "  config template fetched from GitHub; memo deleted for $p"
         fi
         [ "$stale_archive" = 1 ] && clean_stale_plugin_archive "$home" "$p"
     done
@@ -625,11 +670,16 @@ cmd_uninstall() {
 cmd_status() {
     local root; root=$(require_hermes_root) || return 1
     local repo_skill repo_plugin
-    repo_skill=$(read_repo_version workspace-organization SKILL.md)
-    repo_plugin=$(read_repo_version workspace-guard plugin.yaml)
+    repo_skill=$(repo_file_version workspace-organization SKILL.md)
+    repo_plugin=$(repo_file_version workspace-guard plugin.yaml)
     sep
     log "HERMES root: $root"
-    log "repo skill: $repo_skill | repo plugin: $repo_plugin"
+    if [ -n "$repo_skill" ] && [ -n "$repo_plugin" ]; then
+        log "repo skill: $repo_skill | repo plugin: $repo_plugin"
+    else
+        log "repo skill: - | repo plugin: -"
+        err "warning: cannot fetch repo versions from GitHub; connect to the network to see the latest versions"
+    fi
     local p home is ip
     for p in $(discover_profiles "$root"); do
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"

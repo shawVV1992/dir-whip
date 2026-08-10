@@ -52,6 +52,8 @@ bash install.sh uninstall --profile learn --keep-config
 
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
+**网络依赖**：`status` 显示的 repo skill/plugin 版本从 GitHub 远端获取（`raw.githubusercontent.com`）——脚本可脱离仓库副本单独运行，无需旁边有仓库目录。`install` 同样依赖远端（版本比对 + 配置模板下载）：离线时失败退出并提示「连接网络后重试」，不再静默跳过更新；`status` 离线时 repo 版本显示 `-`（已装版本照常显示）；`uninstall` 不依赖网络。
+
 终端仅显示简化状态行（`[1/2] 安装 skill 完成`）；完整命令输出（hermes 拉取/扫描/元数据）与配置细节写入 `<HERMES_HOME>/workspace-guard/install.log`（可用 `--log <path>` 覆盖）。
 
 ### 快捷命令与工具

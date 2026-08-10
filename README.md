@@ -62,6 +62,14 @@ Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).
 Run `bash install.sh --help` for all flags.
 
+**Network**: the repo skill/plugin versions shown by `status` are fetched from
+the GitHub remote (`raw.githubusercontent.com`) — the script works standalone,
+no repo checkout needed next to it. `install` also needs the remote (version
+comparison + config template download): offline it fails with a
+"connect to the network and retry" hint instead of silently skipping updates;
+`status` then shows `-` for the repo versions (installed versions still shown);
+`uninstall` never needs the network.
+
 The terminal shows only simplified status lines (`[1/2] 安装 skill 完成`);
 full command output (hermes fetch/scan/metadata) and configuration details are
 written to `<HERMES_HOME>/workspace-guard/install.log` (override with
