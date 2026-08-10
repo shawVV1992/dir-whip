@@ -58,9 +58,9 @@ progress_run() {
         done
         wait "$pid"; rc=$?
         if [ "$rc" -eq 0 ]; then
-            echo -e "\r[$prof] $comp $actioned \033[32m✓\033[0m"
+            printf '\r\033[K[%s] %s %s \033[32m✓\033[0m\n' "$prof" "$comp" "$actioned"
         else
-            echo -e "\r[$prof] $comp $failed \033[31m✗\033[0m"
+            printf '\r\033[K[%s] %s %s \033[31m✗\033[0m\n' "$prof" "$comp" "$failed"
         fi
         logfile "== [${prof}] ${comp} ${actioning} exit=$rc"
         return "$rc"
@@ -266,6 +266,40 @@ read_installed_version() {
     fi
 }
 
+stale_plugin_archive_exists() {
+    # $1 = profile home; returns 0 when a stale archived plugin copy exists
+    [ -d "$1/plugins/.archive/workspace-guard" ]
+}
+
+clean_stale_plugin_archive() {
+    # $1 = profile home, $2 = profile name
+    # Move a stale plugins/.archive/workspace-guard copy out of the plugins
+    # tree (Hermes' plugin scanner does not skip dot-directories and matches
+    # enabled by bare manifest name, so an archived copy would be loaded
+    # alongside the active one) and drop the leftover `.archive/workspace-guard`
+    # entry from plugins.enabled in config.yaml. Best-effort: failures are
+    # logged but never abort install/uninstall.
+    local home="$1" prof="$2" bkdir
+    if [ -d "$home/plugins/.archive/workspace-guard" ]; then
+        bkdir=$(mktemp -d 2>/dev/null) || bkdir="$home/workspace-guard/stale-plugin-backup"
+        mkdir -p "$bkdir" 2>/dev/null || true
+        if mv "$home/plugins/.archive/workspace-guard" "$bkdir/workspace-guard" 2>/dev/null; then
+            log "  [$prof] stale plugin archive moved to $bkdir/workspace-guard"
+            logfile "[$prof] stale plugin archive moved to $bkdir/workspace-guard"
+        else
+            err "  [$prof] could not move stale plugin archive: $home/plugins/.archive/workspace-guard"
+            logfile "[$prof] could not move stale plugin archive"
+        fi
+        # Drop the empty .archive dir it came from (harmless if not empty).
+        rmdir "$home/plugins/.archive" 2>/dev/null || true
+    fi
+    if [ -f "$home/config.yaml" ]; then
+        sed -i '/\.archive\/workspace-guard/d' "$home/config.yaml"
+        logfile "[$prof] removed stale '.archive/workspace-guard' entry from config.yaml"
+    fi
+    return 0
+}
+
 ver_gt() {
     # $1 > $2 semver numeric per segment; returns 0 true
     local a="$1" b="$2" ia ib
@@ -303,7 +337,7 @@ interactive_menu() {
     local choice
     while true; do
         show_menu
-        read -r -p "Choose [1-4]: " choice
+        read -r -p "Choose [1-4]: " choice || return 0   # EOF: quit
         choice="${choice%$'\r'}"   # strip CR from Windows-piped input
         case "$choice" in
             1) ASK_CONFIRM=1
@@ -324,18 +358,21 @@ interactive_menu() {
 select_profiles() {
     local root; root=$(hermes_root)
     local -a names=()
-    local name n=0 sel num
+    local name n=0 sel num home skill_v plugin_v
     sep
     while IFS= read -r name; do
         n=$((n + 1))
         names+=("$name")
-        log "  $n) $name"
+        home="$root"; [ "$name" != "default" ] && home="$root/profiles/$name"
+        skill_v=$(read_installed_version "$home" skill); [ -z "$skill_v" ] && skill_v="-"
+        plugin_v=$(read_installed_version "$home" plugin); [ -z "$plugin_v" ] && plugin_v="-"
+        log "  $n) $name: skill $skill_v | plugin $plugin_v"
     done < <(discover_profiles "$root")
     [ "$n" -gt 0 ] || { err "no profiles found under $root"; sep; printf '\n'; return 1; }
     ALL_PROFILES=0
     TARGET_PROFILES=()
     while true; do
-        read -r -p "Select profile numbers (comma-separated; A/a = all, X/x = cancel): " sel
+        read -r -p "Select profile numbers (comma-separated; A/a = all, X/x = cancel): " sel || { err "cancelled"; sep; printf '\n'; return 1; }
         sel="${sel%$'\r'}"   # strip CR from Windows-piped input
         case "$sel" in
             a|A) ALL_PROFILES=1; sep; printf '\n'; return 0 ;;
@@ -367,7 +404,7 @@ confirm_yn() {
     # $1 = prompt; returns 0 on y/Y or Enter (default yes), 1 on n/N
     local ans
     while true; do
-        read -r -p "$1 [Y/n] " ans
+        read -r -p "$1 [Y/n] " ans || return 1   # EOF: treat as no
         ans="${ans%$'\r'}"   # strip CR from Windows-piped input
         case "$ans" in
             ""|y|Y) return 0 ;;
@@ -446,6 +483,12 @@ cmd_install() {
         [ -d "$home" ] || { err "  [$p] profile home missing: $home"; continue; }
         logfile "== profile: $p home=$home"
         plan_profile "$p" "$home"
+        local stale_archive=0
+        if stale_plugin_archive_exists "$home"; then
+            stale_archive=1
+            log "  [$p] stale plugin archive: found (will clean)"
+            logfile "  [$p] stale plugin archive: found (will clean)"
+        fi
         # Interactive confirmation: ask before overwriting an outdated install.
         # Fresh installs and --all-profiles one-shot runs do not ask.
         if [ "$ASK_CONFIRM" = 1 ] && [ "$DRY_RUN" = 0 ]; then
@@ -458,7 +501,9 @@ cmd_install() {
                 log "  [$p] plugin update skipped"
             fi
         fi
-        local hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        # Always pass -p: without it hermes targets the CURRENTLY ACTIVE
+        # profile, not the default/root profile (cross-profile installs).
+        local hargs="-p $p"
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
                 log "  [$p] skill will $([ "$NEED_SKILL_UPDATE" = 1 ] && echo update || echo install)"
@@ -471,6 +516,9 @@ cmd_install() {
             if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
                 logfile "  would copy guard-config template to $home/workspace-guard/"
                 logfile "  would delete memo: $home/workspace-guard/profile-workspaces.json"
+            fi
+            if [ "$stale_archive" = 1 ]; then
+                logfile "  would move stale archive: $home/plugins/.archive/workspace-guard"
             fi
             continue
         fi
@@ -495,6 +543,7 @@ cmd_install() {
             rm -f "$home/workspace-guard/profile-workspaces.json"
             logfile "  config template copied; memo deleted for $p"
         fi
+        [ "$stale_archive" = 1 ] && clean_stale_plugin_archive "$home" "$p"
     done
     log "Restart Hermes for changes to take effect."
     logfile "install finished (exit 0)"
@@ -535,13 +584,16 @@ cmd_uninstall() {
             return 1
         fi
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
-        hargs=""; [ "$p" != "default" ] && hargs="-p $p"
+        hargs="-p $p"   # always explicit: no -p targets the ACTIVE profile, not default
         logfile "== profile: $p home=$home"
-        # numbered per-profile status line: <n>) <name>  skill <✓|✗> | plugin <✓|✗>
-        local has_skill=0 has_plugin=0
+        local has_skill=0 has_plugin=0 stale_archive=0
         [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ] && has_skill=1
         [ -d "$home/plugins/workspace-guard" ] && has_plugin=1
-        log "  ${n}) ${p}  skill $(mark "$has_skill") | plugin $(mark "$has_plugin")"
+        if stale_plugin_archive_exists "$home"; then
+            stale_archive=1
+            log "  [$p] stale plugin archive: found (will clean)"
+            logfile "  [$p] stale plugin archive: found (will clean)"
+        fi
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$has_skill" = 1 ]; then
                 logfile "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
@@ -554,6 +606,9 @@ cmd_uninstall() {
                 logfile "  keep config"
             else
                 logfile "  would delete config + memo under $home/workspace-guard/"
+            fi
+            if [ "$stale_archive" = 1 ]; then
+                logfile "  would move stale archive: $home/plugins/.archive/workspace-guard"
             fi
             continue
         fi
@@ -574,6 +629,7 @@ cmd_uninstall() {
             rmdir "$home/workspace-guard" 2>/dev/null || true
             logfile "  config + memo deleted for $p"
         fi
+        [ "$stale_archive" = 1 ] && clean_stale_plugin_archive "$home" "$p"
     done
     logfile "uninstall finished (exit 0)"
     sep
