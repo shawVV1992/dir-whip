@@ -243,12 +243,14 @@ repo_slug() {
 }
 
 preflight() {
-    # warn-and-continue on local/remote drift; skip unpushed check without upstream
+    # Detect local/remote drift (warn-and-continue; skip unpushed check without
+    # upstream). Terminal stays clean (SCR-023): drift notes go to the log only
+    # -- installs are GitHub-sourced, so local drift carries no user action.
     git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null | grep -q . && \
-        err "warning: uncommitted changes in the repo; install uses the GitHub remote as source"
+        logfile "warning: uncommitted changes in the repo; install uses the GitHub remote as source"
     if git -C "$SCRIPT_DIR" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
         git -C "$SCRIPT_DIR" log @{u}.. 2>/dev/null | grep -q . && \
-            err "warning: unpushed commits; install uses the GitHub remote as source"
+            logfile "warning: unpushed commits; install uses the GitHub remote as source"
     fi
     return 0
 }
