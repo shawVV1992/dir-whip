@@ -46,7 +46,7 @@ bash install.sh uninstall --profile learn --keep-config
 
 **环境检测**：脚本按「运行入口」分流，只配置对应环境的 Hermes：
 
-- **Windows 终端**（PowerShell/CMD/Windows Terminal 敲 `bash install.sh`——此处的 `bash` 即 WSL 启动器）：自动识别并提示，随后自动以 Git Bash 重新执行，配置 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`）。
+- **Windows 终端**（PowerShell/CMD/Windows Terminal 敲 `bash install.sh`——此处的 `bash` 即 WSL 启动器）：自动识别，随后静默自动以 Git Bash 重新执行，配置 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`）。
 - **WSL**（用户主动进入的 WSL 会话）：仅安装到 WSL 侧 Hermes（`~/.hermes`）。若 WSL 内无 Hermes，脚本报错并给出指引，绝不自动回退到 Windows 侧。
 - **Windows 非 WSL**（Git Bash）：仅安装到 Windows 侧 Hermes，不检索 WSL 内的 Hermes。
 - **Linux/macOS**：仅安装到本环境的 Hermes（`~/.hermes`）。
@@ -55,7 +55,7 @@ bash install.sh uninstall --profile learn --keep-config
 
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
-**网络依赖**：`status` 显示的 repo skill/plugin 版本从 GitHub 远端获取（`raw.githubusercontent.com`）——脚本可脱离仓库副本单独运行，无需旁边有仓库目录。`install` 同样依赖远端（版本比对 + 配置模板下载）：离线时失败退出并提示「连接网络后重试」，不再静默跳过更新；`status` 离线时 repo 版本显示 `-`（已装版本照常显示）；`uninstall` 不依赖网络。
+**网络依赖**：`status` 显示的 latest version 行（`latest version skill: <v> | plugin: <v>`）从 GitHub 远端获取（`raw.githubusercontent.com`）——脚本可脱离仓库副本单独运行，无需旁边有仓库目录。`install` 同样依赖远端（版本比对 + 配置模板下载）：离线时失败退出并提示「连接网络后重试」，不再静默跳过更新；`status` 离线时 latest version 显示 `-`（已装版本照常显示）；`uninstall` 不依赖网络。
 
 终端仅显示简化状态行（`[1/2] 安装 skill 完成`）；完整命令输出（hermes 拉取/扫描/元数据）与配置细节写入 `<HERMES_HOME>/workspace-guard/install.log`（可用 `--log <path>` 覆盖）。
 

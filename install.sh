@@ -708,9 +708,9 @@ cmd_status() {
     sep
     log "HERMES root: $root"
     if [ -n "$repo_skill" ] && [ -n "$repo_plugin" ]; then
-        log "repo skill: $repo_skill | repo plugin: $repo_plugin"
+        log "latest version skill: $repo_skill | plugin: $repo_plugin"
     else
-        log "repo skill: - | repo plugin: -"
+        log "latest version skill: - | plugin: -"
         err "warning: cannot fetch repo versions from GitHub; connect to the network to see the latest versions"
     fi
     local p home is ip
@@ -737,8 +737,8 @@ main() {
         #            Windows; a real WSL session means WSL-only.
         local target="${WG_TARGET:-}"
         if [ "$target" = windows ] || { [ -z "$target" ] && launched_from_windows; }; then
-            err "detected launch from Windows (via the WSL bash launcher); re-running under Git Bash to configure the Windows Hermes"
-            err "  (set WG_TARGET=wsl to force the WSL-side Hermes instead)"
+            # Silent relaunch (SCR-022): no hints on success; the die below is
+            # the brief reason when the Windows side cannot be reached.
             relaunch_via_git_bash "$@" || die "Git Bash was not found (or this script does not live on /mnt/<drive>).
 Run install.sh from Git Bash directly, or set WG_TARGET=wsl to configure the WSL-side Hermes."
         else
