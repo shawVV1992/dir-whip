@@ -144,6 +144,39 @@ wsl_has_hermes() {
     return 0
 }
 
+# True when this WSL process was launched FROM Windows (PowerShell/CMD/Windows
+# Terminal typing `bash`): the System32 bash launcher maps the Windows cwd to
+# /mnt/<drive>/..., so pwd (or the script's absolute path) starts with /mnt/<l>.
+# A real WSL session (user entered WSL) usually runs from the WSL filesystem
+# (/home/..., /root/..., /...) and is NOT detected as a Windows launch.
+launched_from_windows() {
+    case "$(pwd 2>/dev/null)" in
+        /mnt/[a-z]/*) return 0 ;;
+    esac
+    local sp
+    sp=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+    case "$sp" in
+        /mnt/[a-z]/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Launched from Windows but running in WSL: re-execute this script under Git
+# Bash so it runs against the Windows-side Hermes (the WSL bash launcher cannot
+# see Windows env vars like LOCALAPPDATA). WG_RELAUNCHED guards against loops.
+# The script must live on /mnt/<drive>/... for the path conversion to work.
+relaunch_via_git_bash() {
+    [ -n "${WG_RELAUNCHED:-}" ] && return 1
+    local gb script_win
+    for gb in "/mnt/c/Program Files/Git/bin/bash.exe" "/mnt/c/Program Files (x86)/Git/bin/bash.exe"; do
+        [ -x "$gb" ] || continue
+        script_win=$(cd "$(dirname "$0")" && pwd | sed 's|^/mnt/\([a-z]\)|\U\1:|' | tr '/' '\\')
+        [ -n "$script_win" ] || continue
+        WG_RELAUNCHED=1 exec "$gb" "$script_win\\install.sh" "$@"
+    done
+    return 1
+}
+
 # install/uninstall need a real hermes CLI on PATH; fail loudly otherwise.
 require_hermes_cli() {
     command -v hermes >/dev/null 2>&1 || die "hermes CLI not found in PATH
@@ -695,12 +728,27 @@ cmd_status() {
 main() {
     [ $# -eq 1 ] && [ "$1" = "--help" ] && { usage; return 0; }
     if detect_wsl; then
-        # WSL-only: configure the WSL-side Hermes and NEVER fall back to the
-        # Windows one. Without a WSL Hermes we fail with guidance instead of
-        # re-executing under Git Bash (PowerShell/CMD "bash" is the WSL
-        # launcher and cannot see Windows env vars like LOCALAPPDATA).
-        wsl_has_hermes || die "WSL detected: this script configures only the Hermes inside WSL, and no Hermes installation was found there (~/.hermes + hermes CLI).
-Install Hermes inside WSL, or run install.sh from Git Bash to configure the Windows-side Hermes."
+        # Environment-entry routing (SCR-021): figure out which Hermes the user
+        # actually means, not just which kernel the process runs on.
+        #   WG_TARGET=wsl     -> force the WSL side (SCR-019 behavior)
+        #   WG_TARGET=windows -> force the Windows side
+        #   unset -> auto: launched from a Windows terminal (PowerShell/CMD via
+        #            the System32 bash launcher, cwd under /mnt/<drive>) means
+        #            Windows; a real WSL session means WSL-only.
+        local target="${WG_TARGET:-}"
+        if [ "$target" = windows ] || { [ -z "$target" ] && launched_from_windows; }; then
+            err "detected launch from Windows (via the WSL bash launcher); re-running under Git Bash to configure the Windows Hermes"
+            err "  (set WG_TARGET=wsl to force the WSL-side Hermes instead)"
+            relaunch_via_git_bash "$@" || die "Git Bash was not found (or this script does not live on /mnt/<drive>).
+Run install.sh from Git Bash directly, or set WG_TARGET=wsl to configure the WSL-side Hermes."
+        else
+            # Real WSL session: configure the WSL-side Hermes and NEVER fall
+            # back to the Windows one. Without a WSL Hermes we fail with
+            # guidance (PowerShell/CMD "bash" is the WSL launcher and cannot
+            # see Windows env vars like LOCALAPPDATA).
+            wsl_has_hermes || die "WSL detected: this script configures only the Hermes inside WSL, and no Hermes installation was found there (~/.hermes + hermes CLI).
+Install Hermes inside WSL, or set WG_TARGET=windows to configure the Windows-side Hermes via Git Bash."
+        fi
     fi
     local sub="${1:-}"
     if [ "$sub" = "--selftest" ]; then

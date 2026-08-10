@@ -46,17 +46,22 @@ bash install.sh uninstall --all-profiles        # uninstall + delete config
 bash install.sh uninstall --profile learn --keep-config
 ```
 
-**Environment detection**: the script configures only the Hermes of the
-environment it runs in — it never crosses the Windows/WSL boundary:
+**Environment detection**: the script routes by where you LAUNCH it from and
+configures only that environment's Hermes:
 
-- **Windows, not WSL** (Git Bash): installs into the Windows Hermes
-  (`%LOCALAPPDATA%\hermes`); the WSL Hermes is never searched.
-- **WSL** (`bash install.sh` from PowerShell/CMD resolves to the WSL
-  launcher; a plain WSL shell works the same): installs into the WSL Hermes
-  (`~/.hermes`) only. If the WSL side has no Hermes, the script fails with
-  guidance — it never falls back to the Windows Hermes automatically (run
-  `install.sh` from Git Bash instead to configure the Windows side).
+- **Windows terminal** (PowerShell/CMD/Windows Terminal, `bash install.sh` —
+  `bash` is the WSL launcher there): detected automatically, a hint is printed,
+  and the script re-runs itself under Git Bash to configure the Windows Hermes
+  (`%LOCALAPPDATA%\hermes`).
+- **WSL** (a real WSL session, launched inside WSL): installs into the WSL
+  Hermes (`~/.hermes`) only. If the WSL side has no Hermes, the script fails
+  with guidance — it never falls back to the Windows Hermes automatically.
+- **Windows, not WSL** (Git Bash): installs into the Windows Hermes; the WSL
+  Hermes is never searched.
 - **Linux/macOS**: installs into that environment's Hermes (`~/.hermes`).
+
+Override the routing with `WG_TARGET=wsl` (force the WSL side) or
+`WG_TARGET=windows` (force the Windows side).
 
 Run with no arguments for the interactive menu. Update = full overwrite
 (`--force` reinstall + config template + memo rebuild on next restart).

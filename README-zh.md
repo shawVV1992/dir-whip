@@ -44,11 +44,14 @@ bash install.sh uninstall --all-profiles        # 卸载并删除配置
 bash install.sh uninstall --profile learn --keep-config
 ```
 
-**环境检测**：脚本只配置其运行所在环境的 Hermes，绝不跨 Windows/WSL 边界检索：
+**环境检测**：脚本按「运行入口」分流，只配置对应环境的 Hermes：
 
-- **Windows（非 WSL，Git Bash）**：仅安装到 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`），不检索 WSL 内的 Hermes。
-- **WSL**（PowerShell/CMD 敲 `bash install.sh` 时 `bash` 即 WSL 启动器；在 WSL shell 内运行同理）：仅安装到 WSL 侧 Hermes（`~/.hermes`）。若 WSL 内无 Hermes，脚本报错并给出指引，不再自动回退到 Windows 侧（如需配置 Windows 侧，请在 Git Bash 中手动运行 `install.sh`）。
+- **Windows 终端**（PowerShell/CMD/Windows Terminal 敲 `bash install.sh`——此处的 `bash` 即 WSL 启动器）：自动识别并提示，随后自动以 Git Bash 重新执行，配置 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`）。
+- **WSL**（用户主动进入的 WSL 会话）：仅安装到 WSL 侧 Hermes（`~/.hermes`）。若 WSL 内无 Hermes，脚本报错并给出指引，绝不自动回退到 Windows 侧。
+- **Windows 非 WSL**（Git Bash）：仅安装到 Windows 侧 Hermes，不检索 WSL 内的 Hermes。
 - **Linux/macOS**：仅安装到本环境的 Hermes（`~/.hermes`）。
+
+可用 `WG_TARGET=wsl`（强制 WSL 侧）或 `WG_TARGET=windows`（强制 Windows 侧）覆盖分流。
 
 不带参数运行即进入交互式菜单。更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
 
