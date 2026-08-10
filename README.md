@@ -16,7 +16,7 @@ Neither layer depends on the other at runtime. The skill works alone as a teachi
 ### Skill
 
 ```bash
-hermes skills install <repo-url>/src/workspace-organization
+hermes skills install <repo-url>/workspace-organization
 ```
 
 The skill package contains no rules-file literal, so the skills_guard scan
@@ -27,7 +27,7 @@ validate workspaces against the profile workspace memo
 ### Plugin
 
 ```bash
-hermes plugins install <repo-url>#src/workspace-guard --enable
+hermes plugins install <repo-url>#workspace-guard --enable
 ```
 
 The guard becomes active after the next Hermes restart.

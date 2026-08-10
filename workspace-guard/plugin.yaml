@@ -1,5 +1,5 @@
 name: workspace-guard
-version: 1.0.0
+version: 0.1.0
 description: Enforce session directory discipline in Hermes Default Working Directories
 author: shawVV1992
 license: MIT

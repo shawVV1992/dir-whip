@@ -18,7 +18,7 @@ workspace-guard 为 Hermes 智能体的工作目录强制执行文件纪律。He
 ### 技能
 
 ```bash
-hermes skills install <repo-url>/src/workspace-organization
+hermes skills install <repo-url>/workspace-organization
 ```
 
 技能包内不含任何规则文件字面量，因此 skills_guard 扫描返回 `safe` 判定，无需 `--force`。技能的脚本以档案备忘录（`profile-workspaces.json`）校验工作区，而非规则文件存在性检查。
@@ -26,7 +26,7 @@ hermes skills install <repo-url>/src/workspace-organization
 ### 插件
 
 ```bash
-hermes plugins install <repo-url>#src/workspace-guard --enable
+hermes plugins install <repo-url>#workspace-guard --enable
 ```
 
 重启 Hermes 后守卫即开始生效。

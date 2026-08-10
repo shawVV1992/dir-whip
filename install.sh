@@ -4,10 +4,10 @@
 set -u
 
 DEFAULT_REPO_URL="https://github.com/shawVV1992/workspace-guard"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # repo root (src/ lives there; script lives at the root)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # repo root (packages live there; script lives at the root)
 
 # --- helpers ---------------------------------------------------------------
-log()  { printf '%s\n' "$*"; }
+log()  { echo "$*"; }
 err()  { printf '%s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 sep()  { printf '%s\n' '----------------------------------------'; }
@@ -48,19 +48,19 @@ progress_run() {
     logfile "== [${prof}] ${comp} ${actioning}: $*"
     if [ -t 1 ]; then
         local spin=('|' '/' '-' '\') s=0 pid rc
-        printf '\r[%s] %s %s %s' "$prof" "$comp" "$actioning" "${spin[0]}"
+        printf '\r[%s] %s %s \033[33m%s\033[0m' "$prof" "$comp" "$actioning" "${spin[0]}"
         "$@" >> "$LOG_FILE" 2>&1 &
         pid=$!
         while kill -0 "$pid" 2>/dev/null; do
-            printf '\r[%s] %s %s %s' "$prof" "$comp" "$actioning" "${spin[$((s % 4))]}"
+            printf '\r[%s] %s %s \033[33m%s\033[0m' "$prof" "$comp" "$actioning" "${spin[$((s % 4))]}"
             s=$((s + 1))
             sleep 0.1
         done
         wait "$pid"; rc=$?
         if [ "$rc" -eq 0 ]; then
-            printf '\r[%s] %s %s \033[32m\u2713\033[0m\n' "$prof" "$comp" "$actioned"
+            echo -e "\r[$prof] $comp $actioned \033[32m✓\033[0m"
         else
-            printf '\r[%s] %s %s \033[31m\u2717\033[0m\n' "$prof" "$comp" "$failed"
+            echo -e "\r[$prof] $comp $failed \033[31m✗\033[0m"
         fi
         logfile "== [${prof}] ${comp} ${actioning} exit=$rc"
         return "$rc"
@@ -84,6 +84,19 @@ fail_report() {
     cause=$(tail -n 1 "$LOG_FILE" 2>/dev/null)
     [ -n "$cause" ] && err "  reason: $cause"
     err "  log: $LOG_FILE"
+}
+
+# Installed/absent marker for a component status line. $1 = 1 (installed) or 0.
+# TTY: green ✓ / red ✗; non-TTY: plain ASCII "ok" / "-".
+# Note: echo is used (not printf) because bash's printf re-encodes multibyte
+# chars through the locale and degrades ✓/✗ to "?" under a C locale (Windows
+# Git Bash default); echo passes bytes through verbatim.
+mark() {
+    if [ -t 1 ]; then
+        if [ "$1" = 1 ]; then echo -e '\033[32m✓\033[0m'; else echo -e '\033[31m✗\033[0m'; fi
+    else
+        if [ "$1" = 1 ]; then printf 'ok'; else printf '-'; fi
+    fi
 }
 
 usage() {
@@ -223,8 +236,8 @@ preflight() {
 
 # --- version helpers --------------------------------------------------------
 read_repo_version() {
-    # $1 = src subdir (workspace-organization|workspace-guard), $2 = file (SKILL.md|plugin.yaml)
-    local src_dir="$SCRIPT_DIR/src/$1/$2" v
+    # $1 = repo subdir (workspace-organization|workspace-guard), $2 = file (SKILL.md|plugin.yaml)
+    local src_dir="$SCRIPT_DIR/$1/$2" v
     [ -f "$src_dir" ] || return 1
     v=$(grep -m1 -E '^version:' "$src_dir" | sed 's/^version:[[:space:]]*//; s/[\"'"'"'].*//')
     printf '%s' "$v"
@@ -276,7 +289,7 @@ ver_gt() {
 show_menu() {
     sep
     cat <<'EOF'
-🔧 workspace-guard installer
+workspace-guard installer
 👥 1) Install/Update (skill + plugin)
 🗑️ 2) Uninstall
 📊 3) Status
@@ -322,10 +335,13 @@ select_profiles() {
     ALL_PROFILES=0
     TARGET_PROFILES=()
     while true; do
-        read -r -p "Select profile numbers (comma-separated, Enter = all, 0 = cancel): " sel
+        read -r -p "Select profile numbers (comma-separated; A/a = all, X/x = cancel): " sel
         sel="${sel%$'\r'}"   # strip CR from Windows-piped input
-        if [ -z "$sel" ]; then ALL_PROFILES=1; sep; printf '\n'; return 0; fi
-        if [ "$sel" = "0" ]; then err "cancelled"; sep; printf '\n'; return 1; fi
+        case "$sel" in
+            a|A) ALL_PROFILES=1; sep; printf '\n'; return 0 ;;
+            x|X) err "cancelled"; sep; printf '\n'; return 1 ;;
+            "") err "invalid selection: $sel (use 1-$n, comma-separated; A/a = all, X/x = cancel)"; continue ;;
+        esac
         local ok=1 nums
         IFS=, read -ra nums <<< "$sel"
         for num in "${nums[@]}"; do
@@ -343,15 +359,22 @@ select_profiles() {
             printf '\n'
             return 0
         fi
-        err "invalid selection: $sel (use 1-$n, comma-separated; Enter = all, 0 = cancel)"
+        err "invalid selection: $sel (use 1-$n, comma-separated; A/a = all, X/x = cancel)"
     done
 }
 
 confirm_yn() {
-    # $1 = prompt; returns 0 on y/Y, 1 otherwise
+    # $1 = prompt; returns 0 on y/Y or Enter (default yes), 1 on n/N
     local ans
-    read -r -p "$1 [y/N] " ans
-    [ "$ans" = "y" ] || [ "$ans" = "Y" ]
+    while true; do
+        read -r -p "$1 [Y/n] " ans
+        ans="${ans%$'\r'}"   # strip CR from Windows-piped input
+        case "$ans" in
+            ""|y|Y) return 0 ;;
+            n|N) return 1 ;;
+            *) err "invalid answer: $ans (y/n)" ;;
+        esac
+    done
 }
 
 discover_profiles() {
@@ -439,11 +462,11 @@ cmd_install() {
         if [ "$DRY_RUN" = 1 ]; then
             if [ "$NEED_SKILL" = 1 ]; then
                 log "  [$p] skill will $([ "$NEED_SKILL_UPDATE" = 1 ] && echo update || echo install)"
-                logfile "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/src/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                logfile "  would run: hermes ${hargs:+$hargs }skills install --yes $slug/workspace-organization $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_PLUGIN" = 1 ]; then
                 log "  [$p] plugin will $([ "$NEED_PLUGIN_UPDATE" = 1 ] && echo update || echo install)"
-                logfile "  would run: hermes ${hargs:+$hargs }plugins install $url#src/workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
+                logfile "  would run: hermes ${hargs:+$hargs }plugins install $url#workspace-guard --enable $([ "$NEED_FORCE" = 1 ] && echo --force)"
             fi
             if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
                 logfile "  would copy guard-config template to $home/workspace-guard/"
@@ -454,21 +477,21 @@ cmd_install() {
         # real execution
         if [ "$NEED_SKILL" = 1 ]; then
             if [ "$NEED_SKILL_UPDATE" = 1 ]; then
-                progress_run "$p" skill updating updated "update failed" hermes $hargs skills install --yes "$slug/src/workspace-organization" --force || { err "skill update failed for $p"; fail_report; return 2; }
+                progress_run "$p" skill updating updated "update failed" hermes $hargs skills install --yes "$slug/workspace-organization" --force || { err "skill update failed for $p"; fail_report; return 2; }
             else
-                progress_run "$p" skill installing installed "install failed" hermes $hargs skills install --yes "$slug/src/workspace-organization" || { err "skill install failed for $p"; fail_report; return 2; }
+                progress_run "$p" skill installing installed "install failed" hermes $hargs skills install --yes "$slug/workspace-organization" || { err "skill install failed for $p"; fail_report; return 2; }
             fi
         fi
         if [ "$NEED_PLUGIN" = 1 ]; then
             if [ "$NEED_PLUGIN_UPDATE" = 1 ]; then
-                progress_run "$p" plugin updating updated "update failed" hermes $hargs plugins install "$url#src/workspace-guard" --enable --force || { err "plugin update failed for $p"; fail_report; return 2; }
+                progress_run "$p" plugin updating updated "update failed" hermes $hargs plugins install "$url#workspace-guard" --enable --force || { err "plugin update failed for $p"; fail_report; return 2; }
             else
-                progress_run "$p" plugin installing installed "install failed" hermes $hargs plugins install "$url#src/workspace-guard" --enable || { err "plugin install failed for $p"; fail_report; return 2; }
+                progress_run "$p" plugin installing installed "install failed" hermes $hargs plugins install "$url#workspace-guard" --enable || { err "plugin install failed for $p"; fail_report; return 2; }
             fi
         fi
         if [ "$NEED_SKILL" = 1 ] || [ "$NEED_PLUGIN" = 1 ]; then
             mkdir -p "$home/workspace-guard"
-            cp "$SCRIPT_DIR/src/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
+            cp "$SCRIPT_DIR/workspace-guard/guard-config.yaml" "$home/workspace-guard/guard-config.yaml"
             rm -f "$home/workspace-guard/profile-workspaces.json"
             logfile "  config template copied; memo deleted for $p"
         fi
@@ -497,10 +520,11 @@ cmd_uninstall() {
     parse_uninstall_flags "$@"
     [ "$DRY_RUN" = 1 ] || require_hermes_cli
     local root; root=$(require_hermes_root) || return 1
-    local p home hargs
+    local p home hargs n=0
     logfile "uninstall: mode=$([ "$DRY_RUN" = 1 ] && echo dry-run || echo live) keep_config=$KEEP_CONFIG"
     sep
     for p in $(discover_profiles "$root"); do
+        n=$((n + 1))
         if [ "$ALL_PROFILES" = 1 ]; then :; elif [ ${#TARGET_PROFILES[@]} -gt 0 ]; then
             local keep=0 q
             for q in "${TARGET_PROFILES[@]}"; do [ "$q" = "$p" ] && keep=1; done
@@ -513,18 +537,17 @@ cmd_uninstall() {
         home="$root"; [ "$p" != "default" ] && home="$root/profiles/$p"
         hargs=""; [ "$p" != "default" ] && hargs="-p $p"
         logfile "== profile: $p home=$home"
+        # numbered per-profile status line: <n>) <name>  skill <✓|✗> | plugin <✓|✗>
+        local has_skill=0 has_plugin=0
+        [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ] && has_skill=1
+        [ -d "$home/plugins/workspace-guard" ] && has_plugin=1
+        log "  ${n}) ${p}  skill $(mark "$has_skill") | plugin $(mark "$has_plugin")"
         if [ "$DRY_RUN" = 1 ]; then
-            if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
-                log "  [$p] skill will uninstall"
+            if [ "$has_skill" = 1 ]; then
                 logfile "  would run: hermes ${hargs:+$hargs }skills uninstall workspace-organization"
-            else
-                log "  [$p] skill not installed, skip"
             fi
-            if [ -d "$home/plugins/workspace-guard" ]; then
-                log "  [$p] plugin will uninstall"
+            if [ "$has_plugin" = 1 ]; then
                 logfile "  would run: hermes ${hargs:+$hargs }plugins remove workspace-guard"
-            else
-                log "  [$p] plugin not installed, skip"
             fi
             if [ "$KEEP_CONFIG" = 1 ]; then
                 log "  [$p] keep config (--keep-config)"
@@ -534,7 +557,7 @@ cmd_uninstall() {
             fi
             continue
         fi
-        if [ -n "$(find "$home/skills" -path '*/.archive' -prune -o -type f -name SKILL.md -path '*/workspace-organization/SKILL.md' -print 2>/dev/null | head -n1)" ]; then
+        if [ "$has_skill" = 1 ]; then
             # warn and continue on failure: tolerate missing/removed skills
             # `hermes skills uninstall` has no --yes flag (skills_hub.py
             # hardcodes skip_confirm=False) and prompts "Confirm [y/N]"; feed
@@ -542,13 +565,9 @@ cmd_uninstall() {
             # The uninstall intent was already confirmed by the menu/profile
             # selection or an explicit --all-profiles invocation.
             progress_run "$p" skill uninstalling uninstalled "uninstall failed" sh -c "printf 'y\n' | hermes $hargs skills uninstall workspace-organization" || { err "warning: skill uninstall failed for $p (continuing)"; fail_report; }
-        else
-            log "  [$p] skill not installed, skip"
         fi
-        if [ -d "$home/plugins/workspace-guard" ]; then
+        if [ "$has_plugin" = 1 ]; then
             progress_run "$p" plugin uninstalling uninstalled "uninstall failed" hermes $hargs plugins remove workspace-guard || { err "plugin remove failed for $p"; fail_report; return 2; }
-        else
-            log "  [$p] plugin not installed, skip"
         fi
         if [ "$KEEP_CONFIG" != 1 ] && [ -d "$home/workspace-guard" ]; then
             rm -f "$home/workspace-guard/guard-config.yaml" "$home/workspace-guard/profile-workspaces.json"
