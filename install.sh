@@ -144,20 +144,6 @@ wsl_has_hermes() {
     return 0
 }
 
-# WSL has no Hermes: re-execute this script under Git Bash so it runs against
-# the Windows-side Hermes (PowerShell/CMD "bash" is the WSL launcher and cannot
-# see Windows env vars like LOCALAPPDATA). WG_RELAUNCHED guards against loops.
-relaunch_via_git_bash() {
-    [ -n "${WG_RELAUNCHED:-}" ] && return 1
-    local gb script_win
-    for gb in "/mnt/c/Program Files/Git/bin/bash.exe" "/mnt/c/Program Files (x86)/Git/bin/bash.exe"; do
-        [ -x "$gb" ] || continue
-        script_win=$(cd "$(dirname "$0")" && pwd | sed 's|^/mnt/\([a-z]\)|\U\1:|' | tr '/' '\\')
-        WG_RELAUNCHED=1 exec "$gb" "$script_win\\install.sh" "$@"
-    done
-    return 1
-}
-
 # install/uninstall need a real hermes CLI on PATH; fail loudly otherwise.
 require_hermes_cli() {
     command -v hermes >/dev/null 2>&1 || die "hermes CLI not found in PATH
@@ -659,15 +645,12 @@ cmd_status() {
 main() {
     [ $# -eq 1 ] && [ "$1" = "--help" ] && { usage; return 0; }
     if detect_wsl; then
-        if wsl_has_hermes; then
-            # WSL-side Hermes exists: install into IT (never the Windows one)
-            :
-        elif relaunch_via_git_bash "$@"; then
-            return 0
-        else
-            die "WSL detected with no Hermes inside, and Git Bash was not found.
-Install Git for Windows (https://gitforwindows.org), or install Hermes inside WSL."
-        fi
+        # WSL-only: configure the WSL-side Hermes and NEVER fall back to the
+        # Windows one. Without a WSL Hermes we fail with guidance instead of
+        # re-executing under Git Bash (PowerShell/CMD "bash" is the WSL
+        # launcher and cannot see Windows env vars like LOCALAPPDATA).
+        wsl_has_hermes || die "WSL detected: this script configures only the Hermes inside WSL, and no Hermes installation was found there (~/.hermes + hermes CLI).
+Install Hermes inside WSL, or run install.sh from Git Bash to configure the Windows-side Hermes."
     fi
     local sub="${1:-}"
     if [ "$sub" = "--selftest" ]; then
