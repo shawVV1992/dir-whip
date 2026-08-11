@@ -103,20 +103,20 @@ usage() {
     cat <<'EOF'
 workspace-guard installer
 Usage:
-  install.sh                     interactive menu (TTY)
-  install.sh install             install/update skill+plugin
+  workspace-guard_install.sh                interactive menu (TTY)
+  workspace-guard_install.sh install        install/update skill+plugin
       --all-profiles             all profiles, no prompts
       --profile <name>           target profile (repeatable)
       --dry-run                  show actions only
       --repo <url>               override repository URL
       --force                    reinstall even when versions match
       --log <path>               log file (default: <HERMES_HOME>/workspace-guard/install.log)
-  install.sh uninstall           uninstall skill+plugin
+  workspace-guard_install.sh uninstall      uninstall skill+plugin
       --all-profiles             all profiles
       --profile <name>           target profile (repeatable)
       --keep-config              preserve guard-config.yaml + memo
       --log <path>               log file (default: <HERMES_HOME>/workspace-guard/install.log)
-  install.sh status              per-profile installed versions
+  workspace-guard_install.sh status         per-profile installed versions
 EOF
 }
 
@@ -172,7 +172,7 @@ relaunch_via_git_bash() {
         [ -x "$gb" ] || continue
         script_win=$(cd "$(dirname "$0")" && pwd | sed 's|^/mnt/\([a-z]\)|\U\1:|' | tr '/' '\\')
         [ -n "$script_win" ] || continue
-        WG_RELAUNCHED=1 exec "$gb" "$script_win\\install.sh" "$@"
+        WG_RELAUNCHED=1 exec "$gb" "$script_win\\workspace-guard_install.sh" "$@"
     done
     return 1
 }
@@ -189,7 +189,7 @@ require_hermes_cli() {
 require_hermes_root() {
     local root; root=$(hermes_root)
     [ -d "$root" ] || die "HERMES root not found: $root
-(on Windows run with Git Bash: & 'C:\Program Files\Git\bin\bash.exe' install.sh)"
+(on Windows run with Git Bash: & 'C:\Program Files\Git\bin\bash.exe' workspace-guard_install.sh)"
     printf '%s' "$root"
 }
 
@@ -257,7 +257,7 @@ preflight() {
 
 # --- repo remote fetch (SCR-020) -------------------------------------------
 # Repo versions and the config template come from the GitHub remote ONLY --
-# install.sh works standalone (no repo checkout next to it). WG_CURL overrides
+# workspace-guard_install.sh works standalone (no repo checkout next to it). WG_CURL overrides
 # the curl command so tests can inject a fake (WG_FAKE_REPO feeds it files).
 
 # Convert a github.com repository URL into the raw.githubusercontent.com base
@@ -742,7 +742,7 @@ main() {
             # Silent relaunch (SCR-022): no hints on success; the die below is
             # the brief reason when the Windows side cannot be reached.
             relaunch_via_git_bash "$@" || die "Git Bash was not found (or this script does not live on /mnt/<drive>).
-Run install.sh from Git Bash directly, or set WG_TARGET=wsl to configure the WSL-side Hermes."
+Run workspace-guard_install.sh from Git Bash directly, or set WG_TARGET=wsl to configure the WSL-side Hermes."
         else
             # Real WSL session: configure the WSL-side Hermes and NEVER fall
             # back to the Windows one. Without a WSL Hermes we fail with
