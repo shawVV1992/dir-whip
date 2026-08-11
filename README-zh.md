@@ -63,11 +63,25 @@ Hermes 智能体并不总能可靠地遵守文件放置规则：交付物散落�
 
 ### 快速上手（人类用户）
 
-用 Hermes 原生命令手动安装技能与插件：
+**Linux、macOS、WSL2**
+
+下载安装器并运行（不带参数即进入交互式菜单）：
 
 ```bash
-hermes skills install https://github.com/shawVV1992/workspace-guard/workspace-organization
-hermes plugins install https://github.com/shawVV1992/workspace-guard#workspace-guard --enable
+curl -fSLo install.sh https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh
+bash install.sh
+```
+
+**Windows（原生，PowerShell）**
+
+提醒：PowerShell 中的 `bash` 是 WSL 启动器——安装器会自动检测并静默改以
+Git Bash 重新运行，无需手动干预。若使用 WSL2，上面的 Linux 命令同样适用。
+
+在 PowerShell 中运行：
+
+```powershell
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh -o install.sh
+bash install.sh
 ```
 
 重启 Hermes 后守卫即开始生效。

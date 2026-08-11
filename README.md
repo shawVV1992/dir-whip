@@ -65,11 +65,27 @@ validation (validation uses the profile workspace memo).
 
 ### Quick Start (Human Users)
 
-Install skill and plugin manually with the native Hermes commands:
+**Linux, macOS, WSL2**
+
+Download the installer and run it (without arguments it opens the interactive
+menu):
 
 ```bash
-hermes skills install https://github.com/shawVV1992/workspace-guard/workspace-organization
-hermes plugins install https://github.com/shawVV1992/workspace-guard#workspace-guard --enable
+curl -fSLo install.sh https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh
+bash install.sh
+```
+
+**Windows (native, PowerShell)**
+
+Heads up: `bash` in PowerShell is the WSL launcher - the installer detects
+this and silently re-runs itself under Git Bash, so no manual step is needed.
+If you use WSL2, the Linux commands above work there too.
+
+Run this in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh -o install.sh
+bash install.sh
 ```
 
 The guard becomes active after the next Hermes restart.
