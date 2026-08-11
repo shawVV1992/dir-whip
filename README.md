@@ -21,7 +21,7 @@ unfindable, and intermediate files accumulate without a home.
   rules; the `workspace-guard` plugin blocks violations at write time
 - **Fail-open safety** - an unresolvable working directory disables the guard
   with a visible warning instead of breaking the agent
-- **One-shot installer** - `install.sh` installs skill + plugin together, per
+- **One-shot installer** - `workspace-guard_install.sh` installs skill + plugin together, per
   profile, idempotently, with dry-run previews
 - **Open source** - MIT licensed, no accounts, no telemetry
 
@@ -60,7 +60,7 @@ validation (validation uses the profile workspace memo).
 ### Requirements
 
 - Hermes with the `hermes skills` and `hermes plugins` commands
-- `bash` for `install.sh` (Git Bash on Windows, or WSL)
+- `bash` for `workspace-guard_install.sh` (Git Bash on Windows, or WSL)
 - Python 3 only if you run the bundled scripts directly
 
 ### Quick Start (Human Users)
@@ -71,8 +71,9 @@ Download the installer and run it (without arguments it opens the interactive
 menu):
 
 ```bash
-curl -fSLo install.sh https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh
-bash install.sh
+curl -fSLo workspace-guard_install.sh \
+  https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh
+bash workspace-guard_install.sh
 ```
 
 **Windows (native, PowerShell)**
@@ -84,8 +85,9 @@ If you use WSL2, the Linux commands above work there too.
 Run this in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh -o install.sh
-bash install.sh
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh `
+  -o workspace-guard_install.sh
+bash workspace-guard_install.sh
 ```
 
 The guard becomes active after the next Hermes restart.
@@ -97,26 +99,26 @@ The guard becomes active after the next Hermes restart.
 > menu: run `status` first, preview with `--dry-run`, then apply.
 
 ```bash
-bash install.sh status                 # check installed versions first
-bash install.sh install --dry-run      # preview the plan, change nothing
-bash install.sh install --all-profiles # apply
+bash workspace-guard_install.sh status                 # check installed versions first
+bash workspace-guard_install.sh install --dry-run      # preview the plan, change nothing
+bash workspace-guard_install.sh install --all-profiles # apply
 ```
 
 ### Install script
 
 ```bash
-bash install.sh status                     # per-profile installed versions
-bash install.sh install --all-profiles     # one-shot install/update
-bash install.sh install --profile default  # one profile
-bash install.sh install --dry-run          # show the plan, change nothing
-bash install.sh uninstall --all-profiles   # uninstall + delete config
-bash install.sh uninstall --profile default --keep-config
+bash workspace-guard_install.sh status                     # per-profile installed versions
+bash workspace-guard_install.sh install --all-profiles     # one-shot install/update
+bash workspace-guard_install.sh install --profile default  # one profile
+bash workspace-guard_install.sh install --dry-run          # show the plan, change nothing
+bash workspace-guard_install.sh uninstall --all-profiles   # uninstall + delete config
+bash workspace-guard_install.sh uninstall --profile default --keep-config
 ```
 
 **Environment detection**: the script routes by where you launch it from and
 configures only that environment's Hermes:
 
-- **Windows terminal** (PowerShell/CMD/Windows Terminal, `bash install.sh` -
+- **Windows terminal** (PowerShell/CMD/Windows Terminal, `bash workspace-guard_install.sh` -
   `bash` is the WSL launcher there): detected automatically, and the script
   silently re-runs itself under Git Bash to configure the Windows Hermes
   (`%LOCALAPPDATA%\hermes`).
@@ -133,7 +135,7 @@ Note:
     side) or `WG_TARGET=windows` (force the Windows side) to override the
     routing. Run with no arguments for the interactive menu.
 (2) Update = full overwrite (`--force` reinstall + config template + memo
-    rebuild on next restart). See `bash install.sh --help` for all flags.
+    rebuild on next restart). See `bash workspace-guard_install.sh --help` for all flags.
 
 ### Quick commands and tools
 

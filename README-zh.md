@@ -21,7 +21,7 @@ Hermes 智能体并不总能可靠地遵守文件放置规则：交付物散落�
   插件在写入时拦截违规
 - **失败放行安全**：工作目录无法解析时，守卫禁用自身并给出可见警告，
   而不是让智能体崩溃
-- **一键安装器**：`install.sh` 按档案同时安装技能与插件，幂等、支持
+- **一键安装器**：`workspace-guard_install.sh` 按档案同时安装技能与插件，幂等、支持
   dry-run 预览
 - **开源**：MIT 许可，无账号、无遥测
 
@@ -58,7 +58,7 @@ Hermes 智能体并不总能可靠地遵守文件放置规则：交付物散落�
 ### 前置要求
 
 - Hermes，含 `hermes skills` 与 `hermes plugins` 命令
-- 运行 `install.sh` 需要 `bash`（Windows 用 Git Bash，或 WSL）
+- 运行 `workspace-guard_install.sh` 需要 `bash`（Windows 用 Git Bash，或 WSL）
 - 只有直接运行捆绑脚本时才需要 Python 3
 
 ### 快速上手（人类用户）
@@ -68,8 +68,9 @@ Hermes 智能体并不总能可靠地遵守文件放置规则：交付物散落�
 下载安装器并运行（不带参数即进入交互式菜单）：
 
 ```bash
-curl -fSLo install.sh https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh
-bash install.sh
+curl -fSLo workspace-guard_install.sh \
+  https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh
+bash workspace-guard_install.sh
 ```
 
 **Windows（原生，PowerShell）**
@@ -80,8 +81,9 @@ Git Bash 重新运行，无需手动干预。若使用 WSL2，上面的 Linux �
 在 PowerShell 中运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/install.sh -o install.sh
-bash install.sh
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh `
+  -o workspace-guard_install.sh
+bash workspace-guard_install.sh
 ```
 
 重启 Hermes 后守卫即开始生效。
@@ -93,25 +95,25 @@ bash install.sh
 > 再执行。
 
 ```bash
-bash install.sh status                 # 先检查各档案已装版本
-bash install.sh install --dry-run      # 预览计划，不做任何更改
-bash install.sh install --all-profiles # 执行
+bash workspace-guard_install.sh status                 # 先检查各档案已装版本
+bash workspace-guard_install.sh install --dry-run      # 预览计划，不做任何更改
+bash workspace-guard_install.sh install --all-profiles # 执行
 ```
 
 ### 安装脚本
 
 ```bash
-bash install.sh status                     # 各档案已装版本
-bash install.sh install --all-profiles     # 一次性安装/更新全部档案
-bash install.sh install --profile default  # 单个档案
-bash install.sh install --dry-run          # 只显示计划，不做任何更改
-bash install.sh uninstall --all-profiles   # 卸载并删除配置
-bash install.sh uninstall --profile default --keep-config
+bash workspace-guard_install.sh status                     # 各档案已装版本
+bash workspace-guard_install.sh install --all-profiles     # 一次性安装/更新全部档案
+bash workspace-guard_install.sh install --profile default  # 单个档案
+bash workspace-guard_install.sh install --dry-run          # 只显示计划，不做任何更改
+bash workspace-guard_install.sh uninstall --all-profiles   # 卸载并删除配置
+bash workspace-guard_install.sh uninstall --profile default --keep-config
 ```
 
 **环境检测**：脚本按「运行入口」分流，只配置对应环境的 Hermes：
 
-- **Windows 终端**（PowerShell/CMD/Windows Terminal 敲 `bash install.sh`——
+- **Windows 终端**（PowerShell/CMD/Windows Terminal 敲 `bash workspace-guard_install.sh`——
   此处的 `bash` 即 WSL 启动器）：自动识别，随后静默自动以 Git Bash 重新
   执行，配置 Windows 侧 Hermes（`%LOCALAPPDATA%\hermes`）。
 - **WSL / Linux / macOS**（用户主动进入的 WSL 会话，或原生 Linux/macOS
@@ -120,7 +122,7 @@ bash install.sh uninstall --profile default --keep-config
 
 注意：
 （1）WSL 侧的 Hermes 与 Windows 侧的 Hermes 是两个独立的安装，互不干扰。可用 `WG_TARGET=wsl`（强制 WSL 侧）或 `WG_TARGET=windows`（强制 Windows 侧）覆盖分流。不带参数运行即进入交互式菜单。
-（2）更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash install.sh --help`。
+（2）更新 = 全量覆盖（`--force` 重装 + 配置模板 + 下次重启时重建备忘录）。所有参数见 `bash workspace-guard_install.sh --help`。
 
 ### 快捷命令与工具
 
