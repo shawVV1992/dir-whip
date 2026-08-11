@@ -85,8 +85,7 @@ If you use WSL2, the Linux commands above work there too.
 Run this in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh `
-  -o workspace-guard_install.sh
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh -o workspace-guard_install.sh
 bash workspace-guard_install.sh
 ```
 

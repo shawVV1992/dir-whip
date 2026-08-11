@@ -81,8 +81,7 @@ Git Bash 重新运行，无需手动干预。若使用 WSL2，上面的 Linux �
 在 PowerShell 中运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh `
-  -o workspace-guard_install.sh
+irm https://raw.githubusercontent.com/shawVV1992/workspace-guard/main/workspace-guard_install.sh -o workspace-guard_install.sh
 bash workspace-guard_install.sh
 ```
 
