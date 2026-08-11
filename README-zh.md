@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-[English](./README.md) | [中文版](./README.zh.md)
+[English](./README.md) | [中文版](./README-zh.md)
 
 本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
 

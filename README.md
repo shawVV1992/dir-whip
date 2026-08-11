@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-[中文版](./README.zh.md) | [English](./README.md)
+[中文版](./README-zh.md) | [English](./README.md)
 
 workspace-guard enforces file discipline for Hermes agent workspaces with two
 complementary layers - a skill that teaches agents the rules and a plugin that
