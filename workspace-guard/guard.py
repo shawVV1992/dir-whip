@@ -24,6 +24,7 @@ try:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
+        register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
         stats_end_session,
@@ -40,6 +41,7 @@ except ImportError:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
+        register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
         stats_end_session,
@@ -181,6 +183,8 @@ def register(ctx):
                 )
             except Exception as exc:
                 logger.warning("workspace-guard: register_tool failed: %s", exc)
+        # Spec 5.7 commands (status | stats | doctor) live in config.py (D3).
+        register_workspace_guard_commands(ctx)
         logger.debug("workspace-guard: registered successfully")
     except Exception as exc:
         logger.warning("workspace-guard: registration failed: %s", exc)

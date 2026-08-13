@@ -564,6 +564,45 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
             logger.debug("workspace-guard: stats write failed (ignored): %s", exc)
 
 
+def stats_jsonl_totals():
+    """Aggregate cross-session totals from stats.jsonl (5.13 D3; --all).
+
+    Reads every parseable JSON line under HERMES_HOME/workspace-guard/
+    stats.jsonl into the same {outcome: {tool: {rule_key: {is_subagent:
+    count}}}} shape as stats_snapshot(); unparseable lines are skipped.
+    Never raises (fail-open reading).
+    """
+    totals = {}
+    path = _stats_jsonl_path()
+    try:
+        if not path.is_file():
+            return totals
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                outcome = event.get("outcome")
+                tool = event.get("tool")
+                rule_key = event.get("rule_key")
+                if not outcome or not tool or not rule_key:
+                    continue
+                is_subagent = bool(event.get("is_subagent", False))
+                by_tool = totals.setdefault(outcome, {})
+                by_rule = by_tool.setdefault(tool, {})
+                counts = by_rule.setdefault(rule_key, {})
+                counts[is_subagent] = counts.get(is_subagent, 0) + 1
+    except Exception:
+        pass
+    return totals
+
+
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
@@ -620,3 +659,278 @@ def reset_cache():
     with _runtime_allowlist_lock:
         _runtime_allowlist.clear()
     stats_reset()
+
+
+# ---------------------------------------------------------------- Commands & diagnostics (spec 5.7)
+
+# The ctx captured by register_workspace_guard_commands; command handlers
+# read profile_name from it (the host invokes handlers as fn(raw_args)).
+_cmd_ctx = None
+
+
+def _get_cmd_ctx():
+    """The ctx captured at command registration (None when unregistered)."""
+    return _cmd_ctx
+
+
+def _resolution_source(ctx):
+    """The resolution-chain step that produces working_dir_root (5.5).
+
+    Mirrors resolve_working_dir_root's order: guard-config override ->
+    profile terminal.cwd -> fail-open. Source strings match the chain's
+    INFO log sources exactly.
+    """
+    try:
+        if load_guard_config().get("working_dir_root"):
+            return "guard-config"
+    except Exception:
+        pass
+    try:
+        profile = getattr(ctx, "profile_name", None)
+        if profile:
+            hermes_home = _get_hermes_home()
+            if profile == "default":
+                cfg_path = hermes_home / "config.yaml"
+            else:
+                cfg_path = hermes_home / "profiles" / profile / "config.yaml"
+            if parse_terminal_cwd(cfg_path):
+                return "profile-config"
+    except Exception:
+        pass
+    return "fail-open"
+
+
+def _profile_terminal_cwd(ctx):
+    """The current profile's terminal.cwd (None when unset/unparseable)."""
+    try:
+        profile = getattr(ctx, "profile_name", None)
+        if not profile:
+            return None
+        hermes_home = _get_hermes_home()
+        if profile == "default":
+            cfg_path = hermes_home / "config.yaml"
+        else:
+            cfg_path = hermes_home / "profiles" / profile / "config.yaml"
+        return parse_terminal_cwd(cfg_path)
+    except Exception:
+        return None
+
+
+def _paths_equal(a, b):
+    """Forward-slash path equality; case-insensitive on Windows."""
+    a = str(a).replace("\\", "/")
+    b = str(b).replace("\\", "/")
+    if os.name == "nt":
+        return a.casefold() == b.casefold()
+    return a == b
+
+
+def _guard_config_key_present(key):
+    """True when the key appears in guard-config.yaml (raw line scan)."""
+    try:
+        path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
+        if not path.is_file():
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        return re.search(r"^\s*%s\s*:" % re.escape(key), text, re.MULTILINE) is not None
+    except Exception:
+        return False
+
+
+def _stats_writable():
+    """Check stats.jsonl writability (doctor). Returns (ok, error)."""
+    path = _stats_jsonl_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return False, str(exc)
+    fd = None
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+
+
+def _cmd_status(raw_args=""):
+    """/workspace-guard status: effective config + resolving source (5.7).
+
+    One field per line; the source string matches the resolution chain
+    sources (guard-config / profile-config / fail-open). Never raises.
+    """
+    try:
+        ctx = _get_cmd_ctx()
+        root = resolve_working_dir_root(ctx)
+        cfg = load_guard_config()
+        if root:
+            root_line = "working_dir_root: %s" % root
+        else:
+            root_line = "working_dir_root: (unresolved)"
+        terminal_guard = "enabled" if cfg.get("terminal_guard", True) else "disabled"
+        exempts = cfg.get("exempt_paths", [])
+        allowed = cfg.get("allowed_root_files", [])
+        return (
+            "[workspace-guard] status\n"
+            "%s\n"
+            "source: %s\n"
+            "terminal_guard: %s\n"
+            "exempt_paths: %s\n"
+            "allowed_root_files: %s"
+            % (
+                root_line,
+                _resolution_source(ctx),
+                terminal_guard,
+                ", ".join(exempts) if exempts else "(none)",
+                ", ".join(allowed) if allowed else "(none)",
+            )
+        )
+    except Exception as exc:
+        return "[workspace-guard] status failed: %s" % exc
+
+
+def _format_counters(counters, subagent_only=False):
+    """Render counters to lines: <outcome>/<tool>/<rule_key>/<main|subagent>: n."""
+    lines = []
+    for outcome in sorted(counters):
+        for tool in sorted(counters[outcome]):
+            for rule_key in sorted(counters[outcome][tool]):
+                for is_subagent in sorted(counters[outcome][tool][rule_key]):
+                    if subagent_only and not is_subagent:
+                        continue
+                    lines.append(
+                        "%s/%s/%s/%s: %d"
+                        % (
+                            outcome, tool, rule_key,
+                            "subagent" if is_subagent else "main",
+                            counters[outcome][tool][rule_key][is_subagent],
+                        )
+                    )
+    return lines
+
+
+def _cmd_stats(raw_args=""):
+    """/workspace-guard stats [--all] [--subagent] (5.7/5.13 D3/D4).
+
+    Session counters by default; --all aggregates the persisted stats.jsonl
+    for cross-session totals; --subagent shows only subagent-split counts.
+    Never raises.
+    """
+    try:
+        tokens = (raw_args or "").strip().split()
+        use_all = "--all" in tokens
+        subagent_only = "--subagent" in tokens
+        if use_all:
+            counters = stats_jsonl_totals()
+        else:
+            counters = stats_snapshot()
+        lines = _format_counters(counters, subagent_only=subagent_only)
+        if not lines:
+            return "[workspace-guard] stats\n(no statistics recorded)"
+        return "[workspace-guard] stats\n" + "\n".join(lines)
+    except Exception as exc:
+        return "[workspace-guard] stats failed: %s" % exc
+
+
+def _cmd_doctor(raw_args=""):
+    """/workspace-guard doctor: configuration self-check (5.7).
+
+    Checks guard-config.yaml presence/keys, the resolution chain, and
+    stats.jsonl writability. Emits a clearly marked WARNING when an
+    explicit working_dir_root override differs from the current profile's
+    terminal.cwd (the Q6 footgun: desktop-settings edit masked by the
+    override). Never raises.
+    """
+    try:
+        ctx = _get_cmd_ctx()
+        lines = ["[workspace-guard] doctor"]
+
+        cfg_path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
+        if cfg_path.is_file():
+            lines.append("guard-config: OK")
+        else:
+            lines.append("guard-config: MISSING (defaults in effect)")
+
+        cfg = load_guard_config()
+        exempts = cfg.get("exempt_paths", [])
+        allowed = cfg.get("allowed_root_files", [])
+        if _guard_config_key_present("exempt_paths"):
+            lines.append("exempt_paths: OK (%d entries)" % len(exempts))
+        else:
+            lines.append("exempt_paths: MISSING (defaults to empty)")
+        if _guard_config_key_present("allowed_root_files"):
+            lines.append("allowed_root_files: OK (%d entries)" % len(allowed))
+        else:
+            lines.append("allowed_root_files: MISSING (strict empty whitelist)")
+        lines.append(
+            "terminal_guard: %s"
+            % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
+        )
+
+        root = resolve_working_dir_root(ctx)
+        if root:
+            lines.append("resolution: OK (%s via %s)" % (root, _resolution_source(ctx)))
+        else:
+            lines.append("resolution: FAIL-OPEN (guard disabled, source: fail-open)")
+
+        writable, error = _stats_writable()
+        if writable:
+            lines.append("stats.jsonl: writable")
+        else:
+            lines.append("stats.jsonl: NOT WRITABLE (%s)" % error)
+
+        # Q6 footgun: explicit override differs from the profile terminal.cwd.
+        override = cfg.get("working_dir_root")
+        if override:
+            profile_cwd = _profile_terminal_cwd(ctx)
+            if profile_cwd is not None and not _paths_equal(override, profile_cwd):
+                lines.append(
+                    "WARNING: guard-config working_dir_root (%s) differs from "
+                    "profile terminal.cwd (%s); the desktop-settings edit is "
+                    "masked by the override" % (override, profile_cwd)
+                )
+
+        return "\n".join(lines)
+    except Exception as exc:
+        return "[workspace-guard] doctor failed: %s" % exc
+
+
+def register_workspace_guard_commands(ctx):
+    """Register the /workspace-guard status|stats|doctor commands (5.7).
+
+    Command handlers live in config.py (D3); each subcommand is registered
+    as its own single-token slash command (Hermes dispatches on the first
+    token only). Guarded: a ctx without register_command still registers.
+    allow_path is a TOOL and is NOT registered here (guard.py registers it).
+    """
+    global _cmd_ctx
+    _cmd_ctx = ctx
+    if not hasattr(ctx, "register_command"):
+        return
+    try:
+        ctx.register_command(
+            "workspace-guard-status", _cmd_status,
+            description="Show effective config and resolving source",
+            args_hint="",
+        )
+        ctx.register_command(
+            "workspace-guard-stats", _cmd_stats,
+            description=(
+                "Show interception statistics (--all reads stats.jsonl for "
+                "cross-session totals; --subagent filters to subagent counts)"
+            ),
+            args_hint="[--all] [--subagent]",
+        )
+        ctx.register_command(
+            "workspace-guard-doctor", _cmd_doctor,
+            description="Configuration self-check",
+            args_hint="",
+        )
+    except Exception as exc:
+        logger.warning("workspace-guard: register_command failed: %s", exc)
