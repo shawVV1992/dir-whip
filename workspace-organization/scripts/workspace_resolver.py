@@ -36,7 +36,7 @@ import posixpath
 import re
 import sys
 
-MEMO_SUBDIR = "workspace-guard"
+GUARD_SUBDIR = "workspace-guard"
 CONFIG_FILE = "guard-config.yaml"
 
 # Fail-open warning (spec 4.4 step 4): exactly ONE concise stderr line,
@@ -92,11 +92,19 @@ def _msys_drive(path):
 def normalize_path(path):
     """Normalize a path for exact matching (SCR-006 rules).
 
-    Windows branch: MSYS mapping (/c/, //c/, /cygdrive/c/ -> drive
-    letter), then normpath; rooted-no-drive paths inherit the CWD drive;
-    forward slashes + casefold (case-insensitive filesystem). POSIX
-    branch: normpath identity (forward slashes). UNC paths are unaffected:
-    they carry their own drive and never match the MSYS forms.
+    Windows branch: MSYS mapping, then normpath; rooted-no-drive paths
+    inherit the CWD drive; forward slashes + casefold (case-insensitive
+    filesystem). POSIX branch: normpath identity (forward slashes).
+
+    MSYS mapping caveat (current semantics, consistent with guard.py's
+    SCR-006 legacy regex): /<letter>... and //<letter>... map to a drive
+    letter, so forward-slash forms are NOT reliably UNC-safe -- a
+    single-letter "server" such as //s/share is misread as drive S:
+    (S:/share). Multi-letter server names (//server/share) do not match
+    the regex (it requires a slash right after the letter) and pass
+    through unchanged. Only BACKSLASH UNC paths (\\\\server\\share) are
+    guaranteed unaffected -- they never match the MSYS forms. A
+    coordinated regex change is tracked separately (out of scope here).
     """
     path = os.fspath(path)
     if os.name == "nt":
@@ -208,15 +216,6 @@ def _is_within(child, root):
     return rel != ".." and not rel.startswith("../")
 
 
-def _log_resolved(source, root):
-    """One stderr line naming the resolution source (spec 5.5 pattern)."""
-    sys.stderr.write(
-        "[workspace-guard] Working Directory resolved from {}: {}\n".format(
-            source, root
-        )
-    )
-
-
 def resolve_working_dir_root(workspace=None, hh=None, env=None):
     """Resolve the Working Directory via the v0.2.0 layered chain (spec 4.4).
 
@@ -229,10 +228,15 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
          explicit `workspace` matches by normalized equality against R;
          otherwise the CWD matches by containment (equals a root /
          contained in exactly one root / longest root when nested).
-      4. fail-open: None + exactly ONE concise stderr WARNING.
+      4. Fail-open: None + exactly ONE concise stderr WARNING.
 
-    Emits a single stderr log line naming the source when a root
-    resolves. Returns the root (str) or None.
+    Return contract:
+      - resolved -> the root (str), stderr untouched (warning-free success);
+      - explicit `workspace` with candidates present but NO match -> None
+        with NO stderr output (boundary failure, caller-side exit 2);
+      - chain entirely unresolvable (no override, no session-profile
+        result, AND empty candidate set) -> None after ONE warning
+        (fail-open, caller-side fallback).
     """
     if env is None:
         env = os.environ
@@ -240,10 +244,9 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
         hh = hermes_home(env)
 
     # Step 1: guard-config working_dir_root (authoritative when set).
-    guard_cfg = os.path.join(hh, MEMO_SUBDIR, CONFIG_FILE)
+    guard_cfg = os.path.join(hh, GUARD_SUBDIR, CONFIG_FILE)
     root = _parse_yaml_scalar(guard_cfg, "working_dir_root")
     if root:
-        _log_resolved("guard-config", root)
         return root
 
     # Step 2: HERMES_SESSION_PROFILE -> profile config terminal.cwd.
@@ -255,31 +258,32 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
             profile_cfg = os.path.join(hh, "profiles", profile, "config.yaml")
         root = parse_terminal_cwd(profile_cfg)
         if root:
-            _log_resolved("HERMES_SESSION_PROFILE", root)
             return root
 
     # Step 3: candidate roots + path matching.
     candidates = _candidate_roots(hh, env)
-    if candidates:
-        if workspace is not None:
-            target_norm = normalize_path(workspace)
-            for root in candidates:
-                if normalize_path(root) == target_norm:
-                    _log_resolved("candidate roots", root)
-                    return root
-        else:
-            cwd = os.getcwd()
-            containing = [r for r in candidates if _is_within(cwd, r)]
-            if containing:
-                root = max(containing, key=lambda r: len(normalize_path(r)))
-                _log_resolved("candidate roots", root)
-                return root
-
-    # Step 4: fail-open.
     if workspace is not None:
-        sys.stderr.write(UNRESOLVED_WARNING_WORKSPACE)
-    else:
+        if not candidates:
+            # Step 4 fail-open: boundary entirely unresolvable.
+            sys.stderr.write(UNRESOLVED_WARNING_WORKSPACE)
+            return None
+        target_norm = normalize_path(workspace)
+        for root in candidates:
+            if normalize_path(root) == target_norm:
+                return root
+        # Candidates exist but --workspace matches none: boundary failure
+        # (caller exits 2). NO warning -- stderr stays clean.
+        return None
+    if not candidates:
+        # Step 4 fail-open: boundary entirely unresolvable.
         sys.stderr.write(UNRESOLVED_WARNING_CWD)
+        return None
+    cwd = os.getcwd()
+    containing = [r for r in candidates if _is_within(cwd, r)]
+    if containing:
+        return max(containing, key=lambda r: len(normalize_path(r)))
+    # CWD not contained in any candidate root: fail-open.
+    sys.stderr.write(UNRESOLVED_WARNING_CWD)
     return None
 
 
@@ -346,7 +350,7 @@ def allowed_root_files(hh=None):
     """
     if hh is None:
         hh = hermes_home()
-    path = os.path.join(hh, MEMO_SUBDIR, CONFIG_FILE)
+    path = os.path.join(hh, GUARD_SUBDIR, CONFIG_FILE)
     try:
         import yaml  # noqa: PLC0415 -- optional dependency, fallback below
 
@@ -363,17 +367,29 @@ def validate_workspace(path, hh=None, env=None):
     """Boundary validation of an explicit --workspace (spec 4.4).
 
     Existence check FIRST; then normalized equality against the resolved
-    Working Directory; fail-open (True, None) with exactly ONE stderr
-    WARNING when the root cannot be resolved (emitted by
-    resolve_working_dir_root).
+    Working Directory. Returns (bool, reason):
 
-    Returns (bool, reason): (True, None) when usable, (False, reason) on
-    boundary failure. Exit-code mapping is caller-side.
+      - (True, None) when usable, including the fail-open fallback when
+        the boundary is entirely unresolvable (the ONE stderr WARNING is
+        emitted by resolve_working_dir_root);
+      - (False, reason) on boundary failure: non-existent directory, or
+        the explicit --workspace does not equal the resolved root / any
+        candidate root (stderr stays clean).
+
+    Exit-code mapping is caller-side.
     """
     if not os.path.isdir(path):
         return False, "directory does not exist"
+    if hh is None:
+        if env is None:
+            env = os.environ
+        hh = hermes_home(env)
     root = resolve_working_dir_root(workspace=path, hh=hh, env=env)
     if root is None:
+        if _candidate_roots(hh, env):
+            # Candidates exist but --workspace matched none: boundary
+            # failure, no warning (resolve already kept stderr clean).
+            return False, WORKSPACE_MISMATCH_MESSAGE
         return True, None
     if normalize_path(path) == normalize_path(root):
         return True, None
