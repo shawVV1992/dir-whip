@@ -279,10 +279,7 @@ def resolve_working_dir_root(ctx, config_path=None):
         profile = getattr(ctx, "profile_name", None)
         if profile:
             hermes_home = _get_hermes_home()
-            if profile == "default":
-                cfg_path = hermes_home / "config.yaml"
-            else:
-                cfg_path = hermes_home / "profiles" / profile / "config.yaml"
+            cfg_path = _profile_config_path(hermes_home, profile)
             cwd = parse_terminal_cwd(cfg_path)
             if cwd:
                 logger.info(
@@ -700,6 +697,23 @@ def _resolution_source(ctx):
     return "fail-open"
 
 
+def _profile_config_path(hermes_home, profile):
+    """Path to a profile's config.yaml, aware of both home layouts (SCR-026).
+
+    At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
+    non-default profiles (e.g. HERMES_HOME=.../profiles/learn), while tests
+    and some hosts keep HERMES_HOME at the root with named profiles under
+    .../profiles/<name>/. Detect the layout by path shape: when hermes_home
+    already IS the profile dir (name == profile, parent == "profiles"), the
+    profile config is hermes_home/config.yaml.
+    """
+    if not profile or profile == "default":
+        return hermes_home / "config.yaml"
+    if hermes_home.name == profile and hermes_home.parent.name == "profiles":
+        return hermes_home / "config.yaml"
+    return hermes_home / "profiles" / profile / "config.yaml"
+
+
 def _profile_terminal_cwd(ctx):
     """The current profile's terminal.cwd (None when unset/unparseable)."""
     try:
@@ -707,10 +721,7 @@ def _profile_terminal_cwd(ctx):
         if not profile:
             return None
         hermes_home = _get_hermes_home()
-        if profile == "default":
-            cfg_path = hermes_home / "config.yaml"
-        else:
-            cfg_path = hermes_home / "profiles" / profile / "config.yaml"
+        cfg_path = _profile_config_path(hermes_home, profile)
         return parse_terminal_cwd(cfg_path)
     except Exception:
         return None

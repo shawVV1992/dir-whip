@@ -216,6 +216,25 @@ def _is_within(child, root):
     return rel != ".." and not rel.startswith("../")
 
 
+def _profile_config_path(hh, profile):
+    """Profile config path aware of both home layouts (SCR-026).
+
+    At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
+    non-default profiles (e.g. HERMES_HOME=.../profiles/learn); tests keep
+    HERMES_HOME at the root with named profiles under profiles/<name>/.
+    Detect the layout by path shape: when hh already IS the profile dir
+    (basename == profile, parent basename == "profiles"), the profile
+    config is hh/config.yaml.
+    """
+    if not profile or profile == "default":
+        return os.path.join(hh, "config.yaml")
+    norm = os.path.normpath(str(hh))
+    if (os.path.basename(norm) == profile
+            and os.path.basename(os.path.dirname(norm)) == "profiles"):
+        return os.path.join(hh, "config.yaml")
+    return os.path.join(hh, "profiles", profile, "config.yaml")
+
+
 def resolve_working_dir_root(workspace=None, hh=None, env=None):
     """Resolve the Working Directory via the v0.2.0 layered chain (spec 4.4).
 
@@ -252,10 +271,7 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     # Step 2: HERMES_SESSION_PROFILE -> profile config terminal.cwd.
     profile = (env.get("HERMES_SESSION_PROFILE") or "").strip()
     if profile:
-        if profile == "default":
-            profile_cfg = os.path.join(hh, "config.yaml")
-        else:
-            profile_cfg = os.path.join(hh, "profiles", profile, "config.yaml")
+        profile_cfg = _profile_config_path(hh, profile)
         root = parse_terminal_cwd(profile_cfg)
         if root:
             return root
