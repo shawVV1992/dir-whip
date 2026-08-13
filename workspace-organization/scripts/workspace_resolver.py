@@ -1,184 +1,286 @@
 #!/usr/bin/env python3
-"""S0: Shared READ-ONLY workspace resolver (SCR-011).
+"""S0: Shared READ-ONLY workspace resolver (v0.2.0, spec 4.4).
 
-Shared memo/config access module imported by all four scripts
-(create_session_dir.py, audit_workspace.py, clean_tmp.py, init_workspace.py).
-Breaks the "no cross-imports between scripts" rule -- documented exception in
-engineering-constraints.md section 4 (SCR-011, 2026-08-09).
+Shared Working Directory resolution module imported by the two session
+scripts (create_session_dir.py, audit_workspace.py) -- the ONLY
+cross-import exception (engineering-constraints SCR-011).
 
-READ-ONLY by design: this module never writes or rebuilds the profile
-workspace memo (no save_memo, no rebuild, no hermes_cli). The plugin
-(config.py) is the memo's SOLE writer (sync_memo() + the
-workspace_guard_register_workspace tool). The skill consumes the memo
-through this module only.
+READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no
+rebuild, no hermes_cli import). Resolves the current profile's Working
+Directory with the v0.2.0 layered chain (spec 4.4):
 
-Memo schema (unchanged, SCR-001):
-    {"synced_at": iso, "profiles": {name: {"workspace", "status",
-    "changed_at"}}}
+    1. guard-config.yaml working_dir_root (explicit, authoritative)
+    2. HERMES_SESSION_PROFILE -> profile config.yaml terminal.cwd
+    3. profile enumeration + TERMINAL_CWD candidate roots, path matching
+    4. fail-open: None + exactly ONE concise stderr WARNING
+
+Self-contained: stdlib only, no PyYAML (absent from the venv) -- config
+parsing is minimal line-based, mirroring the plugin fallback parser
+(workspace-guard/config.py _parse_terminal_cwd_fallback).
 
 Functions:
-    hermes_home()           -- Hermes home dir (HERMES_HOME env override
-                               first; Windows LOCALAPPDATA/hermes, POSIX
-                               ~/.hermes)
-    read_memo(hh)           -- memo dict or None (missing/corrupt)
-    plugin_trace(hh)        -- True iff <hh>/workspace-guard/ exists (plugin
-                               installed/configured) -- gates the standalone
-                               fallback
-    profile_workspace(name, memo) -- one profile's workspace value
-    list_workspaces(memo)   -- all profile workspace values
-    normalize_path(path)    -- separator + case normalization (Windows
-                               casefold, POSIX exact) for exact matching
-    add_profile_arg(parser) -- shared --profile CLI argument
-    allowed_root_files(hh)  -- root-file whitelist from guard-config.yaml
-                               (allowed_root_files); STRICT fallback when the
-                               config/key is absent: empty whitelist -> every
-                               root file flagged (fail-closed, over-report)
-    validate_workspace(path, hh) -- memo-based validation flow (SCR-011 2.4)
-                               with plugin-trace detection and standalone
-                               fallback
+    hermes_home()            -- Hermes home (HERMES_HOME override first;
+                               Windows LOCALAPPDATA/hermes, POSIX ~/.hermes)
+    normalize_path(path)     -- SCR-006 normalization for exact matching
+                               (MSYS mapping, drive inheritance, normpath;
+                               POSIX normpath identity; UNC unaffected)
+    parse_terminal_cwd(path) -- minimal terminal.cwd parser for config.yaml
+    allowed_root_files(hh)   -- guard-config allowed_root_files whitelist
+                               (strict EMPTY list when absent; shared audit)
+    resolve_working_dir_root(workspace, hh, env) -- 4-step chain (spec 4.4)
+    validate_workspace(path, hh, env) -- boundary validation (spec 4.4)
 """
 
-import json
 import os
+import posixpath
+import re
 import sys
 
 MEMO_SUBDIR = "workspace-guard"
-MEMO_FILE = "profile-workspaces.json"
 CONFIG_FILE = "guard-config.yaml"
 
-# Standalone warning: emitted to stderr on EVERY invocation (safety/audit
-# net). Never pollutes stdout or --gate JSON. The user-facing explanation
-# happens once per session via SKILL.md teaching.
-STANDALONE_WARNING = (
-    "warning: memo unavailable and no workspace-guard plugin detected; "
-    "standalone mode (trusting the provided --workspace)\n"
+# Fail-open warning (spec 4.4 step 4): exactly ONE concise stderr line,
+# never pollutes stdout.
+UNRESOLVED_WARNING_WORKSPACE = (
+    "[workspace-guard] Working Directory unresolved, using the provided --workspace\n"
+)
+UNRESOLVED_WARNING_CWD = (
+    "[workspace-guard] Working Directory unresolved, using the current directory\n"
 )
 
-# Fail-closed messages (exit code 2 paths).
-MEMO_MISS_MESSAGE = (
-    "not a registered profile workspace (if this is a new workspace, "
-    "register it via the workspace_guard_register_workspace tool)"
-)
-PLUGIN_MEMO_MISSING_MESSAGE = (
-    "plugin detected but memo unavailable; run /workspace-guard "
-    "workspace_update to rebuild it"
+WORKSPACE_MISMATCH_MESSAGE = (
+    "--workspace does not match the resolved Working Directory"
 )
 
+_MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
+_CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 
-def hermes_home():
+
+def hermes_home(env=None):
     """Return the Hermes home directory path.
 
     HERMES_HOME environment variable wins when set (Hermes' canonical
     override, used by tests to isolate from any real installation);
-    otherwise Windows: LOCALAPPDATA/hermes, POSIX: ~/.hermes.
+    otherwise Windows: LOCALAPPDATA/hermes, POSIX: ~/.hermes. `env`
+    overrides os.environ (test isolation).
     """
-    env_home = os.environ.get("HERMES_HOME", "").strip()
+    if env is None:
+        env = os.environ
+    env_home = (env.get("HERMES_HOME") or "").strip()
     if env_home:
         return env_home
     if os.name == "nt":
-        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
+        return os.path.join(env.get("LOCALAPPDATA", ""), "hermes")
     return os.path.join(os.path.expanduser("~"), ".hermes")
 
 
-def _memo_path(hh):
-    """Memo file location under a Hermes home."""
-    return os.path.join(hh, MEMO_SUBDIR, MEMO_FILE)
+def _msys_drive(path):
+    """Map an MSYS-style forward-slash path to a drive-letter form.
 
-
-def read_memo(hh=None):
-    """Load the profile workspace memo; None on missing/corrupt.
-
-    Read-only: never creates or repairs the file. Corrupt JSON returns
-    None (the caller decides between standalone fallback and fail-closed
-    via plugin_trace()). Unlike the plugin's fail-open load_memo, this
-    module does NOT fall back to the .bak copy -- a corrupt memo is a
-    plugin-side problem, and the scripts surface it (fail-closed with a
-    workspace_update prompt) instead of silently using stale data.
+    Handles /c/, //c/ and /cygdrive/c/ (any drive-letter case, output
+    uppercased). Returns None when the path is not an MSYS form.
     """
-    if hh is None:
-        hh = hermes_home()
-    try:
-        with open(_memo_path(hh), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return None
-        profiles = data.get("profiles")
-        if not isinstance(profiles, dict):
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def plugin_trace(hh=None):
-    """True iff the plugin is installed/configured for this Hermes home.
-
-    The plugin keeps its shared state (memo + runtime config) under
-    <HERMES_HOME>/workspace-guard/; that directory existing is the
-    plugin-presence heuristic that gates the standalone fallback
-    (SCR-011 2.4).
-    """
-    if hh is None:
-        hh = hermes_home()
-    return os.path.isdir(os.path.join(hh, MEMO_SUBDIR))
-
-
-def profile_workspace(name, memo=None):
-    """Return one profile's workspace value; None when absent/invalid."""
-    if memo is None:
-        memo = read_memo()
-    if not isinstance(memo, dict):
-        return None
-    entry = memo.get("profiles", {}).get(name)
-    if not isinstance(entry, dict):
-        return None
-    ws = entry.get("workspace")
-    return ws if isinstance(ws, str) and ws else None
-
-
-def list_workspaces(memo=None):
-    """All profile workspace values ([] when no memo).
-
-    Includes every non-empty workspace string (sync_memo records None for
-    invalid profiles, so this is effectively the valid set).
-    """
-    if memo is None:
-        memo = read_memo()
-    if not isinstance(memo, dict):
-        return []
-    out = []
-    for entry in memo.get("profiles", {}).values():
-        if not isinstance(entry, dict):
-            continue
-        ws = entry.get("workspace")
-        if isinstance(ws, str) and ws:
-            out.append(ws)
-    return out
+    m = _MSYS_DRIVE_RE.match(path)
+    if m:
+        return "{}:/{}".format(m.group(1).upper(), m.group(2) or "")
+    m = _CYGWIN_DRIVE_RE.match(path)
+    if m:
+        return "{}:/{}".format(m.group(1).upper(), m.group(2) or "")
+    return None
 
 
 def normalize_path(path):
-    """Normalize a path for exact matching (SCR-011 2.2).
+    """Normalize a path for exact matching (SCR-006 rules).
 
-    Absolute + normpath + forward slashes; Windows also casefolds
-    (case-insensitive filesystem). POSIX keeps exact comparison.
+    Windows branch: MSYS mapping (/c/, //c/, /cygdrive/c/ -> drive
+    letter), then normpath; rooted-no-drive paths inherit the CWD drive;
+    forward slashes + casefold (case-insensitive filesystem). POSIX
+    branch: normpath identity (forward slashes). UNC paths are unaffected:
+    they carry their own drive and never match the MSYS forms.
     """
-    norm = os.path.abspath(os.path.normpath(path)).replace("\\", "/")
+    path = os.fspath(path)
     if os.name == "nt":
-        norm = norm.casefold()
-    return norm
+        mapped = _msys_drive(path)
+        if mapped is not None:
+            path = mapped
+        norm = os.path.normpath(path)
+        if not os.path.splitdrive(norm)[0] and os.path.isabs(norm):
+            drive = os.path.splitdrive(os.getcwd())[0]
+            if drive:
+                norm = drive + norm
+        return norm.replace("\\", "/").casefold()
+    return os.path.normpath(path).replace("\\", "/")
 
 
-def add_profile_arg(parser):
-    """Add the shared --profile argument to a script's argparse parser.
+def parse_terminal_cwd(config_path):
+    """Parse terminal.cwd from a Hermes config.yaml (minimal parser).
 
-    When provided, validation matches only that profile's workspace
-    (narrow-match); without it, any registered profile workspace matches.
+    Mirrors workspace-guard/config.py _parse_terminal_cwd_fallback: the
+    `terminal:` block starts at column 0, `cwd:` is read inside it,
+    quoted values are stripped; empty/placeholder value -> None;
+    missing/unreadable file -> None.
     """
-    parser.add_argument(
-        "--profile",
-        default=None,
-        help="Profile name for memo workspace matching (optional; default: any profile).",
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+    in_terminal = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "terminal:":
+            in_terminal = True
+            continue
+        if in_terminal:
+            if stripped.startswith("cwd:"):
+                value = stripped[4:].strip().strip("'\"")
+                return value if value else None
+            if not line.startswith(" ") and not line.startswith("\t"):
+                in_terminal = False
+    return None
+
+
+def _parse_yaml_scalar(path, key):
+    """Minimal line-based parser for a top-level scalar YAML key.
+
+    The key must start at column 0 (comments and indented keys are
+    skipped); quoted values are stripped; empty/missing -> None.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+    prefix = key + ":"
+    for line in lines:
+        if line.startswith(prefix):
+            value = line[len(prefix):].strip().strip("'\"")
+            return value if value else None
+    return None
+
+
+def _profile_config_paths(hh):
+    """Yield (name, config_path) for the default and named profiles."""
+    default_cfg = os.path.join(hh, "config.yaml")
+    if os.path.isfile(default_cfg):
+        yield "default", default_cfg
+    profiles_dir = os.path.join(hh, "profiles")
+    try:
+        names = sorted(os.listdir(profiles_dir))
+    except Exception:
+        return
+    for name in names:
+        cfg = os.path.join(profiles_dir, name, "config.yaml")
+        if os.path.isfile(cfg):
+            yield name, cfg
+
+
+def _candidate_roots(hh, env=None):
+    """Candidate roots R: every profile's terminal.cwd + TERMINAL_CWD.
+
+    TERMINAL_CWD joins as a candidate root ONLY (spec 4.4 step 3) -- it
+    is never a config-source step. Empty/placeholder cwd values are
+    skipped; duplicates are deduped after normalization.
+    """
+    if env is None:
+        env = os.environ
+    roots = []
+    for _name, cfg in _profile_config_paths(hh):
+        cwd = parse_terminal_cwd(cfg)
+        if cwd:
+            roots.append(cwd)
+    terminal_cwd = (env.get("TERMINAL_CWD") or "").strip()
+    if terminal_cwd:
+        roots.append(terminal_cwd)
+    seen = set()
+    out = []
+    for root in roots:
+        norm = normalize_path(root)
+        if norm not in seen:
+            seen.add(norm)
+            out.append(root)
+    return out
+
+
+def _is_within(child, root):
+    """True iff normalized child equals or nests inside normalized root."""
+    rel = posixpath.relpath(normalize_path(child), normalize_path(root))
+    return rel != ".." and not rel.startswith("../")
+
+
+def _log_resolved(source, root):
+    """One stderr line naming the resolution source (spec 5.5 pattern)."""
+    sys.stderr.write(
+        "[workspace-guard] Working Directory resolved from {}: {}\n".format(
+            source, root
+        )
     )
+
+
+def resolve_working_dir_root(workspace=None, hh=None, env=None):
+    """Resolve the Working Directory via the v0.2.0 layered chain (spec 4.4).
+
+    Chain order:
+      1. guard-config.yaml working_dir_root (authoritative when set)
+      2. HERMES_SESSION_PROFILE -> HERMES_HOME/(config.yaml for "default"
+         | profiles/<name>/config.yaml) terminal.cwd
+      3. Profile enumeration + path matching: candidate roots R =
+         {every profile's terminal.cwd} + {TERMINAL_CWD if set}. An
+         explicit `workspace` matches by normalized equality against R;
+         otherwise the CWD matches by containment (equals a root /
+         contained in exactly one root / longest root when nested).
+      4. fail-open: None + exactly ONE concise stderr WARNING.
+
+    Emits a single stderr log line naming the source when a root
+    resolves. Returns the root (str) or None.
+    """
+    if env is None:
+        env = os.environ
+    if hh is None:
+        hh = hermes_home(env)
+
+    # Step 1: guard-config working_dir_root (authoritative when set).
+    guard_cfg = os.path.join(hh, MEMO_SUBDIR, CONFIG_FILE)
+    root = _parse_yaml_scalar(guard_cfg, "working_dir_root")
+    if root:
+        _log_resolved("guard-config", root)
+        return root
+
+    # Step 2: HERMES_SESSION_PROFILE -> profile config terminal.cwd.
+    profile = (env.get("HERMES_SESSION_PROFILE") or "").strip()
+    if profile:
+        if profile == "default":
+            profile_cfg = os.path.join(hh, "config.yaml")
+        else:
+            profile_cfg = os.path.join(hh, "profiles", profile, "config.yaml")
+        root = parse_terminal_cwd(profile_cfg)
+        if root:
+            _log_resolved("HERMES_SESSION_PROFILE", root)
+            return root
+
+    # Step 3: candidate roots + path matching.
+    candidates = _candidate_roots(hh, env)
+    if candidates:
+        if workspace is not None:
+            target_norm = normalize_path(workspace)
+            for root in candidates:
+                if normalize_path(root) == target_norm:
+                    _log_resolved("candidate roots", root)
+                    return root
+        else:
+            cwd = os.getcwd()
+            containing = [r for r in candidates if _is_within(cwd, r)]
+            if containing:
+                root = max(containing, key=lambda r: len(normalize_path(r)))
+                _log_resolved("candidate roots", root)
+                return root
+
+    # Step 4: fail-open.
+    if workspace is not None:
+        sys.stderr.write(UNRESOLVED_WARNING_WORKSPACE)
+    else:
+        sys.stderr.write(UNRESOLVED_WARNING_CWD)
+    return None
 
 
 def _parse_allowed_root_files_yaml(data):
@@ -257,39 +359,22 @@ def allowed_root_files(hh=None):
         return []
 
 
-def validate_workspace(path, hh=None, profile=None):
-    """Memo-based workspace validation flow (SCR-011 2.4).
+def validate_workspace(path, hh=None, env=None):
+    """Boundary validation of an explicit --workspace (spec 4.4).
 
-    Assumes the caller already verified the target directory exists (exit
-    code mapping for a missing directory differs per script: 1 in
-    create_session_dir, 2 in audit_workspace / clean_tmp).
+    Existence check FIRST; then normalized equality against the resolved
+    Working Directory; fail-open (True, None) with exactly ONE stderr
+    WARNING when the root cannot be resolved (emitted by
+    resolve_working_dir_root).
 
-    Returns (True, None) when the target is usable:
-      - memo readable and the normalized target exactly matches a profile
-        workspace (the `profile` narrow-match when given, any profile
-        otherwise); or
-      - memo missing/corrupt AND no plugin trace -> standalone fallback
-        (trust the provided path; emits ONE concise stderr warning).
-    Returns (False, reason) when fail-closed:
-      - memo readable but no exact match (message includes the
-        registration-missing prompt); or
-      - memo missing/corrupt but the plugin is present (prompt to run
-        /workspace-guard workspace_update).
+    Returns (bool, reason): (True, None) when usable, (False, reason) on
+    boundary failure. Exit-code mapping is caller-side.
     """
-    if hh is None:
-        hh = hermes_home()
-    memo = read_memo(hh)
-    if memo is not None:
-        target_norm = normalize_path(path)
-        if profile:
-            candidates = [profile_workspace(profile, memo)] if profile_workspace(profile, memo) else []
-        else:
-            candidates = list_workspaces(memo)
-        for ws in candidates:
-            if target_norm == normalize_path(ws):
-                return True, None
-        return False, MEMO_MISS_MESSAGE
-    if plugin_trace(hh):
-        return False, PLUGIN_MEMO_MISSING_MESSAGE
-    sys.stderr.write(STANDALONE_WARNING)
-    return True, None
+    if not os.path.isdir(path):
+        return False, "directory does not exist"
+    root = resolve_working_dir_root(workspace=path, hh=hh, env=env)
+    if root is None:
+        return True, None
+    if normalize_path(path) == normalize_path(root):
+        return True, None
+    return False, WORKSPACE_MISMATCH_MESSAGE
