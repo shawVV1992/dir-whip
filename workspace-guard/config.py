@@ -1,11 +1,20 @@
-"""Configuration loading and working_dir_root resolution for workspace-guard."""
+"""Configuration loading, working_dir_root resolution and statistics for
+workspace-guard (v0.2.0).
 
+Inverted resolution chain (spec 5.5): guard-config.yaml working_dir_root
+override (authoritative) -> current profile's terminal.cwd -> fail-open
+(guard disabled). The v0.1.0 memo chain is removed (spec 1.3/B4); the sole
+surviving tool is workspace_guard_allow_path (spec 5.7). hermes_home honors
+the HERMES_HOME env override before the platform default (D5).
+"""
+
+import copy
 import datetime
+import hashlib
 import json
 import logging
 import os
 import re
-import shutil
 import threading
 from pathlib import Path
 
@@ -13,19 +22,13 @@ logger = logging.getLogger("workspace-guard")
 
 SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 
-# hermes_cli is a Hermes runtime package; absent in the test venv. Guarded
-# module-level import so config.py never crashes when it is unavailable
-# (fail-open: callers treat a missing hermes_cli as "no profiles to sync").
-# set_config_value backs the SCR-011 registration tool's config-first step;
-# when hermes_cli is absent the tool rejects (never writes the memo).
+# plugins.plugin_utils is a Hermes runtime package; absent in the test venv.
+# Guarded module-level import so config.py never crashes when unavailable
+# (fail-open: get_cached_config degrades to a local lock-guarded cache).
 try:
-    from hermes_cli.profiles import list_profiles
-    from hermes_cli.config import read_user_config_raw
-    from hermes_cli.config import set_config_value
+    from plugins.plugin_utils import lazy_singleton
 except Exception:
-    list_profiles = None
-    read_user_config_raw = None
-    set_config_value = None
+    lazy_singleton = None
 
 _cache_lock = threading.Lock()
 _cached_result = None
@@ -34,9 +37,20 @@ _cache_initialized = False
 _runtime_allowlist = set()
 _runtime_allowlist_lock = threading.Lock()
 
+# Register-time resolution context (spec 5.5: resolved ONCE at register()).
+_register_ctx = None
+_register_config_path = None
+
 
 def _get_hermes_home():
-    """Return the Hermes home directory path."""
+    """Return the Hermes home directory path (D5).
+
+    HERMES_HOME environment override FIRST, then the platform default:
+    Windows LOCALAPPDATA/hermes, POSIX ~/.hermes.
+    """
+    env_home = os.environ.get("HERMES_HOME")
+    if env_home:
+        return Path(env_home)
     if os.name == "nt":
         return Path(os.environ.get("LOCALAPPDATA", "")) / "hermes"
     return Path.home() / ".hermes"
@@ -117,7 +131,7 @@ def terminal_guard_enabled(config_path=None):
 
 
 def _parse_allowed_root_files(value):
-    """Parse the allowed_root_files config value (SCR-011, D1).
+    """Parse the allowed_root_files config value (spec 5.6, D1).
 
     Accepts a YAML list; only string elements are kept. STRICT fallback:
     None / non-list / empty -> [] (every root file blocks, fail-closed).
@@ -235,20 +249,36 @@ def _load_guard_config_fallback(config_path):
 
 
 def resolve_working_dir_root(ctx, config_path=None):
-    """Resolve the Default Working Directory for the current profile.
+    """Resolve the Working Directory for the current profile (spec 5.5).
 
-    Degradation chain:
-    1. ctx.profile_name -> profile config terminal.cwd
-    2. TERMINAL_CWD environment variable
-    3. guard-config.yaml working_dir_root
-    4. fail-open (return None -> guard disabled)
+    Inverted 3-step chain (plugin side — deliberately different from the
+    script-side 4-step chain in workspace_resolver.py):
+    1. guard-config.yaml explicit working_dir_root -> authoritative when set
+    2. current profile terminal.cwd: HERMES_HOME/config.yaml for "default",
+       else HERMES_HOME/profiles/<name>/config.yaml (ctx.profile_name)
+    3. fail-open: WARNING + None (guard disabled)
+
+    The TERMINAL_CWD / HERMES_SESSION_PROFILE env steps are REMOVED on the
+    plugin side. Resolution happens ONCE at register() (cached via
+    get_cached_config); None -> all guard checks allow.
     """
-    hermes_home = _get_hermes_home()
+    # 1. guard-config.yaml explicit value (authoritative when set)
+    try:
+        cfg = load_guard_config(config_path)
+        root = cfg.get("working_dir_root")
+        if root:
+            logger.info(
+                "workspace-guard: working_dir_root resolved from guard-config: %s", root
+            )
+            return root
+    except Exception:
+        pass
 
-    # 1. Profile config
+    # 2. current profile's terminal.cwd (fallback)
     try:
         profile = getattr(ctx, "profile_name", None)
         if profile:
+            hermes_home = _get_hermes_home()
             if profile == "default":
                 cfg_path = hermes_home / "config.yaml"
             else:
@@ -256,40 +286,20 @@ def resolve_working_dir_root(ctx, config_path=None):
             cwd = parse_terminal_cwd(cfg_path)
             if cwd:
                 logger.info(
-                    "workspace-guard: working_dir_root resolved from "
-                    "profile-config: %s", cwd
+                    "workspace-guard: working_dir_root resolved from profile-config: %s",
+                    cwd,
                 )
                 return cwd
     except Exception:
         pass
 
-    # 2. Environment variable
-    env_cwd = os.environ.get("TERMINAL_CWD")
-    if env_cwd:
-        logger.info(
-            "workspace-guard: working_dir_root resolved from env: %s", env_cwd
-        )
-        return env_cwd
-
-    # 3. Plugin guard-config.yaml
-    try:
-        cfg = load_guard_config(config_path)
-        if cfg.get("working_dir_root"):
-            logger.info(
-                "workspace-guard: working_dir_root resolved from "
-                "guard-config: %s", cfg["working_dir_root"]
-            )
-            return cfg["working_dir_root"]
-    except Exception:
-        pass
-
-    # 4. Fail-open
+    # 3. Fail-open: guard disabled
     logger.warning("workspace-guard: cannot resolve working_dir_root, guard disabled")
     return None
 
 
 def is_inside_session_dir(path, working_dir_root):
-    """Check if path is under working_dir_root/<session_dir>/..."""
+    """Check if path is under working_dir_root/<session_dir>/... (spec 5.9)."""
     try:
         rel = os.path.relpath(path, working_dir_root)
     except ValueError:
@@ -305,184 +315,24 @@ def is_inside_session_dir(path, working_dir_root):
 
 
 def is_exempt(target_path, exempt_paths):
-    """Check if target_path matches any exempt path (prefix match, forward slashes)."""
-    normalized = target_path.replace("\\", "/")
+    """Check if target_path matches any exempt path (spec 5.6).
+
+    Prefix match on forward-slash-normalized paths; case-insensitive on
+    Windows via casefold (SCR-006).
+    """
+    normalized = str(target_path).replace("\\", "/")
+    if os.name == "nt":
+        normalized = normalized.casefold()
     for exempt in exempt_paths:
-        exempt_normalized = exempt.replace("\\", "/")
+        exempt_normalized = str(exempt).replace("\\", "/")
+        if os.name == "nt":
+            exempt_normalized = exempt_normalized.casefold()
         if normalized.startswith(exempt_normalized):
             return True
     return False
 
 
-# ---------------------------------------------------------------- Profile workspace memo (SCR-001)
-
-MEMO_SUBDIR = "workspace-guard"
-MEMO_FILE = "profile-workspaces.json"
-
-
-def _memo_path(hermes_home):
-    """Memo location: <hermes_home>/workspace-guard/profile-workspaces.json."""
-    return Path(hermes_home) / MEMO_SUBDIR / MEMO_FILE
-
-
-def _memo_bak_path(hermes_home):
-    """Backup copy of the memo for corruption recovery."""
-    return Path(hermes_home) / MEMO_SUBDIR / (MEMO_FILE + ".bak")
-
-
-def _empty_memo():
-    """Fail-open memo shape: no synced_at, no profiles."""
-    return {"synced_at": None, "profiles": {}}
-
-
-def _read_memo_file(path):
-    """Read and validate a memo JSON file; None on any failure."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return None
-        profiles = data.get("profiles")
-        if profiles is None:
-            data["profiles"] = {}
-        elif not isinstance(profiles, dict):
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def load_memo(hermes_home=None):
-    """Load the profile-workspaces memo (fail-open).
-
-    Corrupt JSON falls back to the .bak copy; if both are unusable or
-    missing, returns an empty memo so every profile is treated as external
-    (allow). Schema: {"synced_at": iso, "profiles": {name: {"workspace",
-    "status", "changed_at"}}}.
-    """
-    if hermes_home is None:
-        hermes_home = _get_hermes_home()
-    memo = _read_memo_file(_memo_path(hermes_home))
-    if memo is None:
-        memo = _read_memo_file(_memo_bak_path(hermes_home))
-    if memo is None:
-        logger.warning("workspace-guard: memo unreadable, fail-open empty memo")
-        return _empty_memo()
-    return memo
-
-
-def save_memo(memo, hermes_home=None):
-    """Persist the memo atomically (tmp file + os.replace), retaining .bak.
-
-    Returns True on success, False on failure (callers fail open).
-    """
-    if hermes_home is None:
-        hermes_home = _get_hermes_home()
-    target = _memo_path(hermes_home)
-    bak = _memo_bak_path(hermes_home)
-    tmp = target.with_name(target.name + ".tmp")
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # back up the previous good version only (never a corrupt one)
-        if target.is_file() and _read_memo_file(target) is not None:
-            shutil.copyfile(target, bak)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(memo, f, indent=2)
-        os.replace(tmp, target)
-        return True
-    except Exception as exc:
-        logger.debug("workspace-guard: memo save failed: %s", exc)
-        return False
-
-
-def _now_iso():
-    """Local time as an ISO-8601 string (seconds precision)."""
-    return datetime.datetime.now().isoformat(timespec="seconds")
-
-
-def _list_profiles():
-    """Enumerate (name, home) profiles via hermes_cli; fail-open to empty.
-
-    Normalizes hermes_cli ProfileInfo objects (name + path) to (name, home)
-    tuples so consumers can unpack uniformly (live-verification finding
-    2026-08-07: the real list_profiles() returns ProfileInfo, not tuples).
-    """
-    if list_profiles is None:
-        return []
-    try:
-        out = []
-        for item in list_profiles():
-            if hasattr(item, "name") and hasattr(item, "path"):
-                out.append((item.name, str(item.path)))
-            else:
-                out.append(item)
-        return out
-    except Exception as exc:
-        logger.debug("workspace-guard: list_profiles() failed (fail-open): %s", exc)
-        return []
-
-
-def _profile_workspace(home):
-    """Resolve a profile's workspace (terminal.cwd); None on any failure.
-
-    Prefers hermes_cli read_user_config_raw; falls back to the existing
-    parse_terminal_cwd when hermes_cli is unavailable.
-    """
-    try:
-        cfg_path = Path(home) / "config.yaml"
-        if not cfg_path.is_file():
-            return None
-        if read_user_config_raw is not None:
-            data = read_user_config_raw(cfg_path)
-            if not isinstance(data, dict):
-                return None
-            terminal = data.get("terminal") or {}
-            if not isinstance(terminal, dict):
-                return None
-            cwd = terminal.get("cwd")
-            return cwd if isinstance(cwd, str) and cwd else None
-        return parse_terminal_cwd(cfg_path)
-    except Exception as exc:
-        logger.debug("workspace-guard: profile workspace resolution failed: %s", exc)
-        return None
-
-
-def sync_memo(hermes_home=None):
-    """Full profile-workspace memo sync (SCR-001 2.4).
-
-    Enumerates profiles, resolves each workspace, marks valid/invalid,
-    sets changed_at only when the workspace value changes, drops deleted
-    profiles, and persists atomically. Returns the new memo dict.
-    """
-    if hermes_home is None:
-        hermes_home = _get_hermes_home()
-    old = load_memo(hermes_home)
-    old_profiles = old.get("profiles", {})
-    now = _now_iso()
-    new_profiles = {}
-    for name, home in _list_profiles():
-        ws = _profile_workspace(home)
-        if ws and os.path.isabs(ws) and os.path.isdir(ws):
-            status = "valid"
-        else:
-            status = "invalid"
-            ws = None
-        old_entry = old_profiles.get(name) or {}
-        if old_entry.get("workspace") == ws and old_entry.get("status") == status:
-            changed_at = old_entry.get("changed_at")
-        else:
-            changed_at = now
-        new_profiles[name] = {
-            "workspace": ws,
-            "status": status,
-            "changed_at": changed_at,
-        }
-    memo = {"synced_at": now, "profiles": new_profiles}
-    save_memo(memo, hermes_home)
-    return memo
-
-
-# ---------------------------------------------------------------- Runtime allowlist (SCR-002)
+# ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
 
 def _normalize_allowlist_path(path):
     """Normalize a path for allowlist comparison (forward slashes)."""
@@ -509,8 +359,6 @@ def is_runtime_allowlisted(path):
     Prefix match (case-insensitive): allowing a directory also exempts
     operations under it, matching the workspace_guard_allow_path tool intent
     ("file operations under that path are exempt") and exempt_paths semantics.
-    Live-verification finding 2026-08-07 (F01 re-test): exact match left
-    writes inside an allowed directory blocked.
     """
     normalized = _normalize_allowlist_path(path).casefold()
     with _runtime_allowlist_lock:
@@ -528,211 +376,179 @@ def runtime_allowlist_clear():
 
     The workspace_guard_allow_path tool grants a session-scoped exemption
     ("exempt for this session"); the guard must not keep allowing a path
-    across sessions in the same process. _session_start_hook calls this so
-    each new session starts without leftover allowlist entries
-    (live-verification finding 2026-08-07: E03 granularity test was masked
-    by allowlist residue from a prior session).
+    across sessions in the same process. on_session_start calls this so
+    each new session starts without leftover allowlist entries.
     """
     with _runtime_allowlist_lock:
         _runtime_allowlist.clear()
 
 
 def workspace_guard_allow_path(args, **kwargs):
-    """Tool handler: add a path to the runtime allowlist.
+    """Tool handler: add a path to the runtime allowlist (spec 5.7, 5.11).
 
     Accepts either the tool-handler contract (args dict + extra kwargs such
     as task_id, per Hermes registry dispatch) or a bare path string (direct
-    helper/test callers). Returns a confirmation string. Wiring into
-    ctx.register_tool happens in guard.py (task 10.1 hands off the store +
-    handler only).
+    helper/test callers). Returns a confirmation string. This is the
+    plugin's ONLY tool. Wiring into ctx.register_tool happens in guard.py.
     """
     path = args.get("path") if isinstance(args, dict) else args
     return runtime_allowlist_add(path)
 
 
-# ---------------------------------------------------------------- SCR-011: quick command + registration tool
+# ---------------------------------------------------------------- Statistics (spec 5.13)
 
-# Schemas for the two SCR-011 tools, registered in guard.py register()
-# (OpenAI function-call format required by Hermes tools.registry, SCR-008).
-AUTO_UPDATE_TOOL_SCHEMA = {
-    "name": "workspace_guard_auto_update_workspace",
-    "description": (
-        "Rebuild the workspace-guard profile workspace memo from the Hermes "
-        "profile configurations (terminal.cwd). Use when profile workspaces "
-        "may have changed and need re-validation before writing files."
-    ),
-    "parameters": {"type": "object", "properties": {}},
-}
+STATS_ROLLOVER_BYTES = 5 * 1024 * 1024
+STATS_JSONL_NAME = "stats.jsonl"
+STATS_ARCHIVE_NAME = "stats.jsonl.1"
 
-REGISTER_TOOL_SCHEMA = {
-    "name": "workspace_guard_register_workspace",
-    "description": (
-        "Register a workspace as the Default Working Directory of the ACTIVE "
-        "profile (two-step init flow): sets the profile's terminal.cwd in "
-        "the Hermes config (durable) and records the workspace in the "
-        "profile workspace memo (immediate). Active-profile-only: any "
-        "profile other than the current session profile is rejected, and "
-        "the workspace directory must already exist (create it with "
-        "init_workspace.py first)."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "profile": {
-                "type": "string",
-                "description": (
-                    "Name of the profile to register (must be the active "
-                    "profile)"
-                ),
-            },
-            "workspace": {
-                "type": "string",
-                "description": (
-                    "Absolute path of the workspace directory (must exist)"
-                ),
-            },
-        },
-        "required": ["profile", "workspace"],
-    },
+_stats_lock = threading.Lock()
+# outcome x tool x rule_key x is_subagent -> count
+_stats_counters = {}
+_stats_session = {
+    "profile": None,
+    "session_id": None,
+    "is_subagent": False,
+    "started_at": None,
 }
 
 
-def _format_memo(memo):
-    """Format the profile workspace memo for display (SCR-011 2.6).
+def stats_reset():
+    """Clear in-memory stats (counters + session context).
 
-    Output shape (profile names aligned to the widest name):
-      [workspace-guard] Profile workspace memo
-      Synced: <synced_at or "n/a">
-        <profile>: <workspace or "-"> [<status or "unknown">]  changed: <changed_at or "-">
-    Graceful degradation: a missing/corrupt memo never raises (n/a / no
-    profile lines).
+    Called at register/re-register so no counters or session fields leak
+    into the next session (5.13 D2).
     """
+    with _stats_lock:
+        _stats_counters.clear()
+        _stats_session["profile"] = None
+        _stats_session["session_id"] = None
+        _stats_session["is_subagent"] = False
+        _stats_session["started_at"] = None
+
+
+def stats_set_session(profile=None, session_id=None, is_subagent=None, started_at=None):
+    """Attach session context to persisted stats events (5.13 session fields).
+
+    Only the provided fields are updated (None leaves a field unchanged);
+    the full reset is stats_reset().
+    """
+    with _stats_lock:
+        if profile is not None:
+            _stats_session["profile"] = str(profile)
+        if session_id is not None:
+            _stats_session["session_id"] = str(session_id)
+        if is_subagent is not None:
+            _stats_session["is_subagent"] = bool(is_subagent)
+        if started_at is not None:
+            _stats_session["started_at"] = str(started_at)
+
+
+def stats_snapshot():
+    """Return a deep copy of the counters (outcome x tool x rule_key x is_subagent)."""
+    with _stats_lock:
+        return copy.deepcopy(_stats_counters)
+
+
+def _now_iso():
+    """Local time as an ISO-8601 string (seconds precision)."""
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _hash_prefix(value):
+    """Deterministic privacy-preserving prefix for external paths (5.13)."""
+    return "h:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _relativize_target(target, working_dir_root):
+    """Privacy: target relative to working_dir_root; external -> hash prefix.
+
+    None target stays None (omitted). External paths (outside the root,
+    different drive, or unrelatable) become a 'h:<sha256-prefix>' hash so
+    no absolute external path ever lands in stats.jsonl (5.13 privacy).
+    """
+    if target is None:
+        return None
+    target = str(target)
+    if working_dir_root is None:
+        return _hash_prefix(target)
     try:
-        synced = memo.get("synced_at") or "n/a"
-        profiles = memo.get("profiles")
-        if not isinstance(profiles, dict):
-            profiles = {}
-        lines = [
-            "[workspace-guard] Profile workspace memo",
-            "Synced: %s" % synced,
-        ]
-        if profiles:
-            name_w = max(len(str(name)) for name in profiles)
-            for name in sorted(profiles):
-                entry = profiles.get(name)
-                if not isinstance(entry, dict):
-                    entry = {}
-                ws = entry.get("workspace") or "-"
-                status = entry.get("status") or "unknown"
-                changed = entry.get("changed_at") or "-"
-                lines.append(
-                    "  %s: %s [%s]  changed: %s"
-                    % (str(name).ljust(name_w), ws, status, changed)
-                )
-        return "\n".join(lines)
+        rel = os.path.relpath(target, str(working_dir_root))
+    except ValueError:  # different drive on Windows -> cannot relate
+        return _hash_prefix(target)
+    if os.path.isabs(rel) or rel == os.pardir or rel.startswith(".." + os.sep):
+        return _hash_prefix(target)
+    return rel.replace("\\", "/")
+
+
+def _stats_jsonl_path():
+    """stats.jsonl location: HERMES_HOME/workspace-guard/stats.jsonl."""
+    return _get_hermes_home() / "workspace-guard" / STATS_JSONL_NAME
+
+
+def _append_stats_event(event):
+    """Append one JSON line to stats.jsonl (O_APPEND, rollover at 5MB).
+
+    Single-process assumption: appends are atomic via os.open O_APPEND; the
+    rollover rename tolerates a missing source (another process already
+    rolled). Raises on failure; callers swallow and log (fail-open).
+    """
+    path = _stats_jsonl_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
-        return "[workspace-guard] Profile workspace memo\nSynced: n/a"
-
-
-def workspace_guard_auto_update_workspace(args, **kwargs):
-    """Tool handler: full memo sync (SCR-011 2.2).
-
-    Uses the same sync_memo() as the /workspace-guard workspace_update
-    command. Returns a display string; never raises (errors become the
-    message).
-    """
+        pass  # surfaced by the os.open failure below
     try:
-        memo = sync_memo()
-        return "[workspace-guard] Memo updated.\n" + _format_memo(memo)
-    except Exception as exc:
-        return "[workspace-guard] Memo update failed: %s" % exc
-
-
-def workspace_guard_register_workspace(args, ctx=None, **kwargs):
-    """Tool handler: register a profile workspace (SCR-011 2.2/2.6).
-
-    Two-step init flow, ACTIVE-PROFILE-ONLY and CONFIG-FIRST:
-    1. Rejects when profile != ctx.profile_name (ctx None -> reject,
-       fail-safe).
-    2. Requires workspace to be an existing directory.
-    3. Config-first: sets the profile's terminal.cwd via Hermes
-       set_config_value() (durable step). Unavailable or failing -> the
-       WHOLE operation aborts with an error message, no memo write.
-    4. Then writes/overwrites the memo entry {profile: {workspace,
-       status: "valid", changed_at: now}} (immediacy for scripts).
-    5. Because step 3 makes terminal.cwd == the registered workspace,
-       sync_memo() derives the same value and can never clobber the
-       registration.
-
-    Returns a confirmation/rejection string; never raises (errors become
-    the message, so the host process survives set_config_value's
-    sys.exit-based failure paths).
-    """
+        if path.is_file() and path.stat().st_size > STATS_ROLLOVER_BYTES:
+            try:
+                os.replace(path, path.with_name(STATS_ARCHIVE_NAME))
+            except FileNotFoundError:
+                pass  # another process already rolled
+    except Exception:
+        pass  # rollover is best-effort; the append below still runs
+    fd = None
     try:
-        if isinstance(args, dict):
-            profile = args.get("profile")
-            workspace = args.get("workspace")
-        else:
-            profile = args
-            workspace = None
-        if isinstance(profile, dict):
-            profile = profile.get("name") or profile.get("id") or ""
-        profile = str(profile or "").strip()
-        workspace = str(workspace or "").strip()
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.write(fd, (json.dumps(event) + "\n").encode("utf-8"))
+    finally:
+        if fd is not None:
+            os.close(fd)
 
-        active = getattr(ctx, "profile_name", None) if ctx is not None else None
-        if not profile or profile != active:
-            return (
-                "[workspace-guard] Registration rejected: profile %r is not "
-                "the active profile (active: %r). Switch to the target "
-                "profile first." % (profile, active)
-            )
-        if not workspace or not os.path.isdir(workspace):
-            return (
-                "[workspace-guard] Registration rejected: workspace %r is "
-                "not an existing directory." % workspace
-            )
-        if set_config_value is None:
-            return (
-                "[workspace-guard] Registration aborted: Hermes "
-                "set_config_value is unavailable (hermes_cli not present); "
-                "no memo entry was written."
-            )
+
+def stats_record(outcome, tool, rule_key, target=None, reason=None,
+                 is_subagent=None, working_dir_root=None):
+    """Record one guard verdict: bump counters + append one stats.jsonl line.
+
+    outcome x tool x rule_key counters are split by is_subagent (5.13 D2);
+    each event persists session + event fields (D3). Never raises: a failed
+    stats write is logged and does NOT affect the verdict (5.8 fail-open
+    logging).
+    """
+    if is_subagent is None:
+        is_subagent = _stats_session.get("is_subagent", False)
+    is_subagent = bool(is_subagent)
+    with _stats_lock:
+        by_outcome = _stats_counters.setdefault(outcome, {})
+        by_tool = by_outcome.setdefault(tool, {})
+        by_rule = by_tool.setdefault(rule_key, {})
+        by_rule[is_subagent] = by_rule.get(is_subagent, 0) + 1
         try:
-            set_config_value("terminal.cwd", workspace)
-        except BaseException as exc:
-            # set_config_value fails via print + sys.exit(1) for managed
-            # keys and unparseable configs (SystemExit) or by raising on
-            # write errors; neither may kill the plugin host.
-            return (
-                "[workspace-guard] Registration aborted: failed to set "
-                "terminal.cwd (%s); no memo entry was written." % exc
-            )
+            _append_stats_event({
+                "profile": _stats_session.get("profile"),
+                "session_id": _stats_session.get("session_id"),
+                "is_subagent": is_subagent,
+                "started_at": _stats_session.get("started_at"),
+                "ts": _now_iso(),
+                "outcome": outcome,
+                "reason": reason,
+                "tool": tool,
+                "rule_key": rule_key,
+                "target": _relativize_target(target, working_dir_root),
+            })
+        except Exception as exc:
+            logger.debug("workspace-guard: stats write failed (ignored): %s", exc)
 
-        memo = load_memo()
-        if not isinstance(memo, dict):
-            memo = {"synced_at": None, "profiles": {}}
-        profiles = memo.setdefault("profiles", {})
-        if not isinstance(profiles, dict):
-            profiles = {}
-            memo["profiles"] = profiles
-        profiles[profile] = {
-            "workspace": workspace,
-            "status": "valid",
-            "changed_at": _now_iso(),
-        }
-        if not save_memo(memo):
-            return (
-                "[workspace-guard] Registration aborted: memo write failed; "
-                "terminal.cwd was set but the memo was not updated."
-            )
-        return (
-            "[workspace-guard] Registered profile %r workspace: %s"
-            % (profile, workspace)
-        )
-    except Exception as exc:
-        return "[workspace-guard] Registration failed: %s" % exc
 
+# ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
     """Resolve working_dir_root + exempt_paths."""
@@ -742,13 +558,33 @@ def _resolve_config(ctx, config_path=None):
     return (working_dir_root, exempt_paths)
 
 
+def _resolve_registered_config():
+    """Zero-arg factory for lazy_singleton (register-time resolution)."""
+    return _resolve_config(_register_ctx, _register_config_path)
+
+
+if lazy_singleton is not None:
+    _registered_config_accessor = lazy_singleton(_resolve_registered_config)
+else:
+    _registered_config_accessor = None
+
+
 def get_cached_config(ctx, config_path=None):
     """Get or create cached configuration (thread-safe singleton).
 
-    Returns (working_dir_root, exempt_paths) tuple.
-    working_dir_root may be None (guard disabled).
+    Returns (working_dir_root, exempt_paths) tuple. working_dir_root may
+    be None (guard disabled). Resolution happens ONCE at register()
+    (spec 5.5): backed by plugins.plugin_utils.lazy_singleton when the
+    Hermes runtime provides it (spec 5.8), otherwise (hermes_cli absent /
+    test venv) a local lock-guarded cache. reset_cache() clears either.
     """
-    global _cached_result, _cache_initialized
+    global _cached_result, _cache_initialized, _register_ctx, _register_config_path
+    if _registered_config_accessor is not None:
+        if _register_ctx is None:
+            # First caller is register(); capture its ctx for the factory.
+            _register_ctx = ctx
+            _register_config_path = config_path
+        return _registered_config_accessor()
     if not _cache_initialized:
         with _cache_lock:
             if not _cache_initialized:
@@ -758,10 +594,13 @@ def get_cached_config(ctx, config_path=None):
 
 
 def reset_cache():
-    """Reset the config cache and runtime allowlist (for testing)."""
+    """Reset config cache, stats and runtime allowlist (register/re-register)."""
     global _cached_result, _cache_initialized
     with _cache_lock:
         _cached_result = None
         _cache_initialized = False
+    if _registered_config_accessor is not None:
+        _registered_config_accessor.reset()
     with _runtime_allowlist_lock:
         _runtime_allowlist.clear()
+    stats_reset()
