@@ -27,7 +27,6 @@ try:
         register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
-        stats_end_session,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
@@ -44,7 +43,6 @@ except ImportError:
         register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
-        stats_end_session,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
@@ -426,6 +424,13 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         runtime_allowlist_clear()
         _reset_fail_open_flag()
         ctx = _get_ctx()
+        profile = getattr(ctx, "profile_name", None) if ctx else None
+        stats_set_session(
+            profile=profile,
+            session_id=session_id,
+            is_subagent=False,
+            started_at=datetime.datetime.now().isoformat(timespec="seconds"),
+        )
         if ctx and hasattr(ctx, "inject_message"):
             injected = ctx.inject_message(REMINDER_MESSAGE)
             if not injected:
@@ -577,7 +582,9 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         if child_session_id:
             with _child_session_ids_lock:
                 _child_session_ids.discard(child_session_id)
-        stats_end_session()
+        # Close the child stats context: flip is_subagent back to False but
+        # PRESERVE the parent session fields (profile/session_id/started_at).
+        stats_set_session(is_subagent=False)
         detail = {
             "child_session_id": child_session_id,
             "child_subagent_id": child_subagent_id,

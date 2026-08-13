@@ -901,13 +901,37 @@ def _cmd_doctor(raw_args=""):
         return "[workspace-guard] doctor failed: %s" % exc
 
 
-def register_workspace_guard_commands(ctx):
-    """Register the /workspace-guard status|stats|doctor commands (5.7).
+def _workspace_guard_cmd(raw_args):
+    """/workspace-guard dispatcher (spec 5.7): status | stats [--all] [--subagent] | doctor.
 
-    Command handlers live in config.py (D3); each subcommand is registered
-    as its own single-token slash command (Hermes dispatches on the first
-    token only). Guarded: a ctx without register_command still registers.
-    allow_path is a TOOL and is NOT registered here (guard.py registers it).
+    The host invokes the handler as fn(raw_args) with everything after the
+    first token; subcommand dispatch happens here. Never raises (errors
+    become the message).
+    """
+    try:
+        tokens = (raw_args or "").strip().split()
+        sub = tokens[0].lower() if tokens else ""
+        if sub in ("", "status"):
+            return _cmd_status("")
+        if sub == "stats":
+            return _cmd_stats(" ".join(tokens[1:]))
+        if sub == "doctor":
+            return _cmd_doctor("")
+        return "Usage: /workspace-guard status | stats [--all] [--subagent] | doctor"
+    except Exception as exc:
+        return "[workspace-guard] command failed: %s" % exc
+
+
+def register_workspace_guard_commands(ctx):
+    """Register the /workspace-guard slash command (spec 5.7).
+
+    Exactly ONE command named "workspace-guard": Hermes dispatches slash
+    commands on the FIRST token only (cli.py: base_cmd = split()[0]), so
+    the frozen interface /workspace-guard status | stats | doctor requires
+    a single registration with internal subcommand dispatch (status /
+    stats [--all] [--subagent] / doctor). Guarded: a ctx without
+    register_command still registers. allow_path is a TOOL and is NOT
+    registered here (guard.py registers it).
     """
     global _cmd_ctx
     _cmd_ctx = ctx
@@ -915,22 +939,9 @@ def register_workspace_guard_commands(ctx):
         return
     try:
         ctx.register_command(
-            "workspace-guard-status", _cmd_status,
-            description="Show effective config and resolving source",
-            args_hint="",
-        )
-        ctx.register_command(
-            "workspace-guard-stats", _cmd_stats,
-            description=(
-                "Show interception statistics (--all reads stats.jsonl for "
-                "cross-session totals; --subagent filters to subagent counts)"
-            ),
-            args_hint="[--all] [--subagent]",
-        )
-        ctx.register_command(
-            "workspace-guard-doctor", _cmd_doctor,
-            description="Configuration self-check",
-            args_hint="",
+            "workspace-guard", _workspace_guard_cmd,
+            description="workspace-guard: status | stats [--all] [--subagent] | doctor",
+            args_hint="status|stats [--all] [--subagent]|doctor",
         )
     except Exception as exc:
         logger.warning("workspace-guard: register_command failed: %s", exc)
