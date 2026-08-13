@@ -8,13 +8,13 @@
 # plugin directory is ONLY the shipped template: forced plugin reinstalls
 # never touch the runtime copy, so user settings survive.
 
-# Optional fallback: Default Working Directory, used ONLY when auto-detection
+# Optional fallback: Working Directory, used ONLY when auto-detection
 # from the Hermes profile config (terminal.cwd) or the TERMINAL_CWD
 # environment variable fails. Never overrides auto-detection.
 # working_dir_root: E:/HermesWorkspace/default
 
 exempt_paths: []
 
-# Root files allowed at the Default Working Directory root (D1: guard and
+# Root files allowed at the Working Directory root (D1: guard and
 # audit read the same key; strict fallback = empty list when absent).
 allowed_root_files: ["AGENTS.md"]
