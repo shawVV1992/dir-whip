@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""S1: Create a session directory.
+"""S1: Create a session directory (v0.2.0, spec 4.1 + 4.4).
 
-Creates YYYYMMDD_HHMMSS[_TaskName]/ containing Outputs/ and .tmp/.
+Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly Outputs/ and .tmp/.
 Prints the absolute path of the created directory (forward slashes) as
 a single stdout line.
 
-Workspace validation (SCR-011): the target must be a registered profile
-workspace in the profile workspace memo; when the memo is unavailable and
-no plugin is present, standalone mode trusts the provided --workspace
-(with a stderr warning). A missing directory is a parameter error.
+Boundary validation (SCR-011, spec 4.4): the --workspace target must EXACTLY
+EQUAL the resolved Working Directory (guard-config working_dir_root ->
+HERMES_SESSION_PROFILE -> profile enumeration + TERMINAL_CWD candidate root ->
+fail-open). The existence check runs FIRST (parameter error, exit 1); boundary
+validation SECOND (exit 2). When --workspace is omitted, the script defaults
+to the CWD and applies the 4.4 containment matching (equals / contained-in-one
+/ nested longest-match); a resolution failure is fail-open -- the resolver
+emits exactly ONE concise stderr WARNING and the script proceeds with the CWD.
 
 Exit codes:
   0 = created successfully
-  1 = parameter error (workspace does not exist)
-  2 = target already exists OR workspace validation failed
+  1 = parameter error (workspace directory does not exist)
+  2 = target already exists OR --workspace does not match the resolved
+      Working Directory
 """
 
 import argparse
@@ -32,6 +37,10 @@ except ImportError:
 
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_TASK_NAME_LEN = 80
+
+EXIT_OK = 0
+EXIT_PARAM_ERROR = 1
+EXIT_BOUNDARY_ERROR = 2
 
 
 def sanitize_task_name(name):
@@ -52,28 +61,42 @@ def main(argv=None):
     )
     parser.add_argument(
         "--workspace",
-        default=os.getcwd(),
-        help="Default Working Directory for the session dir (default: current working directory).",
+        default=None,
+        help="Working Directory for the session dir; must equal the resolved Working Directory (default: current directory, containment-matched).",
     )
     parser.add_argument(
         "--parent",
         default=None,
         help=argparse.SUPPRESS,
     )
-    workspace_resolver.add_profile_arg(parser)
     args = parser.parse_args(argv)
 
-    workspace = args.parent if args.parent is not None else args.workspace
-    workspace = os.path.abspath(workspace)
+    workspace_arg = args.parent if args.parent is not None else args.workspace
+    if workspace_arg is None:
+        # Omitted --workspace: default to CWD + 4.4 containment matching.
+        # Resolve WITHOUT an explicit workspace so the CWD containment branch
+        # (equals / contained-in-one / nested longest-match) applies. On
+        # resolution failure the resolver emits exactly ONE stderr WARNING
+        # (fail-open) and we fall back to the CWD -- no extra warnings here.
+        resolved = workspace_resolver.resolve_working_dir_root()
+        workspace = resolved if resolved is not None else os.getcwd()
+    else:
+        workspace = os.path.abspath(workspace_arg)
 
+    # Existence check FIRST (spec 4.1): parameter error, before boundary
+    # validation -- never emits the fail-open warning for a missing dir.
     if not os.path.isdir(workspace):
         sys.stderr.write("error: workspace directory does not exist: %s\n" % workspace)
-        return 1
+        return EXIT_PARAM_ERROR
 
-    valid, msg = workspace_resolver.validate_workspace(workspace, profile=args.profile)
-    if not valid:
-        sys.stderr.write("error: %s\n" % msg)
-        return 2
+    # Boundary validation SECOND (spec 4.4): the explicit --workspace must
+    # equal the resolved Working Directory; mismatch -> exit 2 (stderr stays
+    # warning-free; the fail-open fallback already carried its ONE warning).
+    if workspace_arg is not None:
+        valid, reason = workspace_resolver.validate_workspace(workspace)
+        if not valid:
+            sys.stderr.write("error: %s\n" % reason)
+            return EXIT_BOUNDARY_ERROR
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     task_name = sanitize_task_name(args.task_name)
@@ -82,13 +105,13 @@ def main(argv=None):
     target = os.path.join(workspace, dir_name)
     if os.path.exists(target):
         sys.stdout.write(target.replace(os.sep, "/") + "\n")
-        return 2
+        return EXIT_BOUNDARY_ERROR
 
     os.makedirs(os.path.join(target, "Outputs"))
     os.makedirs(os.path.join(target, ".tmp"))
 
     sys.stdout.write(target.replace(os.sep, "/") + "\n")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
