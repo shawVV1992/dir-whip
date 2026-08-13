@@ -18,5 +18,8 @@ internal/
 # Local tool state
 .cortexkit/
 
+# Local opencode plugin dev workspace
+.opencode/
+
 # Tests (not published)
 tests/
