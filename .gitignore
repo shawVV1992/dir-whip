@@ -20,6 +20,7 @@ internal/
 
 # Local opencode plugin dev workspace
 .opencode/
+.slim/
 
 # Tests (not published)
 tests/
