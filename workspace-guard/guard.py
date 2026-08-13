@@ -692,6 +692,25 @@ def _session_cwd(task_id):
     return None
 
 
+_DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _is_absolute_any(target):
+    """Rooted on the local OS, Windows-drive-rooted, or backslash-rooted.
+
+    On POSIX, posixpath.isabs() returns False for Windows-style paths like
+    ``E:/ws/x.txt`` or ``\\evil\\file.txt``; joining such a target onto the
+    base would double-prefix it (``E:/ws/E:/ws/x.txt``). Rooted targets
+    resolve as-is and the classifier then decides external vs in-workspace
+    via the normalized root.
+    """
+    if os.path.isabs(target):
+        return True
+    if _DRIVE_ROOTED_RE.match(target):
+        return True
+    return target.startswith("\\") and not target.startswith("\\\\")
+
+
 def _resolve_target(target, task_id, working_dir_root):
     """Resolve a target to absolute (spec 5.3 step 4).
 
@@ -699,7 +718,7 @@ def _resolve_target(target, task_id, working_dir_root):
     (None) fall back to working_dir_root (conservative, DEBUG log). Never
     uses os.getcwd() (the plugin process CWD may differ).
     """
-    if os.path.isabs(target):
+    if _is_absolute_any(target):
         return target
 
     base = _session_cwd(task_id)
@@ -745,15 +764,14 @@ def _normalize_windows(path, working_dir_root):
         if root_drive:
             path = root_drive + path
 
-    if os.name == "nt":
-        drive, _ = ntpath.splitdrive(path)
-        if not drive:
-            logger.warning(
-                "workspace-guard: target %r unclassifiable after "
-                "normalization (no drive); treating as external "
-                "(fail-open)",
-                path,
-            )
+    drive, _ = ntpath.splitdrive(path)
+    if not drive:
+        logger.warning(
+            "workspace-guard: target %r unclassifiable after "
+            "normalization (no drive); treating as external "
+            "(fail-open)",
+            path,
+        )
 
     return path
 
@@ -763,14 +781,54 @@ def _normalize_posix(path):
     return os.path.normpath(path)
 
 
+def _looks_windowsy(path):
+    """Windows-style target on ANY host (SCR-006 cross-platform).
+
+    MSYS/Cygwin forms, drive-rooted paths, and single-backslash-rooted
+    paths follow Windows normalization even on POSIX hosts (a WSL/Git-Bash
+    session can carry Windows-style roots and targets).
+    """
+    return bool(
+        _DRIVE_ROOTED_RE.match(path)
+        or _MSYS_DRIVE_RE.match(path)
+        or _CYGWIN_DRIVE_RE.match(path)
+        or (path.startswith("\\") and not path.startswith("\\\\"))
+    )
+
+
 def normalize_target(path, working_dir_root):
     """Normalize a target path before classification (chain step 0)."""
-    if os.name == "nt":
+    if os.name == "nt" or _looks_windowsy(path):
         return _normalize_windows(path, working_dir_root)
     return _normalize_posix(path)
 
 
 # ---------------------------------------------------------------- Classification (spec 5.3 steps 6/7)
+
+def _within_working_dir(target, working_dir_root):
+    """Containment of target under working_dir_root (5.3 step 6).
+
+    Windows-style (drive-rooted) pairs are compared case-insensitively on
+    ANY host — Windows paths follow Windows matching rules even on POSIX
+    (SCR-006; e.g. a WSL session carrying a Windows-style root). Native
+    paths use os.path.relpath (case-sensitive on POSIX).
+    """
+    target_fwd = str(target).replace("\\", "/")
+    root_fwd = str(working_dir_root).replace("\\", "/")
+    if _DRIVE_ROOTED_RE.match(target_fwd) and _DRIVE_ROOTED_RE.match(root_fwd):
+        target_cf = target_fwd.casefold()
+        root_cf = root_fwd.casefold()
+        if target_cf == root_cf:
+            return True
+        prefix = root_cf.rstrip("/") + "/"
+        return target_cf.startswith(prefix)
+    try:
+        rel = os.path.relpath(target, working_dir_root)
+    except ValueError:
+        # Different drive on Windows: cannot relate -> external.
+        return False
+    return not rel.startswith("..")
+
 
 def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
     """Classify a single normalized absolute target (spec 5.3 step 6).
@@ -790,14 +848,14 @@ def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
     if is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}
 
+    if not _within_working_dir(target, working_dir_root):
+        return {"outcome": "external-write", "rule_key": "external-write"}
+
     try:
         rel = os.path.relpath(target, working_dir_root)
     except ValueError:
-        # Different drive on Windows: cannot relate -> external.
+        # Mixed drive/UNC pair on Windows: cannot relate -> external.
         return {"outcome": "external-write", "rule_key": "external-write"}
-    if rel.startswith(".."):
-        return {"outcome": "external-write", "rule_key": "external-write"}
-
     rel_fwd = rel.replace("\\", "/")
     if "/" not in rel_fwd:
         # Root file: whitelist match (case-insensitive on Windows).
@@ -1047,7 +1105,7 @@ def _terminal_base(args, task_id, working_dir_root):
 
 def _resolve_terminal_target(target, base):
     """Resolve a terminal write target against the relative-target base."""
-    if os.path.isabs(target):
+    if _is_absolute_any(target):
         return target
     return os.path.join(base, target)
 
