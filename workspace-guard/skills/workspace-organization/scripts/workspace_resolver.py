@@ -217,16 +217,23 @@ def _is_within(child, root):
 
 
 def _profile_config_path(hh, profile):
-    """Profile config path aware of both home layouts (SCR-026).
+    """Profile config path aware of both home layouts (SCR-026/027).
 
     At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
     non-default profiles (e.g. HERMES_HOME=.../profiles/learn); tests keep
     HERMES_HOME at the root with named profiles under profiles/<name>/.
     Detect the layout by path shape: when hh already IS the profile dir
     (basename == profile, parent basename == "profiles"), the profile
-    config is hh/config.yaml.
+    config is hh/config.yaml. The reverse case (R2): a "default" session
+    while hh is a NAMED profile's dir -> the default home is TWO levels up
+    (dirname(dirname(hh))/config.yaml).
     """
     if not profile or profile == "default":
+        norm = os.path.normpath(str(hh))
+        if os.path.basename(os.path.dirname(norm)) == "profiles":
+            return os.path.join(
+                os.path.dirname(os.path.dirname(norm)), "config.yaml"
+            )
         return os.path.join(hh, "config.yaml")
     norm = os.path.normpath(str(hh))
     if (os.path.basename(norm) == profile

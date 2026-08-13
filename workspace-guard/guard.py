@@ -25,9 +25,11 @@ try:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
+        refresh_resolution,
         register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
+        set_session_profile,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
@@ -41,9 +43,11 @@ except ImportError:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
+        refresh_resolution,
         register_workspace_guard_commands,
         reset_cache,
         runtime_allowlist_clear,
+        set_session_profile,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
@@ -470,6 +474,10 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         _reset_fail_open_flag()
         ctx = _get_ctx()
         profile = getattr(ctx, "profile_name", None) if ctx else None
+        # SCR-027: session-scoped resolution — re-resolve working_dir_root
+        # from THIS session's profile (child sessions skip and inherit).
+        set_session_profile(profile)
+        refresh_resolution(ctx)
         stats_set_session(
             profile=profile,
             session_id=session_id,

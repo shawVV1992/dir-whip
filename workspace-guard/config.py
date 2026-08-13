@@ -41,6 +41,20 @@ _runtime_allowlist_lock = threading.Lock()
 _register_ctx = None
 _register_config_path = None
 
+# SCR-027 session-scoped resolution: a desktop process registers under the
+# ACTIVE profile but later sessions can be a DIFFERENT profile, so the
+# working_dir_root is re-resolved per top-level session at on_session_start
+# (single-threaded session loop assumption, same as stats). _session_root
+# starts as the register-time value and is REPLACED by refresh_resolution
+# (including None on fail-open — a stale value is never kept).
+_session_root = None
+_session_root_initialized = False
+
+# The session's profile (set at on_session_start); stats.jsonl is written
+# into that profile's home so a default-profile session never lands in the
+# active profile's home (SCR-027).
+_session_profile = None
+
 
 def _get_hermes_home():
     """Return the Hermes home directory path (D5).
@@ -295,6 +309,67 @@ def resolve_working_dir_root(ctx, config_path=None):
     return None
 
 
+def refresh_resolution(ctx):
+    """Re-run the resolution chain for the SESSION's profile (SCR-027).
+
+    Called at every top-level on_session_start: the same 3-step chain runs
+    against the session's ctx.profile_name, so a desktop multi-profile
+    process never keeps the register-time (other-profile) root. On success
+    _session_root = <root> (same INFO source log as the chain); on
+    fail-open _session_root = None + WARNING — a stale value from a
+    previous session is NEVER kept. Returns _session_root.
+    """
+    global _session_root, _session_root_initialized
+    _session_root = resolve_working_dir_root(ctx)
+    _session_root_initialized = True
+    return _session_root
+
+
+def get_session_root():
+    """The session-scoped working_dir_root (None = guard disabled)."""
+    return _session_root
+
+
+def _effective_root(ctx):
+    """The session root, resolving lazily before any on_session_start ran.
+
+    Consumers (status/doctor) read the session value; before the first
+    on_start the register-time resolution is the initial value, so a lazy
+    refresh here keeps them correct in tests and pre-session contexts.
+    """
+    if not _session_root_initialized:
+        refresh_resolution(ctx)
+    return _session_root
+
+
+def set_session_profile(profile):
+    """Record the session's profile (SCR-027 stats placement).
+
+    stats.jsonl for the session is written into THIS profile's home (via
+    _profile_home), not the register-time active profile's.
+    """
+    global _session_profile
+    _session_profile = profile
+
+
+def _profile_home(hermes_home, profile):
+    """The profile's home directory, aware of both layouts (SCR-026/027).
+
+    profile default: home-shaped (parent named "profiles", i.e. HERMES_HOME
+    IS a named profile's dir) -> hermes_home.parent.parent (the default
+    home is two levels up); otherwise hermes_home. profile named: home IS
+    the profile dir -> hermes_home; otherwise hermes_home/profiles/<name>.
+    """
+    hermes_home = Path(hermes_home)
+    if not profile or profile == "default":
+        if hermes_home.parent.name == "profiles":
+            return hermes_home.parent.parent
+        return hermes_home
+    if hermes_home.name == profile and hermes_home.parent.name == "profiles":
+        return hermes_home
+    return hermes_home / "profiles" / profile
+
+
 def is_inside_session_dir(path, working_dir_root):
     """Check if path is under working_dir_root/<session_dir>/... (spec 5.9)."""
     try:
@@ -494,8 +569,18 @@ def _relativize_target(target, working_dir_root):
 
 
 def _stats_jsonl_path():
-    """stats.jsonl location: HERMES_HOME/workspace-guard/stats.jsonl."""
-    return _get_hermes_home() / "workspace-guard" / STATS_JSONL_NAME
+    """stats.jsonl location: the session profile's home workspace-guard dir.
+
+    SCR-027: the path follows the SESSION profile (set at on_session_start),
+    so a default-profile session's events land in the ROOT home's
+    workspace-guard dir, not the register-time active profile's. When no
+    session profile is set yet, use HERMES_HOME directly (register-time
+    behavior).
+    """
+    home = _get_hermes_home()
+    if _session_profile:
+        home = _profile_home(home, _session_profile)
+    return home / "workspace-guard" / STATS_JSONL_NAME
 
 
 def _append_stats_event(event):
@@ -625,29 +710,40 @@ def get_cached_config(ctx, config_path=None):
     """Get or create cached configuration (thread-safe singleton).
 
     Returns (working_dir_root, exempt_paths) tuple. working_dir_root may
-    be None (guard disabled). Resolution happens ONCE at register()
-    (spec 5.5): backed by plugins.plugin_utils.lazy_singleton when the
-    Hermes runtime provides it (spec 5.8), otherwise (hermes_cli absent /
-    test venv) a local lock-guarded cache. reset_cache() clears either.
+    be None (guard disabled). The root slot is SESSION-SCOPED (SCR-027):
+    the first resolution (register-time) seeds _session_root, and every
+    top-level on_session_start refreshes it via refresh_resolution(ctx);
+    consumers therefore read the session root, never a stale
+    register-time value. Backed by plugins.plugin_utils.lazy_singleton
+    when the Hermes runtime provides it (spec 5.8), otherwise a local
+    lock-guarded cache. reset_cache() clears either.
     """
     global _cached_result, _cache_initialized, _register_ctx, _register_config_path
+    global _session_root, _session_root_initialized
     if _registered_config_accessor is not None:
         if _register_ctx is None:
             # First caller is register(); capture its ctx for the factory.
             _register_ctx = ctx
             _register_config_path = config_path
-        return _registered_config_accessor()
-    if not _cache_initialized:
-        with _cache_lock:
-            if not _cache_initialized:
-                _cached_result = _resolve_config(ctx, config_path)
-                _cache_initialized = True
-    return _cached_result
+        result = _registered_config_accessor()
+    else:
+        if not _cache_initialized:
+            with _cache_lock:
+                if not _cache_initialized:
+                    _cached_result = _resolve_config(ctx, config_path)
+                    _cache_initialized = True
+        result = _cached_result
+    if not _session_root_initialized:
+        # Initial value of the session root = the register-time resolution.
+        _session_root = result[0]
+        _session_root_initialized = True
+    return (get_session_root(), result[1])
 
 
 def reset_cache():
     """Reset config cache, stats and runtime allowlist (register/re-register)."""
-    global _cached_result, _cache_initialized
+    global _cached_result, _cache_initialized, _session_root, _session_root_initialized
+    global _session_profile
     with _cache_lock:
         _cached_result = None
         _cache_initialized = False
@@ -655,6 +751,11 @@ def reset_cache():
         _registered_config_accessor.reset()
     with _runtime_allowlist_lock:
         _runtime_allowlist.clear()
+    # Session-scoped state: re-seeded at register (get_cached_config) and at
+    # the next top-level on_session_start.
+    _session_root = None
+    _session_root_initialized = False
+    _session_profile = None
     stats_reset()
 
 
@@ -698,16 +799,21 @@ def _resolution_source(ctx):
 
 
 def _profile_config_path(hermes_home, profile):
-    """Path to a profile's config.yaml, aware of both home layouts (SCR-026).
+    """Path to a profile's config.yaml, aware of both home layouts (SCR-026/027).
 
     At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
     non-default profiles (e.g. HERMES_HOME=.../profiles/learn), while tests
     and some hosts keep HERMES_HOME at the root with named profiles under
     .../profiles/<name>/. Detect the layout by path shape: when hermes_home
     already IS the profile dir (name == profile, parent == "profiles"), the
-    profile config is hermes_home/config.yaml.
+    profile config is hermes_home/config.yaml. The reverse case (R2): a
+    "default" session while hermes_home is a NAMED profile's dir -> the
+    default home is TWO levels up (hermes_home.parent.parent/config.yaml).
     """
+    hermes_home = Path(hermes_home)
     if not profile or profile == "default":
+        if hermes_home.parent.name == "profiles":
+            return hermes_home.parent.parent / "config.yaml"
         return hermes_home / "config.yaml"
     if hermes_home.name == profile and hermes_home.parent.name == "profiles":
         return hermes_home / "config.yaml"
@@ -778,7 +884,7 @@ def _cmd_status(raw_args=""):
     """
     try:
         ctx = _get_cmd_ctx()
-        root = resolve_working_dir_root(ctx)
+        root = _effective_root(ctx)
         cfg = load_guard_config()
         if root:
             root_line = "working_dir_root: %s" % root
@@ -884,7 +990,7 @@ def _cmd_doctor(raw_args=""):
             % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
         )
 
-        root = resolve_working_dir_root(ctx)
+        root = _effective_root(ctx)
         if root:
             lines.append("resolution: OK (%s via %s)" % (root, _resolution_source(ctx)))
         else:
