@@ -420,10 +420,26 @@ def stats_reset():
     """
     with _stats_lock:
         _stats_counters.clear()
-        _stats_session["profile"] = None
-        _stats_session["session_id"] = None
-        _stats_session["is_subagent"] = False
-        _stats_session["started_at"] = None
+        _reset_stats_session_locked()
+
+
+def _reset_stats_session_locked():
+    """Reset the stats session fields; callers must hold _stats_lock."""
+    _stats_session["profile"] = None
+    _stats_session["session_id"] = None
+    _stats_session["is_subagent"] = False
+    _stats_session["started_at"] = None
+
+
+def stats_end_session():
+    """Close the stats session context (counters kept).
+
+    Clears the session fields (profile / session_id / is_subagent /
+    started_at) so a closed child session's context never leaks into
+    later events; in-memory counters are untouched (5.13 D2/D3).
+    """
+    with _stats_lock:
+        _reset_stats_session_locked()
 
 
 def stats_set_session(profile=None, session_id=None, is_subagent=None, started_at=None):
