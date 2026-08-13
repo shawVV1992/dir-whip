@@ -15,6 +15,7 @@ import ntpath
 import os
 import re
 import threading
+from pathlib import Path
 
 try:
     from .config import (
@@ -132,6 +133,27 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
     ("approve", "always", "session", "granted", "allow", "smart_approve")
 )
 
+# Spec 3.1: bundled skill description (frontmatter + register_skill).
+# Trigger words within the first 57 chars; avoids "organize/clean up
+# sessions" phrasing (F4).
+SKILL_DESCRIPTION = (
+    "Use when creating, saving, writing, moving, or deleting files, "
+    "organizing deliverables, designing workspace layout, or auditing "
+    "workspace compliance. Enforces session directory discipline and "
+    "two-step confirmation for destructive operations."
+)
+
+# Spec 3.7/5.17: always-on discipline prompt (<=500 chars, four elements:
+# classify before write / session-dir writes / no root writes / when
+# blocked). The full C6 template is delivered by the block message, NOT
+# by this prompt.
+DISCIPLINE_PROMPT = (
+    "[workspace-guard] 写前分类：任何创建或写入前，先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
+    "会话目录落盘：工作目录内的写入必须落入会话目录的 Outputs/ 或 .tmp/。"
+    "根目录禁写：工作目录根只允许白名单文件、会话目录和 .hermes/。"
+    "被拦截时：遵循拦截消息创建会话目录后重试，回复 [Reason]/[Next]，不要重试同一路径。"
+)
+
 # Terminal coarse tiers (spec 5.10). Redirect operators are emitted by
 # _tokenize_command as standalone tokens; block-tier targets are exact
 # membership + next plain token. Everything else with write intent is
@@ -183,6 +205,29 @@ def register(ctx):
                 logger.warning("workspace-guard: register_tool failed: %s", exc)
         # Spec 5.7 commands (status | stats | doctor) live in config.py (D3).
         register_workspace_guard_commands(ctx)
+        # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
+        try:
+            skill_md = Path(__file__).parent / "skills" / "workspace-organization" / "SKILL.md"
+            if skill_md.is_file() and hasattr(ctx, "register_skill"):
+                ctx.register_skill(
+                    "workspace-organization", skill_md, description=SKILL_DESCRIPTION
+                )
+            else:
+                logger.debug(
+                    "workspace-guard: register_skill skipped (bundled SKILL.md "
+                    "or ctx.register_skill unavailable)"
+                )
+        except Exception as exc:
+            logger.warning("workspace-guard: register_skill failed: %s", exc)
+        try:
+            if hasattr(ctx, "register_system_prompt_section"):
+                ctx.register_system_prompt_section(
+                    "workspace-guard-discipline", DISCIPLINE_PROMPT
+                )
+        except Exception as exc:
+            logger.warning(
+                "workspace-guard: register_system_prompt_section failed: %s", exc
+            )
         logger.debug("workspace-guard: registered successfully")
     except Exception as exc:
         logger.warning("workspace-guard: registration failed: %s", exc)
