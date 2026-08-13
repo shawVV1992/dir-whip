@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """S2: Audit a workspace for structural compliance violations.
 
-Scans a workspace root against 6 compliance checks and reports violations.
-READ-ONLY: never creates, moves, deletes or modifies any file or directory.
-
-Workspace validation (SCR-011): the target must be a registered profile
-workspace in the profile workspace memo; when the memo is unavailable and
-no plugin is present, standalone mode trusts the provided --workspace
-(with a stderr warning). A missing directory is a parameter error.
+Scans the Working Directory root against 6 compliance checks and reports
+violations. Boundary validation (spec 4.4): an explicit --workspace must
+equal the resolved Working Directory; the default target is the resolved
+Working Directory (guard-config override -> HERMES_SESSION_PROFILE ->
+profile enumeration + TERMINAL_CWD candidate root), falling back to the
+current directory with ONE concise stderr warning when the chain is
+unresolvable (fail-open). A missing directory or a mismatch is a
+parameter error.
 
 Checks:
   1. Root level may only contain files on the workspace-guard allowed_root_files whitelist.
@@ -20,15 +21,27 @@ Checks:
   6. Script files (.py, .sh, .bat, .ps1) directly inside a session dir
      belong in .tmp/ instead.
 
+Embedded .tmp cleanup (spec 3.4 / 8.1): age-based cleanup of session
+.tmp/ directories runs inside the audit. Cron mode (--gate) deletes
+expired entries automatically; interactive mode only proposes them
+(never deletes without the user). The hidden --days flag sets the age
+threshold (default 30). Deletion never touches Outputs/, session files
+outside .tmp/, workspace root files, or the .tmp/ directory itself, and
+never scans .tmp/ directories outside valid session dirs.
+
 Output:
   Plain text: one block per violation (check number, name, path,
   suggestion), or a single "OK" line when compliant.
   --json: a JSON array of violation objects, or [] when compliant.
+  --gate: regular output first, then the cleanup report, then a final
+  JSON line {"wakeAgent": false} or {"wakeAgent": true, "violations": N}.
+  Interactive --json keeps the plain JSON array (no cleanup proposal).
 
 Exit codes:
   0 = compliant (no violations)
   1 = violations found
-  2 = parameter/path error (e.g. target directory does not exist)
+  2 = parameter/path error (missing directory, --workspace mismatch,
+      invalid --days)
 """
 
 import argparse
@@ -36,7 +49,9 @@ import datetime
 import json
 import os
 import re
+import shutil
 import sys
+import time
 
 try:
     import workspace_resolver
@@ -149,9 +164,9 @@ def check_session_scripts(session, violations):
             })
 
 
-def audit(root):
+def audit(root, hh):
     """Run all checks; return a list of violation dicts."""
-    allowed = workspace_resolver.allowed_root_files()
+    allowed = workspace_resolver.allowed_root_files(hh)
     violations = []
     check_root_files(root, allowed, violations)
     check_root_outputs(root, violations)
@@ -166,6 +181,58 @@ def audit(root):
         if os.path.isdir(outputs):
             check_outputs_content(outputs, violations)
     return violations
+
+
+def find_tmp_entries(parent):
+    """Sorted immediate entry paths inside each session .tmp/ directory.
+
+    Only scans parent/<session-dir>/.tmp/ where the session dir name is a
+    valid session name (real timestamp). Never recurses deeper and never
+    scans .tmp/ directories outside session dirs.
+    """
+    entries = []
+    for entry in os.scandir(parent):
+        if not entry.is_dir() or not is_session_name(entry.name):
+            continue
+        tmp_dir = os.path.join(entry.path, TMP_DIR)
+        if not os.path.isdir(tmp_dir):
+            continue
+        for item in os.scandir(tmp_dir):
+            entries.append(item.path)
+    return sorted(entries)
+
+
+def is_old(path, days):
+    """True if the entry has not been modified for `days` days or longer."""
+    try:
+        age = time.time() - os.stat(path).st_mtime
+    except OSError:
+        return False
+    return age >= days * 86400
+
+
+def cleanup_tmp(root, days, delete):
+    """Find expired session .tmp/ entries; delete them when delete=True.
+
+    Returns (items, failures). Deletion is limited to the contents of
+    session .tmp/ directories: Outputs/, session files outside .tmp/,
+    workspace root files and the .tmp/ directory itself are never
+    touched.
+    """
+    items = [p for p in find_tmp_entries(root) if is_old(p, days)]
+    failures = 0
+    if delete:
+        for path in items:
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                sys.stdout.write(to_fwd(path) + "\n")
+            except OSError as exc:
+                failures += 1
+                sys.stderr.write("error: could not delete %s: %s\n" % (to_fwd(path), exc))
+    return items, failures
 
 
 def print_plain(violations):
@@ -185,7 +252,7 @@ def print_json(violations):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Audit a workspace root against structural compliance checks (read-only)."
+        description="Audit a workspace root against structural compliance checks (with embedded .tmp cleanup)."
     )
     parser.add_argument(
         "root",
@@ -196,9 +263,8 @@ def main(argv=None):
     parser.add_argument(
         "--workspace",
         default=None,
-        help="Default Working Directory to audit (default: current working directory).",
+        help="Working Directory to audit (default: resolved Working Directory, or the current directory on fail-open).",
     )
-    workspace_resolver.add_profile_arg(parser)
     parser.add_argument(
         "--json",
         action="store_true",
@@ -207,29 +273,61 @@ def main(argv=None):
     parser.add_argument(
         "--gate",
         action="store_true",
-        help="Append wakeAgent JSON line for cron integration.",
+        help="Cron mode: auto-clean expired .tmp entries and append the wakeAgent JSON line.",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
 
+    if args.days < 0:
+        sys.stderr.write("error: --days must be a non-negative integer\n")
+        return 2
+
+    hh = workspace_resolver.hermes_home()
     target = args.workspace if args.workspace is not None else args.root
-    if target is None:
-        target = os.getcwd()
-    root = os.path.abspath(target)
+    if target is not None:
+        root = os.path.abspath(target)
+        if not os.path.isdir(root):
+            sys.stderr.write("error: target directory does not exist: %s\n" % to_fwd(root))
+            return 2
+        valid, reason = workspace_resolver.validate_workspace(root, hh=hh)
+        if not valid:
+            sys.stderr.write("error: %s\n" % reason)
+            return 2
+    else:
+        root = workspace_resolver.resolve_working_dir_root(hh=hh)
+        if root is None:
+            # Fail-open (spec 4.4 step 4): the resolver already emitted
+            # exactly ONE concise stderr warning; fall back to CWD.
+            root = os.getcwd()
+        root = os.path.abspath(root)
+        if not os.path.isdir(root):
+            sys.stderr.write("error: resolved Working Directory does not exist: %s\n" % to_fwd(root))
+            return 2
 
-    if not os.path.isdir(root):
-        sys.stderr.write("error: target directory does not exist: %s\n" % to_fwd(root))
-        return 2
+    violations = audit(root, hh)
 
-    valid, msg = workspace_resolver.validate_workspace(root, profile=args.profile)
-    if not valid:
-        sys.stderr.write("error: %s\n" % msg)
-        return 2
-
-    violations = audit(root)
     if args.json:
         print_json(violations)
     else:
         print_plain(violations)
+
+    items, failures = cleanup_tmp(root, args.days, delete=args.gate)
+    if args.gate and items:
+        if failures:
+            sys.stderr.write(
+                "error: %d item(s) could not be removed from .tmp directories\n" % failures
+            )
+        sys.stdout.write("Removed %d item(s) from .tmp directories.\n" % (len(items) - failures))
+    elif items and not args.json:
+        sys.stdout.write("Tmp cleanup proposal (cron mode auto-cleans):\n")
+        for path in items:
+            sys.stdout.write(to_fwd(path) + "\n")
+        sys.stdout.write("Proposed %d item(s) for .tmp cleanup.\n" % len(items))
 
     if args.gate:
         if violations:
