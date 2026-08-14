@@ -34,14 +34,12 @@ command on Windows, Linux, WSL, and macOS.
 
 | Area | Capability |
 | ---- | ---------- |
-| **Plugin guard** | 7 hooks block writes to the Working Directory root outside Session Directories; external paths are allowed and logged |
-| **Bundled skill** | `workspace-organization` ships inside the plugin: full discipline reference + audit workflow |
-| **Session Directories** | `YYYYMMDD_HHMMSS_TaskName/` with `Outputs/` and `.tmp/`, created by a bundled script |
-| **Commands** | `/dir-whip` — one merged report: version, guard state, Working Directory + source, self-check, stats file path |
-| **Tool** | `dir_whip_allow_path` — session-scoped path exemption, the plugin's only tool |
-| **Configuration** | `dir-whip-config.yaml` with 4 keys, outside the plugin dir, survives reinstalls |
-| **Governance** | `audit_workspace.py --gate` with the cron wakeAgent / [SILENT] pattern |
-| **Observability** | stats.jsonl (5 MB rollover, privacy-trimmed); 5 `dir-whip:*` events |
+| **Plugin guard** | 7 hooks block root writes outside Session Directories; external writes allow + log |
+| **Bundled skill** | `workspace-organization` bundled: discipline reference + audit workflow |
+| **Quick commands** | `/dir-whip` merged report; `dir_whip_allow_path` session exemption tool |
+| **Cron governance** | `audit_workspace.py --gate` zero-token cron pre-runs (wakeAgent / [SILENT]) |
+| **Subagents** | children write to parent-designated dirs; never self-create Session Directories |
+| **Observability** | stats.jsonl (5 MB rollover, privacy-trimmed) + 5 `dir-whip:*` events |
 
 ## Installation & Quick Start
 
@@ -50,7 +48,7 @@ command on Windows, Linux, WSL, and macOS.
 - Hermes CLI or desktop with plugin support (manifest v2).
 - Network access to GitHub for the install command.
 
-### Quick Start (Human Users)
+### Quick Start
 
 ```bash
 # 1. Install the plugin plus the bundled skill, scripts, and config template
@@ -62,24 +60,14 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 /dir-whip
 ```
 
+> **Note for AI assistants:** If you are an AI agent asked to install or
+> verify dir-whip, run step 1 (user approval may be required) and report
+> that a restart is needed — do not test file writes in the current
+> session. For the full discipline reference, load the bundled skill
+> explicitly with `dir-whip:workspace-organization`.
+
 The guard becomes active after the next Hermes restart. No installer script
 and no separate skill install are needed.
-
-### Quick Start (AI Agent)
-
-> **Note for AI assistants:** If you are an AI agent asked to install or
-> verify dir-whip, run the commands below. The guard activates only
-> after Hermes restarts — do not test file writes in the current session.
-
-```bash
-# 1. Install (user approval may be required)
-hermes plugins install shawVV1992/dir-whip/dir-whip --enable
-# 2. Report that a restart is required, then verify in a new session
-/dir-whip
-```
-
-For the full discipline reference, load the bundled skill explicitly with
-`dir-whip:workspace-organization`.
 
 ### Update
 
@@ -95,20 +83,41 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --force
 hermes plugins remove dir-whip
 ```
 
+### Enable / Disable
+
+```bash
+# On — install with the plugin enabled
+hermes plugins install shawVV1992/dir-whip/dir-whip --enable
+
+# Off
+hermes plugins disable dir-whip
+
+# Restore default — re-enable
+hermes plugins enable dir-whip
+```
+
 ## What It Guards
 
 Every Hermes conversation that produces files gets one Session Directory at
 the Working Directory root, named `YYYYMMDD_HHMMSS_TaskName/`, with `Outputs/`
 for formal deliverables and `.tmp/` for intermediate files.
 
-| Target | Verdict |
-| ------ | ------- |
-| Inside a Session Directory | Allowed |
-| Exempt or runtime-allowlisted path | Allowed |
-| Whitelist file at the root (`allowed_root_files`) | Allowed |
-| Other writes at the Working Directory root | Blocked — create a Session Directory |
-| Outside the Working Directory | Allowed + logged (external) |
-| Uncertain terminal write intent | Allowed + logged |
+```mermaid
+flowchart TD
+    W([write intent]) --> Q1{inside Working Directory?}
+    Q1 -- no --> A1[allow + log]
+    Q1 -- yes --> Q2{inside a Session Directory?}
+    Q2 -- yes --> A2[allow]
+    Q2 -- no --> Q3{exempt or runtime-allowlisted?}
+    Q3 -- yes --> A2
+    Q3 -- no --> Q4{root allowlist file?}
+    Q4 -- yes --> A2
+    Q4 -- no --> Q5{write intent determinable?}
+    Q5 -- yes --> A3[block + fix-it message]
+    Q5 -- no --> A1
+```
+
+> TODO: diagram to be completed (e.g. terminal write observation path).
 
 Terminal writes are intercepted at the shell level: redirects (`>` `>>` `1>`
 `2>`), `touch`, and `cp`/`mv` destinations. Complex pipelines are observed,
@@ -120,19 +129,21 @@ not parsed.
 
 | Field | Meaning |
 | ----- | ------- |
-| `[dir-whip] v<version>` | Plugin version, read from the plugin's plugin.yaml (`unknown` if unreadable) |
-| `Guard` | `ACTIVE`, or `FAIL-OPEN` when the Working Directory could not be resolved |
-| `Working Directory` | The effective Working Directory and its resolving source: `guard-config` (a dir-whip-config.yaml override), `profile-config` (the profile's `terminal.cwd`), or `fail-open` |
-| `terminal_guard` | `enabled` / `disabled` |
-| `exempt_paths` | Comma-joined exempt paths, or `(none)` |
-| `allowed_root_files` | Comma-joined root whitelist, or `(strict empty whitelist)` when the key is missing |
-| `self-check` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
-| `stats file` | Absolute path to stats.jsonl |
+| `[dir-whip] v<version>` | Plugin version from plugin.yaml (`unknown` if unreadable) |
+| `State` | `ACTIVE`, or `FAIL-OPEN` when the Working Directory could not be resolved |
+| `Working Directory` | Value + resolving source (see next row) |
+| source | `guard-config` (dir-whip-config.yaml) · `profile-config` (profile `terminal.cwd`) · `fail-open` |
+| `Terminal Guard` | `enabled` / `disabled` (`terminal_guard`) |
+| `Exempt Paths` | Comma-joined exempt paths, or `(none)` (`exempt_paths`) |
+| `Root Allowlist` | Comma-joined allowlist, or `(strict empty allowlist)` if missing (`allowed_root_files`) |
+| `Health` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
+| `Stats File` | Absolute path to stats.jsonl |
 
 There are no subcommands: any argument prints `Usage: /dir-whip`.
 
-`dir_whip_allow_path(path)` is the plugin's only tool: it registers a
-user-specified path for the current session (see Advanced Usage).
+`dir_whip_allow_path(path)` is the plugin's only tool: call it before writing
+when the user explicitly names a target path in the conversation. The entry
+lasts for the current session only and merges with `exempt_paths`.
 
 ## Configuration
 
@@ -143,7 +154,7 @@ Optional and user-managed, at `HERMES_HOME/dir-whip/dir-whip-config.yaml`
 | Key | Meaning |
 | --- | ------- |
 | `exempt_paths` | Paths exempt from enforcement (prefix match, absolute, forward slashes) |
-| `allowed_root_files` | Filenames allowed at the Working Directory root; strict empty-list fallback |
+| `allowed_root_files` | Root filenames allowed; strict empty-list fallback |
 | `working_dir_root` | Explicit Working Directory override; fallback = profile `terminal.cwd` |
 | `terminal_guard` | Enable/disable terminal write interception (default: enabled) |
 
@@ -154,22 +165,13 @@ allowed_root_files: ["AGENTS.md"]
 # terminal_guard: enabled                        # default when absent
 ```
 
-## Advanced Usage
-
 **Working Directory resolution.** Resolution follows three steps: explicit
 `working_dir_root` in dir-whip-config.yaml wins; otherwise the current profile's
 `terminal.cwd` is used; if both fail, the guard falls back to the current
 working directory with a WARNING. `/dir-whip` reports the value
 and its source.
 
-**Path exemption for a session.** When a user explicitly names a target path
-in the conversation, call `dir_whip_allow_path(path)` before writing.
-The entry lasts for the current session only and merges with `exempt_paths`.
-
-**Statistics.** Every verdict is appended as one JSON line to
-`HERMES_HOME/dir-whip/stats.jsonl` — no file contents, no absolute
-paths, no prompt text. At 5 MB the file rolls over to `stats.jsonl.1`.
-See the stats file path shown by `/dir-whip` for cross-session totals.
+## Advanced Usage
 
 **Cron governance.** `audit_workspace.py --gate` is a zero-token pre-run gate
 for Hermes cron jobs:
@@ -187,6 +189,26 @@ for Hermes cron jobs:
 - `--workspace` mismatch → exit 2, no wakeAgent (a misconfigured boundary is a
   system problem, not a governance situation)
 
+**Subagent mode.** When a parent agent delegates to subagents, it follows this
+file protocol:
+
+- The parent ensures the target directory exists before delegating (creating
+  a Session Directory first when needed).
+- The child writes to the parent-passed target directory: the parent session's
+  `.tmp/` by default; the parent may explicitly pass an `Outputs/` path (formal
+  deliverables) or a per-subagent subdirectory (e.g. `.tmp/<task>/`).
+- The child never self-creates a Session Directory and never self-promotes
+  (`.tmp/` → `Outputs/` promotion is the parent's review step).
+- When the target directory is missing or a write is blocked, the child
+  reports to the parent instead of creating a Session Directory itself.
+- Guard verdicts for subagent writes are identical to the parent's; stats are
+  split by subagent.
+
+**Statistics.** Every verdict is appended as one JSON line to
+`HERMES_HOME/dir-whip/stats.jsonl` — no file contents, no absolute
+paths, no prompt text. At 5 MB the file rolls over to `stats.jsonl.1`.
+See the Stats File path shown by `/dir-whip` for cross-session totals.
+
 ## Security & Risk
 
 dir-whip is a discipline aid, not a security boundary.
@@ -200,39 +222,7 @@ always visible without a check.
 before a write lands. Misconfiguration fails open with a WARNING, never in
 silence. External writes are allowed but logged. Stats are privacy-trimmed.
 The audit gate refuses to wake agents when `--workspace` mismatches, and
-`/dir-whip`'s self-check verifies config and stats health.
-
-**If you disable it.** Disabling the plugin stops all enforcement; nothing is
-reverted, and misplaced files are not cleaned up automatically. Disabling
-`terminal_guard` leaves shell writes unmonitored.
-
-**Enable / disable / restore default.**
-
-```bash
-# On — install with the plugin enabled
-hermes plugins install shawVV1992/dir-whip/dir-whip --enable
-
-# Off
-hermes plugins disable dir-whip
-
-# Restore default — re-enable
-hermes plugins enable dir-whip
-```
-
-```yaml
-# terminal_guard three states (config-level)
-terminal_guard: enabled    # On (default)
-terminal_guard: disabled   # Off
-                           # Restore default: remove the line
-```
-
-**Recommended use.** Keep the defaults. Exempt only intentional project
-directories. When a write is blocked, create a Session Directory and re-target
-— never bypass the guard. Review the stats file shown by `/dir-whip`
-periodically.
-
-**Responsibility.** Configuration is user-managed. The guard assists review;
-it does not replace it.
+`/dir-whip`'s Health verifies config and stats health.
 
 ## Contributing
 

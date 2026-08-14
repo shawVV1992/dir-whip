@@ -1,7 +1,7 @@
 # dir-whip installed
 
 **Plugin guard**: Active after next Hermes restart. Blocks file writes to the
-Working Directory root outside Session Directories (whitelist files exempt).
+Working Directory root outside Session Directories (allowlist files exempt).
 External paths are allowed and logged.
 
 **Bundled skill**: the workspace-organization skill ships with the plugin.
@@ -9,8 +9,8 @@ Load it explicitly when you need the full discipline reference; a short
 always-on discipline prompt covers day-to-day behavior.
 
 **Quick command**:
-    /dir-whip   # merged report: version, guard state, Working Directory +
-                # source, config detail, self-check, stats file path
+    /dir-whip   # merged report: version, state, Working Directory +
+                # source, config detail, health, stats file path
 
 **Tool**: dir_whip_allow_path — allow a user-specified path for this
 session.

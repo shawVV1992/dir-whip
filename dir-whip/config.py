@@ -817,7 +817,7 @@ def _guard_config_key_present(key):
 
 
 def _stats_writable():
-    """Check stats.jsonl writability (self-check). Returns (ok, error)."""
+    """Check stats.jsonl writability (Health). Returns (ok, error)."""
     path = _stats_jsonl_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -865,10 +865,10 @@ def _plugin_version(path=None):
 def _dir_whip_report():
     """Render the merged /dir-whip report (SCR-029 Plan A; spec 5.7).
 
-    Fixed field order: version, Guard, Working Directory + source,
-    terminal_guard, exempt_paths, allowed_root_files, self-check (+ one
-    line per problem), WARNING (anomaly-only), stats file path. A missing
-    dir-whip-config.yaml is the design default, NOT a self-check problem.
+    Fixed field order: version, State, Working Directory + source,
+    Terminal Guard, Exempt Paths, Root Allowlist, Health (+ one
+    line per problem), WARNING (anomaly-only), Stats File path. A missing
+    dir-whip-config.yaml is the design default, NOT a Health problem.
     Never raises.
     """
     try:
@@ -880,8 +880,8 @@ def _dir_whip_report():
         # Line 1: version (plugin.yaml, unknown fallback).
         lines.append("[dir-whip] v%s" % _plugin_version())
 
-        # Line 2: guard state.
-        lines.append("Guard: ACTIVE" if root else "Guard: FAIL-OPEN")
+        # Line 2: state.
+        lines.append("State: ACTIVE" if root else "State: FAIL-OPEN")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
         if root:
@@ -891,30 +891,30 @@ def _dir_whip_report():
         else:
             lines.append("Working Directory: (unresolved)")
 
-        # Line 4: terminal_guard.
+        # Line 4: terminal guard.
         lines.append(
-            "terminal_guard: %s"
+            "Terminal Guard: %s"
             % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
         )
 
-        # Line 5: exempt_paths.
+        # Line 5: exempt paths.
         exempts = cfg.get("exempt_paths", [])
         lines.append(
-            "exempt_paths: %s" % (", ".join(exempts) if exempts else "(none)")
+            "Exempt Paths: %s" % (", ".join(exempts) if exempts else "(none)")
         )
 
-        # Line 6: allowed_root_files. Missing key = fail-closed hint
-        # (doctor semantics); present-but-empty keeps the status "(none)"
-        # semantics; otherwise comma-joined.
+        # Line 6: root allowlist (allowed_root_files). Missing key =
+        # fail-closed hint (doctor semantics); present-but-empty keeps the
+        # status "(none)" semantics; otherwise comma-joined.
         allowed = cfg.get("allowed_root_files", [])
         if not _guard_config_key_present("allowed_root_files"):
-            lines.append("allowed_root_files: (strict empty whitelist)")
+            lines.append("Root Allowlist: (strict empty allowlist)")
         elif allowed:
-            lines.append("allowed_root_files: %s" % ", ".join(allowed))
+            lines.append("Root Allowlist: %s" % ", ".join(allowed))
         else:
-            lines.append("allowed_root_files: (none)")
+            lines.append("Root Allowlist: (none)")
 
-        # Line 7: self-check (one line per problem when PROBLEM).
+        # Line 7: health (one line per problem when PROBLEM).
         problems = []
         if not root:
             problems.append("resolution: FAIL-OPEN")
@@ -922,10 +922,10 @@ def _dir_whip_report():
         if not writable:
             problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
         if problems:
-            lines.append("self-check: PROBLEM")
+            lines.append("Health: PROBLEM")
             lines.extend("- %s" % p for p in problems)
         else:
-            lines.append("self-check: OK")
+            lines.append("Health: OK")
 
         # Line 8 (anomaly only): Q6 footgun — explicit override differs
         # from the profile terminal.cwd (doctor logic retained).
@@ -941,7 +941,7 @@ def _dir_whip_report():
 
         # Last line (always): stats.jsonl absolute path (session profile
         # home, 5.13/SCR-027).
-        lines.append("stats file: %s" % _stats_jsonl_path())
+        lines.append("Stats File: %s" % _stats_jsonl_path())
         return "\n".join(lines)
     except Exception as exc:
         return "[dir-whip] report failed: %s" % exc
