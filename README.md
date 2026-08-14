@@ -7,7 +7,8 @@
 
 [中文版](./README-zh.md) | [English](./README.md)
 
-dir-whip enforces Working Directory file discipline for Hermes agents.
+dir-whip enforces Working Directory file discipline for
+[Hermes](https://github.com/NousResearch/hermes-agent) agents.
 A bundled `workspace-organization` skill teaches the rules; a plugin with 7
 hooks blocks violations before they land. Version 0.2.0 — installable with 1
 command on Windows, Linux, WSL, and macOS.

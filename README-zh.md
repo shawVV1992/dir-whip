@@ -9,7 +9,7 @@
 
 本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
 
-dir-whip 为 Hermes 智能体的工作目录（Working Directory）强制执行文件
+dir-whip 为 [Hermes](https://github.com/NousResearch/hermes-agent) 智能体的工作目录（Working Directory）强制执行文件
 纪律：内置的技能负责教导规则，插件负责在违规落地之前将其拦截。支持
 Windows、Linux、WSL 与 macOS。
 
