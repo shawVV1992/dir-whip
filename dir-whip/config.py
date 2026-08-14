@@ -333,9 +333,9 @@ def get_session_root():
 def _effective_root(ctx):
     """The session root, resolving lazily before any on_session_start ran.
 
-    Consumers (status/doctor) read the session value; before the first
-    on_start the register-time resolution is the initial value, so a lazy
-    refresh here keeps them correct in tests and pre-session contexts.
+    Consumers (the /dir-whip report) read the session value; before the
+    first on_start the register-time resolution is the initial value, so a
+    lazy refresh here keeps them correct in tests and pre-session contexts.
     """
     if not _session_root_initialized:
         refresh_resolution(ctx)
@@ -646,45 +646,6 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
             logger.debug("dir-whip: stats write failed (ignored): %s", exc)
 
 
-def stats_jsonl_totals():
-    """Aggregate cross-session totals from stats.jsonl (5.13 D3; --all).
-
-    Reads every parseable JSON line under HERMES_HOME/dir-whip/
-    stats.jsonl into the same {outcome: {tool: {rule_key: {is_subagent:
-    count}}}} shape as stats_snapshot(); unparseable lines are skipped.
-    Never raises (fail-open reading).
-    """
-    totals = {}
-    path = _stats_jsonl_path()
-    try:
-        if not path.is_file():
-            return totals
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                outcome = event.get("outcome")
-                tool = event.get("tool")
-                rule_key = event.get("rule_key")
-                if not outcome or not tool or not rule_key:
-                    continue
-                is_subagent = bool(event.get("is_subagent", False))
-                by_tool = totals.setdefault(outcome, {})
-                by_rule = by_tool.setdefault(tool, {})
-                counts = by_rule.setdefault(rule_key, {})
-                counts[is_subagent] = counts.get(is_subagent, 0) + 1
-    except Exception:
-        pass
-    return totals
-
-
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
@@ -856,7 +817,7 @@ def _guard_config_key_present(key):
 
 
 def _stats_writable():
-    """Check stats.jsonl writability (doctor). Returns (ok, error)."""
+    """Check stats.jsonl writability (self-check). Returns (ok, error)."""
     path = _stats_jsonl_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -876,133 +837,98 @@ def _stats_writable():
                 pass
 
 
-def _cmd_status(raw_args=""):
-    """/dir-whip status: effective config + resolving source (5.7).
+# Report display labels for the resolution-chain sources (SCR-029): the
+# dir-whip-config source renders as "guard-config" per the report contract;
+# profile-config / fail-open render as-is.
+_SOURCE_LABELS = {"dir-whip-config": "guard-config"}
 
-    One field per line; the source string matches the resolution chain
-    sources (dir-whip-config / profile-config / fail-open). Never raises.
+
+def _plugin_version(path=None):
+    """The plugin version from the sibling plugin.yaml (the single version
+    source, SCR-029). Simple text parse, NO PyYAML: the first `version:`
+    line. On ANY failure (missing/unreadable file, no match) -> 'unknown';
+    never raises.
     """
+    if path is None:
+        path = Path(__file__).resolve().parent / "plugin.yaml"
     try:
-        ctx = _get_cmd_ctx()
-        root = _effective_root(ctx)
-        cfg = load_guard_config()
-        if root:
-            root_line = "working_dir_root: %s" % root
-        else:
-            root_line = "working_dir_root: (unresolved)"
-        terminal_guard = "enabled" if cfg.get("terminal_guard", True) else "disabled"
-        exempts = cfg.get("exempt_paths", [])
-        allowed = cfg.get("allowed_root_files", [])
-        return (
-            "[dir-whip] status\n"
-            "%s\n"
-            "source: %s\n"
-            "terminal_guard: %s\n"
-            "exempt_paths: %s\n"
-            "allowed_root_files: %s"
-            % (
-                root_line,
-                _resolution_source(ctx),
-                terminal_guard,
-                ", ".join(exempts) if exempts else "(none)",
-                ", ".join(allowed) if allowed else "(none)",
-            )
-        )
-    except Exception as exc:
-        return "[dir-whip] status failed: %s" % exc
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        match = re.search(r"^version:\s*(\S+)$", text, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return "unknown"
 
 
-def _format_counters(counters, subagent_only=False):
-    """Render counters to lines: <outcome>/<tool>/<rule_key>/<main|subagent>: n."""
-    lines = []
-    for outcome in sorted(counters):
-        for tool in sorted(counters[outcome]):
-            for rule_key in sorted(counters[outcome][tool]):
-                for is_subagent in sorted(counters[outcome][tool][rule_key]):
-                    if subagent_only and not is_subagent:
-                        continue
-                    lines.append(
-                        "%s/%s/%s/%s: %d"
-                        % (
-                            outcome, tool, rule_key,
-                            "subagent" if is_subagent else "main",
-                            counters[outcome][tool][rule_key][is_subagent],
-                        )
-                    )
-    return lines
+def _dir_whip_report():
+    """Render the merged /dir-whip report (SCR-029 Plan A; spec 5.7).
 
-
-def _cmd_stats(raw_args=""):
-    """/dir-whip stats [--all] [--subagent] (5.7/5.13 D3/D4).
-
-    Session counters by default; --all aggregates the persisted stats.jsonl
-    for cross-session totals; --subagent shows only subagent-split counts.
+    Fixed field order: version, Guard, Working Directory + source,
+    terminal_guard, exempt_paths, allowed_root_files, self-check (+ one
+    line per problem), WARNING (anomaly-only), stats file path. A missing
+    dir-whip-config.yaml is the design default, NOT a self-check problem.
     Never raises.
     """
     try:
-        tokens = (raw_args or "").strip().split()
-        use_all = "--all" in tokens
-        subagent_only = "--subagent" in tokens
-        if use_all:
-            counters = stats_jsonl_totals()
-        else:
-            counters = stats_snapshot()
-        lines = _format_counters(counters, subagent_only=subagent_only)
-        if not lines:
-            return "[dir-whip] stats\n(no statistics recorded)"
-        return "[dir-whip] stats\n" + "\n".join(lines)
-    except Exception as exc:
-        return "[dir-whip] stats failed: %s" % exc
-
-
-def _cmd_doctor(raw_args=""):
-    """/dir-whip doctor: configuration self-check (5.7).
-
-    Checks dir-whip-config.yaml presence/keys, the resolution chain, and
-    stats.jsonl writability. Emits a clearly marked WARNING when an
-    explicit working_dir_root override differs from the current profile's
-    terminal.cwd (the Q6 footgun: desktop-settings edit masked by the
-    override). Never raises.
-    """
-    try:
         ctx = _get_cmd_ctx()
-        lines = ["[dir-whip] doctor"]
-
-        cfg_path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
-        if cfg_path.is_file():
-            lines.append("dir-whip-config: OK")
-        else:
-            lines.append("dir-whip-config: MISSING (defaults in effect)")
-
         cfg = load_guard_config()
-        exempts = cfg.get("exempt_paths", [])
-        allowed = cfg.get("allowed_root_files", [])
-        if _guard_config_key_present("exempt_paths"):
-            lines.append("exempt_paths: OK (%d entries)" % len(exempts))
+        root = _effective_root(ctx)
+        lines = []
+
+        # Line 1: version (plugin.yaml, unknown fallback).
+        lines.append("[dir-whip] v%s" % _plugin_version())
+
+        # Line 2: guard state.
+        lines.append("Guard: ACTIVE" if root else "Guard: FAIL-OPEN")
+
+        # Line 3: Working Directory + resolving source (5.5 chain).
+        if root:
+            source = _resolution_source(ctx)
+            source = _SOURCE_LABELS.get(source, source)
+            lines.append("Working Directory: %s  (source: %s)" % (root, source))
         else:
-            lines.append("exempt_paths: MISSING (defaults to empty)")
-        if _guard_config_key_present("allowed_root_files"):
-            lines.append("allowed_root_files: OK (%d entries)" % len(allowed))
-        else:
-            lines.append("allowed_root_files: MISSING (strict empty whitelist)")
+            lines.append("Working Directory: (unresolved)")
+
+        # Line 4: terminal_guard.
         lines.append(
             "terminal_guard: %s"
             % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
         )
 
-        root = _effective_root(ctx)
-        if root:
-            lines.append("resolution: OK (%s via %s)" % (root, _resolution_source(ctx)))
-        else:
-            lines.append("resolution: FAIL-OPEN (guard disabled, source: fail-open)")
+        # Line 5: exempt_paths.
+        exempts = cfg.get("exempt_paths", [])
+        lines.append(
+            "exempt_paths: %s" % (", ".join(exempts) if exempts else "(none)")
+        )
 
+        # Line 6: allowed_root_files. Missing key = fail-closed hint
+        # (doctor semantics); present-but-empty keeps the status "(none)"
+        # semantics; otherwise comma-joined.
+        allowed = cfg.get("allowed_root_files", [])
+        if not _guard_config_key_present("allowed_root_files"):
+            lines.append("allowed_root_files: (strict empty whitelist)")
+        elif allowed:
+            lines.append("allowed_root_files: %s" % ", ".join(allowed))
+        else:
+            lines.append("allowed_root_files: (none)")
+
+        # Line 7: self-check (one line per problem when PROBLEM).
+        problems = []
+        if not root:
+            problems.append("resolution: FAIL-OPEN")
         writable, error = _stats_writable()
-        if writable:
-            lines.append("stats.jsonl: writable")
+        if not writable:
+            problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
+        if problems:
+            lines.append("self-check: PROBLEM")
+            lines.extend("- %s" % p for p in problems)
         else:
-            lines.append("stats.jsonl: NOT WRITABLE (%s)" % error)
+            lines.append("self-check: OK")
 
-        # Q6 footgun: explicit override differs from the profile terminal.cwd.
+        # Line 8 (anomaly only): Q6 footgun — explicit override differs
+        # from the profile terminal.cwd (doctor logic retained).
         override = cfg.get("working_dir_root")
         if override:
             profile_cwd = _profile_terminal_cwd(ctx)
@@ -1013,28 +939,26 @@ def _cmd_doctor(raw_args=""):
                     "masked by the override" % (override, profile_cwd)
                 )
 
+        # Last line (always): stats.jsonl absolute path (session profile
+        # home, 5.13/SCR-027).
+        lines.append("stats file: %s" % _stats_jsonl_path())
         return "\n".join(lines)
     except Exception as exc:
-        return "[dir-whip] doctor failed: %s" % exc
+        return "[dir-whip] report failed: %s" % exc
 
 
 def _dir_whip_cmd(raw_args):
-    """/dir-whip dispatcher (spec 5.7): status | stats [--all] [--subagent] | doctor.
+    """/dir-whip dispatcher (spec 5.7, SCR-029): no subcommands.
 
     The host invokes the handler as fn(raw_args) with everything after the
-    first token; subcommand dispatch happens here. Never raises (errors
-    become the message).
+    first token. Bare /dir-whip renders the merged report; ANY argument
+    renders exactly one Usage line (the status/stats/doctor subcommands
+    are removed). Never raises (errors become the message).
     """
     try:
-        tokens = (raw_args or "").strip().split()
-        sub = tokens[0].lower() if tokens else ""
-        if sub in ("", "status"):
-            return _cmd_status("")
-        if sub == "stats":
-            return _cmd_stats(" ".join(tokens[1:]))
-        if sub == "doctor":
-            return _cmd_doctor("")
-        return "Usage: /dir-whip status | stats [--all] [--subagent] | doctor"
+        if (raw_args or "").strip():
+            return "Usage: /dir-whip"
+        return _dir_whip_report()
     except Exception as exc:
         return "[dir-whip] command failed: %s" % exc
 
@@ -1042,13 +966,12 @@ def _dir_whip_cmd(raw_args):
 def register_dir_whip_commands(ctx):
     """Register the /dir-whip slash command (spec 5.7).
 
-    Exactly ONE command named "dir-whip": Hermes dispatches slash
-    commands on the FIRST token only (cli.py: base_cmd = split()[0]), so
-    the frozen interface /dir-whip status | stats | doctor requires
-    a single registration with internal subcommand dispatch (status /
-    stats [--all] [--subagent] / doctor). Guarded: a ctx without
-    register_command still registers. allow_path is a TOOL and is NOT
-    registered here (dir_whip.py registers it).
+    Exactly ONE command named "dir-whip": Hermes dispatches slash commands
+    on the FIRST token only (cli.py: base_cmd = split()[0]), so every
+    argument reaches the same handler, which renders the one-line Usage
+    (SCR-029: status/stats/doctor subcommands removed). Guarded: a ctx
+    without register_command still registers. allow_path is a TOOL and is
+    NOT registered here (dir_whip.py registers it).
     """
     global _cmd_ctx
     _cmd_ctx = ctx
@@ -1057,8 +980,8 @@ def register_dir_whip_commands(ctx):
     try:
         ctx.register_command(
             "dir-whip", _dir_whip_cmd,
-            description="dir-whip: status | stats [--all] [--subagent] | doctor",
-            args_hint="status|stats [--all] [--subagent]|doctor",
+            description="dir-whip: Working Directory guard report",
+            args_hint="",
         )
     except Exception as exc:
         logger.warning("dir-whip: register_command failed: %s", exc)

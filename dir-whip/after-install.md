@@ -8,10 +8,9 @@ External paths are allowed and logged.
 Load it explicitly when you need the full discipline reference; a short
 always-on discipline prompt covers day-to-day behavior.
 
-**Quick commands**:
-    /dir-whip status   # effective config + source
-    /dir-whip stats    # this session's interception statistics
-    /dir-whip doctor   # configuration self-check
+**Quick command**:
+    /dir-whip   # merged report: version, guard state, Working Directory +
+                # source, config detail, self-check, stats file path
 
 **Tool**: dir_whip_allow_path — allow a user-specified path for this
 session.

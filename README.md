@@ -26,7 +26,7 @@ command on Windows, Linux, WSL, and macOS.
   default; misconfiguration fails open with a WARNING, never in silence.
 - **Scheduled governance** — `audit_workspace.py --gate` powers zero-token
   cron pre-runs with the wakeAgent / [SILENT] pattern.
-- **Observable by design** — 3 slash commands, 5 `dir-whip:*` events,
+- **Observable by design** — 1 slash command, 5 `dir-whip:*` events,
   and privacy-trimmed stats.jsonl (5 MB rollover).
 - **Cross-platform** — Windows 10+, Linux, WSL, and macOS.
 
@@ -37,7 +37,7 @@ command on Windows, Linux, WSL, and macOS.
 | **Plugin guard** | 7 hooks block writes to the Working Directory root outside Session Directories; external paths are allowed and logged |
 | **Bundled skill** | `workspace-organization` ships inside the plugin: full discipline reference + audit workflow |
 | **Session Directories** | `YYYYMMDD_HHMMSS_TaskName/` with `Outputs/` and `.tmp/`, created by a bundled script |
-| **Commands** | `/dir-whip status`, `stats [--all] [--subagent]`, `doctor` |
+| **Commands** | `/dir-whip` — one merged report: version, guard state, Working Directory + source, self-check, stats file path |
 | **Tool** | `dir_whip_allow_path` — session-scoped path exemption, the plugin's only tool |
 | **Configuration** | `dir-whip-config.yaml` with 4 keys, outside the plugin dir, survives reinstalls |
 | **Governance** | `audit_workspace.py --gate` with the cron wakeAgent / [SILENT] pattern |
@@ -59,7 +59,7 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 2. Restart Hermes — the guard activates on the next session
 
 # 3. Verify the effective configuration and its source
-/dir-whip status
+/dir-whip
 ```
 
 The guard becomes active after the next Hermes restart. No installer script
@@ -75,7 +75,7 @@ and no separate skill install are needed.
 # 1. Install (user approval may be required)
 hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 2. Report that a restart is required, then verify in a new session
-/dir-whip status
+/dir-whip
 ```
 
 For the full discipline reference, load the bundled skill explicitly with
@@ -116,11 +116,20 @@ not parsed.
 
 ## Commands
 
-| Command | Purpose |
-| ------- | ------- |
-| `/dir-whip status` | Effective config + resolving source (working_dir_root, terminal_guard, exempt_paths, allowed_root_files) |
-| `/dir-whip stats [--all] [--subagent]` | This session's interception statistics; `--all` reads persisted totals |
-| `/dir-whip doctor` | Configuration self-check: parseability, keys, resolution chain, stats writability |
+`/dir-whip` prints one merged report:
+
+| Field | Meaning |
+| ----- | ------- |
+| `[dir-whip] v<version>` | Plugin version, read from the plugin's plugin.yaml (`unknown` if unreadable) |
+| `Guard` | `ACTIVE`, or `FAIL-OPEN` when the Working Directory could not be resolved |
+| `Working Directory` | The effective Working Directory and its resolving source: `guard-config` (a dir-whip-config.yaml override), `profile-config` (the profile's `terminal.cwd`), or `fail-open` |
+| `terminal_guard` | `enabled` / `disabled` |
+| `exempt_paths` | Comma-joined exempt paths, or `(none)` |
+| `allowed_root_files` | Comma-joined root whitelist, or `(strict empty whitelist)` when the key is missing |
+| `self-check` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
+| `stats file` | Absolute path to stats.jsonl |
+
+There are no subcommands: any argument prints `Usage: /dir-whip`.
 
 `dir_whip_allow_path(path)` is the plugin's only tool: it registers a
 user-specified path for the current session (see Advanced Usage).
@@ -150,7 +159,7 @@ allowed_root_files: ["AGENTS.md"]
 **Working Directory resolution.** Resolution follows three steps: explicit
 `working_dir_root` in dir-whip-config.yaml wins; otherwise the current profile's
 `terminal.cwd` is used; if both fail, the guard falls back to the current
-working directory with a WARNING. `/dir-whip status` reports the value
+working directory with a WARNING. `/dir-whip` reports the value
 and its source.
 
 **Path exemption for a session.** When a user explicitly names a target path
@@ -159,8 +168,8 @@ The entry lasts for the current session only and merges with `exempt_paths`.
 
 **Statistics.** Every verdict is appended as one JSON line to
 `HERMES_HOME/dir-whip/stats.jsonl` — no file contents, no absolute
-paths, no prompt text. At 5 MB the file rolls over to `stats.jsonl.1`. Use
-`/dir-whip stats --all` for cross-session totals.
+paths, no prompt text. At 5 MB the file rolls over to `stats.jsonl.1`.
+See the stats file path shown by `/dir-whip` for cross-session totals.
 
 **Cron governance.** `audit_workspace.py --gate` is a zero-token pre-run gate
 for Hermes cron jobs:
@@ -191,7 +200,7 @@ always visible without a check.
 before a write lands. Misconfiguration fails open with a WARNING, never in
 silence. External writes are allowed but logged. Stats are privacy-trimmed.
 The audit gate refuses to wake agents when `--workspace` mismatches, and
-`/dir-whip doctor` verifies config and stats health.
+`/dir-whip`'s self-check verifies config and stats health.
 
 **If you disable it.** Disabling the plugin stops all enforcement; nothing is
 reverted, and misplaced files are not cleaned up automatically. Disabling
@@ -219,7 +228,8 @@ terminal_guard: disabled   # Off
 
 **Recommended use.** Keep the defaults. Exempt only intentional project
 directories. When a write is blocked, create a Session Directory and re-target
-— never bypass the guard. Review `/dir-whip stats` periodically.
+— never bypass the guard. Review the stats file shown by `/dir-whip`
+periodically.
 
 **Responsibility.** Configuration is user-managed. The guard assists review;
 it does not replace it.

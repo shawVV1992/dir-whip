@@ -24,7 +24,7 @@ dir-whip 为 Hermes 智能体的工作目录（Working Directory）强制执行�
   发出 WARNING。
 - **支持定时治理** —— `audit_workspace.py --gate` 支撑零 token 的 cron 预检，
   采用 wakeAgent / [SILENT] 模式。
-- **天生可观测** —— 3 个斜杠命令、5 个 `dir-whip:*` 事件，以及隐私
+- **天生可观测** —— 1 个斜杠命令、5 个 `dir-whip:*` 事件，以及隐私
   裁剪的 stats.jsonl（5 MB 滚动）。
 - **跨平台** —— Windows 10+、Linux、WSL、macOS。
 
@@ -35,7 +35,7 @@ dir-whip 为 Hermes 智能体的工作目录（Working Directory）强制执行�
 | **插件守卫** | 7 个钩子拦截指向工作目录根部（合法会话目录之外）的写入；外部路径放行并记入日志 |
 | **捆绑技能** | `workspace-organization` 随插件分发：完整纪律参考 + 审计工作流 |
 | **会话目录** | `YYYYMMDD_HHMMSS_TaskName/`，含 `Outputs/` 与 `.tmp/`，由捆绑脚本创建 |
-| **命令** | `/dir-whip status`、`stats [--all] [--subagent]`、`doctor` |
+| **命令** | `/dir-whip` —— 单命令合并报告：版本、守卫状态、Working Directory + 来源、self-check、stats 文件路径 |
 | **工具** | `dir_whip_allow_path` —— 会话级路径豁免，插件唯一工具 |
 | **配置** | `dir-whip-config.yaml` 共 4 个键，位于插件目录之外，重装不受影响 |
 | **治理** | `audit_workspace.py --gate` 配合 cron 的 wakeAgent / [SILENT] 模式 |
@@ -57,7 +57,7 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 2. 重启 Hermes —— 守卫在下一次会话生效
 
 # 3. 验证生效配置及其来源
-/dir-whip status
+/dir-whip
 ```
 
 重启 Hermes 后守卫即开始生效。无需安装脚本，也无需单独安装技能。
@@ -72,7 +72,7 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 1. 安装（可能需要用户批准）
 hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 2. 告知用户需要重启，并在新会话中验证
-/dir-whip status
+/dir-whip
 ```
 
 如需完整的纪律参考，用 `dir-whip:workspace-organization` 显式加载
@@ -112,11 +112,20 @@ hermes plugins remove dir-whip
 
 ## 命令
 
-| 命令 | 用途 |
+`/dir-whip` 输出一份合并报告：
+
+| 字段 | 含义 |
 | ---- | ---- |
-| `/dir-whip status` | 生效配置 + 解析来源（working_dir_root、terminal_guard、exempt_paths、allowed_root_files） |
-| `/dir-whip stats [--all] [--subagent]` | 本会话的拦截统计；`--all` 读取持久化汇总 |
-| `/dir-whip doctor` | 配置自检：可解析性、各键、解析链、统计可写性 |
+| `[dir-whip] v<version>` | 插件版本，取自插件的 plugin.yaml（读取失败显示 `unknown`） |
+| `Guard` | `ACTIVE`，或 Working Directory 无法解析时的 `FAIL-OPEN` |
+| `Working Directory` | 生效的 Working Directory 及其解析来源：`guard-config`（dir-whip-config.yaml 覆盖）、`profile-config`（档案 `terminal.cwd`）或 `fail-open` |
+| `terminal_guard` | `enabled` / `disabled` |
+| `exempt_paths` | 逗号分隔的豁免路径，或 `(none)` |
+| `allowed_root_files` | 逗号分隔的根白名单；键缺失时显示 `(strict empty whitelist)` |
+| `self-check` | `OK`，或 `PROBLEM` 并逐行列问题（解析、stats.jsonl 可写性） |
+| `stats file` | stats.jsonl 的绝对路径 |
+
+没有任何子命令：任何参数都会输出 `Usage: /dir-whip`。
 
 `dir_whip_allow_path(path)` 是插件唯一的工具：为当前会话注册用户指定
 的路径（见高级用法）。
@@ -145,7 +154,7 @@ allowed_root_files: ["AGENTS.md"]
 
 **工作目录解析。** 解析分三步：dir-whip-config.yaml 中显式 `working_dir_root`
 优先；否则取当前档案的 `terminal.cwd`；两者皆不可用时回退到当前工作目录并
-发出 WARNING。`/dir-whip status` 会报告取值及其来源。
+发出 WARNING。`/dir-whip` 会报告取值及其来源。
 
 **会话级路径豁免。** 当用户在对话中明确指定目标路径时，写入前先调用
 `dir_whip_allow_path(path)`。该记录仅对当前会话有效，并与
@@ -153,8 +162,8 @@ allowed_root_files: ["AGENTS.md"]
 
 **统计。** 每次守卫判定以一行 JSON 追加写入
 `HERMES_HOME/dir-whip/stats.jsonl` —— 不含文件内容、绝对路径或提示词
-文本。超过 5 MB 时滚动为 `stats.jsonl.1`。跨会话汇总用
-`/dir-whip stats --all`。
+文本。超过 5 MB 时滚动为 `stats.jsonl.1`。跨会话汇总请看
+`/dir-whip` 报告的 stats file 路径。
 
 **定时治理。** `audit_workspace.py --gate` 是 Hermes cron 任务的零 token
 预检门：
@@ -182,8 +191,8 @@ dir-whip 是纪律辅助工具，不是安全边界。
 
 **内置防护。** 强制发生在 `pre_tool_call` 钩子中，先于写入落地。配置异常时
 fail-open 并发出 WARNING，绝不静默。外部写入放行但记入日志。统计经过隐私
-裁剪。`--workspace` 不匹配时审计门拒绝唤醒 agent，`/dir-whip doctor`
-可核验配置与统计健康。
+裁剪。`--workspace` 不匹配时审计门拒绝唤醒 agent，`/dir-whip` 的
+self-check 可核验配置与统计健康。
 
 **如果关闭它。** 关闭插件即停止全部强制；已发生的事不会被回滚，错放的文件
 也不会被自动清理。关闭 `terminal_guard` 后 shell 写入不再被监视。
@@ -209,7 +218,8 @@ terminal_guard: disabled   # 关
 ```
 
 **推荐用法。** 保持默认值。只豁免确属有意的项目目录。写入被拦截时创建会话
-目录并重新定向 —— 绝不绕过守卫。定期查看 `/dir-whip stats`。
+目录并重新定向 —— 绝不绕过守卫。定期查看 `/dir-whip` 报告的
+stats file。
 
 **责任归属。** 配置由用户维护。守卫辅助审查，但不取代审查。
 

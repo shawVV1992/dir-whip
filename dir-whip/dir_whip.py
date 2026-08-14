@@ -207,7 +207,8 @@ def register(ctx):
                 )
             except Exception as exc:
                 logger.warning("dir-whip: register_tool failed: %s", exc)
-        # Spec 5.7 commands (status | stats | doctor) live in config.py (D3).
+        # Spec 5.7 command (/dir-whip merged report, SCR-029) lives in
+        # config.py (D3).
         register_dir_whip_commands(ctx)
         # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
         try:
