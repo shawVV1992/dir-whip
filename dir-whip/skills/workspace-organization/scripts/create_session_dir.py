@@ -6,7 +6,7 @@ Prints the absolute path of the created directory (forward slashes) as
 a single stdout line.
 
 Boundary validation (SCR-011, spec 4.4): the --workspace target must EXACTLY
-EQUAL the resolved Working Directory (guard-config working_dir_root ->
+EQUAL the resolved Working Directory (dir-whip-config working_dir_root ->
 HERMES_SESSION_PROFILE -> profile enumeration + TERMINAL_CWD candidate root ->
 fail-open). The existence check runs FIRST (parameter error, exit 1); boundary
 validation SECOND (exit 2). When --workspace is omitted, the script defaults

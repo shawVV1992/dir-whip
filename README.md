@@ -1,11 +1,11 @@
-﻿# workspace-guard
+﻿# dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/shawVV1992/workspace-guard)
+[![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
-workspace-guard enforces Working Directory file discipline for Hermes agents.
+dir-whip enforces Working Directory file discipline for Hermes agents.
 A bundled `workspace-organization` skill teaches the rules; a plugin with 7
 hooks blocks violations before they land. Version 0.2.0 — installable with 1
 command on Windows, Linux, WSL, and macOS.
@@ -26,7 +26,7 @@ command on Windows, Linux, WSL, and macOS.
   default; misconfiguration fails open with a WARNING, never in silence.
 - **Scheduled governance** — `audit_workspace.py --gate` powers zero-token
   cron pre-runs with the wakeAgent / [SILENT] pattern.
-- **Observable by design** — 3 slash commands, 5 `workspace-guard:*` events,
+- **Observable by design** — 3 slash commands, 5 `dir-whip:*` events,
   and privacy-trimmed stats.jsonl (5 MB rollover).
 - **Cross-platform** — Windows 10+, Linux, WSL, and macOS.
 
@@ -37,11 +37,11 @@ command on Windows, Linux, WSL, and macOS.
 | **Plugin guard** | 7 hooks block writes to the Working Directory root outside Session Directories; external paths are allowed and logged |
 | **Bundled skill** | `workspace-organization` ships inside the plugin: full discipline reference + audit workflow |
 | **Session Directories** | `YYYYMMDD_HHMMSS_TaskName/` with `Outputs/` and `.tmp/`, created by a bundled script |
-| **Commands** | `/workspace-guard status`, `stats [--all] [--subagent]`, `doctor` |
-| **Tool** | `workspace_guard_allow_path` — session-scoped path exemption, the plugin's only tool |
-| **Configuration** | `guard-config.yaml` with 4 keys, outside the plugin dir, survives reinstalls |
+| **Commands** | `/dir-whip status`, `stats [--all] [--subagent]`, `doctor` |
+| **Tool** | `dir_whip_allow_path` — session-scoped path exemption, the plugin's only tool |
+| **Configuration** | `dir-whip-config.yaml` with 4 keys, outside the plugin dir, survives reinstalls |
 | **Governance** | `audit_workspace.py --gate` with the cron wakeAgent / [SILENT] pattern |
-| **Observability** | stats.jsonl (5 MB rollover, privacy-trimmed); 5 `workspace-guard:*` events |
+| **Observability** | stats.jsonl (5 MB rollover, privacy-trimmed); 5 `dir-whip:*` events |
 
 ## Installation & Quick Start
 
@@ -54,12 +54,12 @@ command on Windows, Linux, WSL, and macOS.
 
 ```bash
 # 1. Install the plugin plus the bundled skill, scripts, and config template
-hermes plugins install shawVV1992/workspace-guard/workspace-guard --enable
+hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 
 # 2. Restart Hermes — the guard activates on the next session
 
 # 3. Verify the effective configuration and its source
-/workspace-guard status
+/dir-whip status
 ```
 
 The guard becomes active after the next Hermes restart. No installer script
@@ -68,31 +68,31 @@ and no separate skill install are needed.
 ### Quick Start (AI Agent)
 
 > **Note for AI assistants:** If you are an AI agent asked to install or
-> verify workspace-guard, run the commands below. The guard activates only
+> verify dir-whip, run the commands below. The guard activates only
 > after Hermes restarts — do not test file writes in the current session.
 
 ```bash
 # 1. Install (user approval may be required)
-hermes plugins install shawVV1992/workspace-guard/workspace-guard --enable
+hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 # 2. Report that a restart is required, then verify in a new session
-/workspace-guard status
+/dir-whip status
 ```
 
 For the full discipline reference, load the bundled skill explicitly with
-`workspace-guard:workspace-organization`.
+`dir-whip:workspace-organization`.
 
 ### Update
 
 ```bash
-hermes plugins install shawVV1992/workspace-guard/workspace-guard --force
+hermes plugins install shawVV1992/dir-whip/dir-whip --force
 ```
 
-`guard-config.yaml` is preserved across reinstalls.
+`dir-whip-config.yaml` is preserved across reinstalls.
 
 ### Uninstall
 
 ```bash
-hermes plugins remove workspace-guard
+hermes plugins remove dir-whip
 ```
 
 ## What It Guards
@@ -118,18 +118,18 @@ not parsed.
 
 | Command | Purpose |
 | ------- | ------- |
-| `/workspace-guard status` | Effective config + resolving source (working_dir_root, terminal_guard, exempt_paths, allowed_root_files) |
-| `/workspace-guard stats [--all] [--subagent]` | This session's interception statistics; `--all` reads persisted totals |
-| `/workspace-guard doctor` | Configuration self-check: parseability, keys, resolution chain, stats writability |
+| `/dir-whip status` | Effective config + resolving source (working_dir_root, terminal_guard, exempt_paths, allowed_root_files) |
+| `/dir-whip stats [--all] [--subagent]` | This session's interception statistics; `--all` reads persisted totals |
+| `/dir-whip doctor` | Configuration self-check: parseability, keys, resolution chain, stats writability |
 
-`workspace_guard_allow_path(path)` is the plugin's only tool: it registers a
+`dir_whip_allow_path(path)` is the plugin's only tool: it registers a
 user-specified path for the current session (see Advanced Usage).
 
 ## Configuration
 
-Optional and user-managed, at `HERMES_HOME/workspace-guard/guard-config.yaml`
-(Windows: `%LOCALAPPDATA%/hermes/workspace-guard/guard-config.yaml`; POSIX:
-`~/.hermes/workspace-guard/guard-config.yaml`).
+Optional and user-managed, at `HERMES_HOME/dir-whip/dir-whip-config.yaml`
+(Windows: `%LOCALAPPDATA%/hermes/dir-whip/dir-whip-config.yaml`; POSIX:
+`~/.hermes/dir-whip/dir-whip-config.yaml`).
 
 | Key | Meaning |
 | --- | ------- |
@@ -148,26 +148,26 @@ allowed_root_files: ["AGENTS.md"]
 ## Advanced Usage
 
 **Working Directory resolution.** Resolution follows three steps: explicit
-`working_dir_root` in guard-config.yaml wins; otherwise the current profile's
+`working_dir_root` in dir-whip-config.yaml wins; otherwise the current profile's
 `terminal.cwd` is used; if both fail, the guard falls back to the current
-working directory with a WARNING. `/workspace-guard status` reports the value
+working directory with a WARNING. `/dir-whip status` reports the value
 and its source.
 
 **Path exemption for a session.** When a user explicitly names a target path
-in the conversation, call `workspace_guard_allow_path(path)` before writing.
+in the conversation, call `dir_whip_allow_path(path)` before writing.
 The entry lasts for the current session only and merges with `exempt_paths`.
 
 **Statistics.** Every verdict is appended as one JSON line to
-`HERMES_HOME/workspace-guard/stats.jsonl` — no file contents, no absolute
+`HERMES_HOME/dir-whip/stats.jsonl` — no file contents, no absolute
 paths, no prompt text. At 5 MB the file rolls over to `stats.jsonl.1`. Use
-`/workspace-guard stats --all` for cross-session totals.
+`/dir-whip stats --all` for cross-session totals.
 
 **Cron governance.** `audit_workspace.py --gate` is a zero-token pre-run gate
 for Hermes cron jobs:
 
 ```bash
 # Cron job: script= scripts/audit_workspace.py --gate
-#           skill= workspace-guard:workspace-organization
+#           skill= dir-whip:workspace-organization
 #           prompt: "If audit found violations, classify and archive misplaced
 #                    files. If no violations, respond with [SILENT]."
 ```
@@ -180,7 +180,7 @@ for Hermes cron jobs:
 
 ## Security & Risk
 
-workspace-guard is a discipline aid, not a security boundary.
+dir-whip is a discipline aid, not a security boundary.
 
 **What can go wrong.** An agent may be prompted to write anywhere; a prompt
 injection can push writes to unexpected locations. Widening `exempt_paths` or
@@ -191,7 +191,7 @@ always visible without a check.
 before a write lands. Misconfiguration fails open with a WARNING, never in
 silence. External writes are allowed but logged. Stats are privacy-trimmed.
 The audit gate refuses to wake agents when `--workspace` mismatches, and
-`/workspace-guard doctor` verifies config and stats health.
+`/dir-whip doctor` verifies config and stats health.
 
 **If you disable it.** Disabling the plugin stops all enforcement; nothing is
 reverted, and misplaced files are not cleaned up automatically. Disabling
@@ -201,13 +201,13 @@ reverted, and misplaced files are not cleaned up automatically. Disabling
 
 ```bash
 # On — install with the plugin enabled
-hermes plugins install shawVV1992/workspace-guard/workspace-guard --enable
+hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 
 # Off
-hermes plugins disable workspace-guard
+hermes plugins disable dir-whip
 
 # Restore default — re-enable
-hermes plugins enable workspace-guard
+hermes plugins enable dir-whip
 ```
 
 ```yaml
@@ -219,7 +219,7 @@ terminal_guard: disabled   # Off
 
 **Recommended use.** Keep the defaults. Exempt only intentional project
 directories. When a write is blocked, create a Session Directory and re-target
-— never bypass the guard. Review `/workspace-guard stats` periodically.
+— never bypass the guard. Review `/dir-whip stats` periodically.
 
 **Responsibility.** Configuration is user-managed. The guard assists review;
 it does not replace it.
@@ -227,7 +227,7 @@ it does not replace it.
 ## Contributing
 
 Bug reports, feature requests, and pull requests are welcome:
-[github.com/shawVV1992/workspace-guard](https://github.com/shawVV1992/workspace-guard).
+[github.com/shawVV1992/dir-whip](https://github.com/shawVV1992/dir-whip).
 Development is spec-driven; the authoritative spec lives in the repository.
 
 ## License

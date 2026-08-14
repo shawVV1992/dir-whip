@@ -1,10 +1,10 @@
-# workspace-guard configuration
+# dir-whip configuration
 # User-managed. See after-install.md for configuration instructions.
 #
 # RUNTIME LOCATION (SCR-013): the config that the plugin and the audit
-# actually read lives at HERMES_HOME/workspace-guard/guard-config.yaml
-# (Windows: %LOCALAPPDATA%/hermes/workspace-guard/guard-config.yaml;
-# POSIX: ~/.hermes/workspace-guard/guard-config.yaml). This file in the
+# actually read lives at HERMES_HOME/dir-whip/dir-whip-config.yaml
+# (Windows: %LOCALAPPDATA%/hermes/dir-whip/dir-whip-config.yaml;
+# POSIX: ~/.hermes/dir-whip/dir-whip-config.yaml). This file in the
 # plugin directory is ONLY the shipped template: forced plugin reinstalls
 # never touch the runtime copy, so user settings survive.
 

@@ -1,10 +1,10 @@
 """Configuration loading, working_dir_root resolution and statistics for
-workspace-guard (v0.2.0).
+dir-whip (v0.2.0).
 
-Inverted resolution chain (spec 5.5): guard-config.yaml working_dir_root
+Inverted resolution chain (spec 5.5): dir-whip-config.yaml working_dir_root
 override (authoritative) -> current profile's terminal.cwd -> fail-open
 (guard disabled). The v0.1.0 memo chain is removed (spec 1.3/B4); the sole
-surviving tool is workspace_guard_allow_path (spec 5.7). hermes_home honors
+surviving tool is dir_whip_allow_path (spec 5.7). hermes_home honors
 the HERMES_HOME env override before the platform default (D5).
 """
 
@@ -18,7 +18,7 @@ import re
 import threading
 from pathlib import Path
 
-logger = logging.getLogger("workspace-guard")
+logger = logging.getLogger("dir-whip")
 
 SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 
@@ -74,7 +74,7 @@ def _get_plugin_dir():
     """Return the plugin directory (SCR-013: no longer the config source).
 
     Kept for the plugin's own sibling resources; the runtime config now
-    lives at HERMES_HOME/workspace-guard/guard-config.yaml.
+    lives at HERMES_HOME/dir-whip/dir-whip-config.yaml.
     """
     return Path(__file__).parent
 
@@ -156,14 +156,14 @@ def _parse_allowed_root_files(value):
 
 
 def load_guard_config(config_path=None):
-    """Load guard-config.yaml exemptions and overrides.
+    """Load dir-whip-config.yaml exemptions and overrides.
 
     Returns a dict with at least 'exempt_paths' (list), 'terminal_guard'
     (bool, default True), 'allowed_root_files' (list; STRICT fallback []
     when the key is absent) and optionally 'working_dir_root' (str).
     """
     if config_path is None:
-        config_path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
+        config_path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
     config_path = Path(config_path)
 
     result = {
@@ -188,7 +188,7 @@ def load_guard_config(config_path=None):
     except ImportError:
         result = _load_guard_config_fallback(config_path)
     except Exception as exc:
-        logger.debug("workspace-guard: failed to load guard-config.yaml: %s", exc)
+        logger.debug("dir-whip: failed to load dir-whip-config.yaml: %s", exc)
 
     return result
 
@@ -204,7 +204,7 @@ def _parse_inline_list(text):
 
 
 def _load_guard_config_fallback(config_path):
-    """Minimal parser for guard-config.yaml when PyYAML is unavailable."""
+    """Minimal parser for dir-whip-config.yaml when PyYAML is unavailable."""
     result = {
         "exempt_paths": [],
         "terminal_guard": True,
@@ -267,7 +267,7 @@ def resolve_working_dir_root(ctx, config_path=None):
 
     Inverted 3-step chain (plugin side — deliberately different from the
     script-side 4-step chain in workspace_resolver.py):
-    1. guard-config.yaml explicit working_dir_root -> authoritative when set
+    1. dir-whip-config.yaml explicit working_dir_root -> authoritative when set
     2. current profile terminal.cwd: HERMES_HOME/config.yaml for "default",
        else HERMES_HOME/profiles/<name>/config.yaml (ctx.profile_name)
     3. fail-open: WARNING + None (guard disabled)
@@ -276,13 +276,13 @@ def resolve_working_dir_root(ctx, config_path=None):
     plugin side. Resolution happens ONCE at register() (cached via
     get_cached_config); None -> all guard checks allow.
     """
-    # 1. guard-config.yaml explicit value (authoritative when set)
+    # 1. dir-whip-config.yaml explicit value (authoritative when set)
     try:
         cfg = load_guard_config(config_path)
         root = cfg.get("working_dir_root")
         if root:
             logger.info(
-                "workspace-guard: working_dir_root resolved from guard-config: %s", root
+                "dir-whip: working_dir_root resolved from dir-whip-config: %s", root
             )
             return root
     except Exception:
@@ -297,7 +297,7 @@ def resolve_working_dir_root(ctx, config_path=None):
             cwd = parse_terminal_cwd(cfg_path)
             if cwd:
                 logger.info(
-                    "workspace-guard: working_dir_root resolved from profile-config: %s",
+                    "dir-whip: working_dir_root resolved from profile-config: %s",
                     cwd,
                 )
                 return cwd
@@ -305,7 +305,7 @@ def resolve_working_dir_root(ctx, config_path=None):
         pass
 
     # 3. Fail-open: guard disabled
-    logger.warning("workspace-guard: cannot resolve working_dir_root, guard disabled")
+    logger.warning("dir-whip: cannot resolve working_dir_root, guard disabled")
     return None
 
 
@@ -416,20 +416,20 @@ def _normalize_allowlist_path(path):
 def runtime_allowlist_add(path):
     """Add a path to the runtime allowlist (process-lifetime).
 
-    Returns a confirmation string for the workspace_guard_allow_path tool.
+    Returns a confirmation string for the dir_whip_allow_path tool.
     """
     normalized = _normalize_allowlist_path(path)
     with _runtime_allowlist_lock:
         _runtime_allowlist.add(normalized)
-    logger.debug("workspace-guard: runtime allowlist added: %s", normalized)
-    return "[workspace-guard] Added to runtime allowlist: %s" % normalized
+    logger.debug("dir-whip: runtime allowlist added: %s", normalized)
+    return "[dir-whip] Added to runtime allowlist: %s" % normalized
 
 
 def is_runtime_allowlisted(path):
     """Check a path against the runtime allowlist (normalized slashes).
 
     Prefix match (case-insensitive): allowing a directory also exempts
-    operations under it, matching the workspace_guard_allow_path tool intent
+    operations under it, matching the dir_whip_allow_path tool intent
     ("file operations under that path are exempt") and exempt_paths semantics.
     """
     normalized = _normalize_allowlist_path(path).casefold()
@@ -446,7 +446,7 @@ def runtime_allowlist_snapshot():
 def runtime_allowlist_clear():
     """Clear the runtime allowlist (session-start scope reset).
 
-    The workspace_guard_allow_path tool grants a session-scoped exemption
+    The dir_whip_allow_path tool grants a session-scoped exemption
     ("exempt for this session"); the guard must not keep allowing a path
     across sessions in the same process. on_session_start calls this so
     each new session starts without leftover allowlist entries.
@@ -455,13 +455,13 @@ def runtime_allowlist_clear():
         _runtime_allowlist.clear()
 
 
-def workspace_guard_allow_path(args, **kwargs):
+def dir_whip_allow_path(args, **kwargs):
     """Tool handler: add a path to the runtime allowlist (spec 5.7, 5.11).
 
     Accepts either the tool-handler contract (args dict + extra kwargs such
     as task_id, per Hermes registry dispatch) or a bare path string (direct
     helper/test callers). Returns a confirmation string. This is the
-    plugin's ONLY tool. Wiring into ctx.register_tool happens in guard.py.
+    plugin's ONLY tool. Wiring into ctx.register_tool happens in dir_whip.py.
     """
     path = args.get("path") if isinstance(args, dict) else args
     return runtime_allowlist_add(path)
@@ -569,18 +569,18 @@ def _relativize_target(target, working_dir_root):
 
 
 def _stats_jsonl_path():
-    """stats.jsonl location: the session profile's home workspace-guard dir.
+    """stats.jsonl location: the session profile's home dir-whip dir.
 
     SCR-027: the path follows the SESSION profile (set at on_session_start),
     so a default-profile session's events land in the ROOT home's
-    workspace-guard dir, not the register-time active profile's. When no
+    dir-whip dir, not the register-time active profile's. When no
     session profile is set yet, use HERMES_HOME directly (register-time
     behavior).
     """
     home = _get_hermes_home()
     if _session_profile:
         home = _profile_home(home, _session_profile)
-    return home / "workspace-guard" / STATS_JSONL_NAME
+    return home / "dir-whip" / STATS_JSONL_NAME
 
 
 def _append_stats_event(event):
@@ -643,13 +643,13 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
                 "target": _relativize_target(target, working_dir_root),
             })
         except Exception as exc:
-            logger.debug("workspace-guard: stats write failed (ignored): %s", exc)
+            logger.debug("dir-whip: stats write failed (ignored): %s", exc)
 
 
 def stats_jsonl_totals():
     """Aggregate cross-session totals from stats.jsonl (5.13 D3; --all).
 
-    Reads every parseable JSON line under HERMES_HOME/workspace-guard/
+    Reads every parseable JSON line under HERMES_HOME/dir-whip/
     stats.jsonl into the same {outcome: {tool: {rule_key: {is_subagent:
     count}}}} shape as stats_snapshot(); unparseable lines are skipped.
     Never raises (fail-open reading).
@@ -761,7 +761,7 @@ def reset_cache():
 
 # ---------------------------------------------------------------- Commands & diagnostics (spec 5.7)
 
-# The ctx captured by register_workspace_guard_commands; command handlers
+# The ctx captured by register_dir_whip_commands; command handlers
 # read profile_name from it (the host invokes handlers as fn(raw_args)).
 _cmd_ctx = None
 
@@ -774,13 +774,13 @@ def _get_cmd_ctx():
 def _resolution_source(ctx):
     """The resolution-chain step that produces working_dir_root (5.5).
 
-    Mirrors resolve_working_dir_root's order: guard-config override ->
+    Mirrors resolve_working_dir_root's order: dir-whip-config override ->
     profile terminal.cwd -> fail-open. Source strings match the chain's
     INFO log sources exactly.
     """
     try:
         if load_guard_config().get("working_dir_root"):
-            return "guard-config"
+            return "dir-whip-config"
     except Exception:
         pass
     try:
@@ -843,9 +843,9 @@ def _paths_equal(a, b):
 
 
 def _guard_config_key_present(key):
-    """True when the key appears in guard-config.yaml (raw line scan)."""
+    """True when the key appears in dir-whip-config.yaml (raw line scan)."""
     try:
-        path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
+        path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
         if not path.is_file():
             return False
         with open(path, "r", encoding="utf-8") as f:
@@ -877,10 +877,10 @@ def _stats_writable():
 
 
 def _cmd_status(raw_args=""):
-    """/workspace-guard status: effective config + resolving source (5.7).
+    """/dir-whip status: effective config + resolving source (5.7).
 
     One field per line; the source string matches the resolution chain
-    sources (guard-config / profile-config / fail-open). Never raises.
+    sources (dir-whip-config / profile-config / fail-open). Never raises.
     """
     try:
         ctx = _get_cmd_ctx()
@@ -894,7 +894,7 @@ def _cmd_status(raw_args=""):
         exempts = cfg.get("exempt_paths", [])
         allowed = cfg.get("allowed_root_files", [])
         return (
-            "[workspace-guard] status\n"
+            "[dir-whip] status\n"
             "%s\n"
             "source: %s\n"
             "terminal_guard: %s\n"
@@ -909,7 +909,7 @@ def _cmd_status(raw_args=""):
             )
         )
     except Exception as exc:
-        return "[workspace-guard] status failed: %s" % exc
+        return "[dir-whip] status failed: %s" % exc
 
 
 def _format_counters(counters, subagent_only=False):
@@ -933,7 +933,7 @@ def _format_counters(counters, subagent_only=False):
 
 
 def _cmd_stats(raw_args=""):
-    """/workspace-guard stats [--all] [--subagent] (5.7/5.13 D3/D4).
+    """/dir-whip stats [--all] [--subagent] (5.7/5.13 D3/D4).
 
     Session counters by default; --all aggregates the persisted stats.jsonl
     for cross-session totals; --subagent shows only subagent-split counts.
@@ -949,16 +949,16 @@ def _cmd_stats(raw_args=""):
             counters = stats_snapshot()
         lines = _format_counters(counters, subagent_only=subagent_only)
         if not lines:
-            return "[workspace-guard] stats\n(no statistics recorded)"
-        return "[workspace-guard] stats\n" + "\n".join(lines)
+            return "[dir-whip] stats\n(no statistics recorded)"
+        return "[dir-whip] stats\n" + "\n".join(lines)
     except Exception as exc:
-        return "[workspace-guard] stats failed: %s" % exc
+        return "[dir-whip] stats failed: %s" % exc
 
 
 def _cmd_doctor(raw_args=""):
-    """/workspace-guard doctor: configuration self-check (5.7).
+    """/dir-whip doctor: configuration self-check (5.7).
 
-    Checks guard-config.yaml presence/keys, the resolution chain, and
+    Checks dir-whip-config.yaml presence/keys, the resolution chain, and
     stats.jsonl writability. Emits a clearly marked WARNING when an
     explicit working_dir_root override differs from the current profile's
     terminal.cwd (the Q6 footgun: desktop-settings edit masked by the
@@ -966,13 +966,13 @@ def _cmd_doctor(raw_args=""):
     """
     try:
         ctx = _get_cmd_ctx()
-        lines = ["[workspace-guard] doctor"]
+        lines = ["[dir-whip] doctor"]
 
-        cfg_path = _get_hermes_home() / "workspace-guard" / "guard-config.yaml"
+        cfg_path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
         if cfg_path.is_file():
-            lines.append("guard-config: OK")
+            lines.append("dir-whip-config: OK")
         else:
-            lines.append("guard-config: MISSING (defaults in effect)")
+            lines.append("dir-whip-config: MISSING (defaults in effect)")
 
         cfg = load_guard_config()
         exempts = cfg.get("exempt_paths", [])
@@ -1008,18 +1008,18 @@ def _cmd_doctor(raw_args=""):
             profile_cwd = _profile_terminal_cwd(ctx)
             if profile_cwd is not None and not _paths_equal(override, profile_cwd):
                 lines.append(
-                    "WARNING: guard-config working_dir_root (%s) differs from "
+                    "WARNING: dir-whip-config working_dir_root (%s) differs from "
                     "profile terminal.cwd (%s); the desktop-settings edit is "
                     "masked by the override" % (override, profile_cwd)
                 )
 
         return "\n".join(lines)
     except Exception as exc:
-        return "[workspace-guard] doctor failed: %s" % exc
+        return "[dir-whip] doctor failed: %s" % exc
 
 
-def _workspace_guard_cmd(raw_args):
-    """/workspace-guard dispatcher (spec 5.7): status | stats [--all] [--subagent] | doctor.
+def _dir_whip_cmd(raw_args):
+    """/dir-whip dispatcher (spec 5.7): status | stats [--all] [--subagent] | doctor.
 
     The host invokes the handler as fn(raw_args) with everything after the
     first token; subcommand dispatch happens here. Never raises (errors
@@ -1034,21 +1034,21 @@ def _workspace_guard_cmd(raw_args):
             return _cmd_stats(" ".join(tokens[1:]))
         if sub == "doctor":
             return _cmd_doctor("")
-        return "Usage: /workspace-guard status | stats [--all] [--subagent] | doctor"
+        return "Usage: /dir-whip status | stats [--all] [--subagent] | doctor"
     except Exception as exc:
-        return "[workspace-guard] command failed: %s" % exc
+        return "[dir-whip] command failed: %s" % exc
 
 
-def register_workspace_guard_commands(ctx):
-    """Register the /workspace-guard slash command (spec 5.7).
+def register_dir_whip_commands(ctx):
+    """Register the /dir-whip slash command (spec 5.7).
 
-    Exactly ONE command named "workspace-guard": Hermes dispatches slash
+    Exactly ONE command named "dir-whip": Hermes dispatches slash
     commands on the FIRST token only (cli.py: base_cmd = split()[0]), so
-    the frozen interface /workspace-guard status | stats | doctor requires
+    the frozen interface /dir-whip status | stats | doctor requires
     a single registration with internal subcommand dispatch (status /
     stats [--all] [--subagent] / doctor). Guarded: a ctx without
     register_command still registers. allow_path is a TOOL and is NOT
-    registered here (guard.py registers it).
+    registered here (dir_whip.py registers it).
     """
     global _cmd_ctx
     _cmd_ctx = ctx
@@ -1056,9 +1056,9 @@ def register_workspace_guard_commands(ctx):
         return
     try:
         ctx.register_command(
-            "workspace-guard", _workspace_guard_cmd,
-            description="workspace-guard: status | stats [--all] [--subagent] | doctor",
+            "dir-whip", _dir_whip_cmd,
+            description="dir-whip: status | stats [--all] [--subagent] | doctor",
             args_hint="status|stats [--all] [--subagent]|doctor",
         )
     except Exception as exc:
-        logger.warning("workspace-guard: register_command failed: %s", exc)
+        logger.warning("dir-whip: register_command failed: %s", exc)

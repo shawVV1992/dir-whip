@@ -7,8 +7,8 @@ description: Use when creating, saving, writing, moving, or deleting files, orga
 
 File discipline for Hermes agent workspaces. Teaches session directory
 structure, file placement rules, the root-forbid rule, and governance
-workflows. The skill is bundled inside the workspace-guard plugin and loads
-explicitly by its qualified name `workspace-guard:workspace-organization`
+workflows. The skill is bundled inside the dir-whip plugin and loads
+explicitly by its qualified name `dir-whip:workspace-organization`
 when deep reference is needed; a short always-on discipline prompt covers
 day-to-day behavior.
 
@@ -141,7 +141,7 @@ Designed for Hermes cron with the hybrid pattern:
 ```
 Cron job configuration:
   script: scripts/audit_workspace.py --gate (pre-run gate, zero tokens)
-  skill: workspace-guard:workspace-organization   # qualified plugin-skill name
+  skill: dir-whip:workspace-organization   # qualified plugin-skill name
   prompt: "If audit found violations, classify and archive misplaced files.
            If no violations, respond with [SILENT]."
 
@@ -169,7 +169,7 @@ All scripts: Python 3.11, `--help` support, forward-slash output paths.
 | audit_workspace.py | Compliance audit with gate + cron .tmp cleanup | `--workspace`, `--json`, `--gate`, `--days` |
 
 Boundary validation: scripts validate the target against the resolved
-Working Directory (layered chain: guard-config override -> profile
+Working Directory (layered chain: dir-whip-config override -> profile
 terminal.cwd -> candidate roots -> fail-open). An explicit `--workspace`
 must match the resolved root (exit 2 on mismatch); a resolution failure
 fails open to CWD with one warning.
@@ -238,7 +238,7 @@ Rules:
 1. Prefer Session Directories for all file writes, including via terminal.
 2. When the USER explicitly specifies a target path in the conversation
    (e.g. "write to C:/Users/me/Reports/R1.md"), call the
-   `workspace_guard_allow_path(path)` tool to register that path BEFORE
+   `dir_whip_allow_path(path)` tool to register that path BEFORE
    writing, so the guard's Tier 0 allows it.
 3. When a write is blocked by the guard, create a Session Directory
    (`python scripts/create_session_dir.py <task_name> --workspace <working_dir>`)

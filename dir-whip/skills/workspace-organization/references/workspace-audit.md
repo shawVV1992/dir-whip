@@ -13,14 +13,14 @@ Procedure for scanning a workspace against the compliance checklist and fixing v
 Before auditing, confirm the target is a legitimate Working Directory:
 
 - **Resolution** -- the audit resolves the Working Directory via the layered
-  chain (guard-config.yaml `working_dir_root` override -> current profile's
+  chain (dir-whip-config.yaml `working_dir_root` override -> current profile's
   `terminal.cwd` -> profile enumeration + TERMINAL_CWD candidate root ->
   fail-open). An explicit `--workspace` must equal the resolved root (exit 2
   on mismatch); when resolution fails, the audit fails open to CWD with one
   concise stderr warning and proceeds.
 - **Whitelist** -- the root rules file must be listed in the
   `allowed_root_files` whitelist (config-driven,
-  `HERMES_HOME/workspace-guard/guard-config.yaml`). The guard and the audit
+  `HERMES_HOME/dir-whip/dir-whip-config.yaml`). The guard and the audit
   read the same key, so they never disagree about which root files are
   permitted. Missing key -> strict empty whitelist (fail-closed).
 

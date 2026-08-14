@@ -1,9 +1,9 @@
-"""workspace-guard plugin for Hermes.
+"""dir-whip plugin for Hermes.
 
 Enforces file discipline by intercepting write_file/patch operations
 outside the session directory.
 """
 
-from .guard import register
+from .dir_whip import register
 
 __all__ = ["register"]

@@ -4,14 +4,14 @@
 Scans the Working Directory root against 6 compliance checks and reports
 violations. Boundary validation (spec 4.4): an explicit --workspace must
 equal the resolved Working Directory; the default target is the resolved
-Working Directory (guard-config override -> HERMES_SESSION_PROFILE ->
+Working Directory (dir-whip-config override -> HERMES_SESSION_PROFILE ->
 profile enumeration + TERMINAL_CWD candidate root), falling back to the
 current directory with ONE concise stderr warning when the chain is
 unresolvable (fail-open). A missing directory or a mismatch is a
 parameter error.
 
 Checks:
-  1. Root level may only contain files on the workspace-guard allowed_root_files whitelist.
+  1. Root level may only contain files on the dir-whip allowed_root_files whitelist.
   2. No Outputs/ directory directly at workspace root.
   3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName])
      or the whitelisted .hermes/ directory.
@@ -97,7 +97,7 @@ def check_root_files(root, allowed, violations):
                 "check": 1,
                 "name": "Root-level files",
                 "path": to_fwd(entry.path),
-                "suggestion": "Only files listed in the workspace-guard allowed_root_files whitelist are allowed at the workspace root; move other files into a session dir.",
+                "suggestion": "Only files listed in the dir-whip allowed_root_files whitelist are allowed at the workspace root; move other files into a session dir.",
             })
 
 

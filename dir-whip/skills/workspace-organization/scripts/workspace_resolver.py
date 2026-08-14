@@ -9,14 +9,14 @@ READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no
 rebuild, no hermes_cli import). Resolves the current profile's Working
 Directory with the v0.2.0 layered chain (spec 4.4):
 
-    1. guard-config.yaml working_dir_root (explicit, authoritative)
+    1. dir-whip-config.yaml working_dir_root (explicit, authoritative)
     2. HERMES_SESSION_PROFILE -> profile config.yaml terminal.cwd
     3. profile enumeration + TERMINAL_CWD candidate roots, path matching
     4. fail-open: None + exactly ONE concise stderr WARNING
 
 Self-contained: stdlib only, no PyYAML (absent from the venv) -- config
 parsing is minimal line-based, mirroring the plugin fallback parser
-(workspace-guard/config.py _parse_terminal_cwd_fallback).
+(dir-whip/config.py _parse_terminal_cwd_fallback).
 
 Functions:
     hermes_home()            -- Hermes home (HERMES_HOME override first;
@@ -25,7 +25,7 @@ Functions:
                                (MSYS mapping, drive inheritance, normpath;
                                POSIX normpath identity; UNC unaffected)
     parse_terminal_cwd(path) -- minimal terminal.cwd parser for config.yaml
-    allowed_root_files(hh)   -- guard-config allowed_root_files whitelist
+    allowed_root_files(hh)   -- dir-whip-config allowed_root_files whitelist
                                (strict EMPTY list when absent; shared audit)
     resolve_working_dir_root(workspace, hh, env) -- 4-step chain (spec 4.4)
     validate_workspace(path, hh, env) -- boundary validation (spec 4.4)
@@ -36,16 +36,16 @@ import posixpath
 import re
 import sys
 
-GUARD_SUBDIR = "workspace-guard"
-CONFIG_FILE = "guard-config.yaml"
+GUARD_SUBDIR = "dir-whip"
+CONFIG_FILE = "dir-whip-config.yaml"
 
 # Fail-open warning (spec 4.4 step 4): exactly ONE concise stderr line,
 # never pollutes stdout.
 UNRESOLVED_WARNING_WORKSPACE = (
-    "[workspace-guard] Working Directory unresolved, using the provided --workspace\n"
+    "[dir-whip] Working Directory unresolved, using the provided --workspace\n"
 )
 UNRESOLVED_WARNING_CWD = (
-    "[workspace-guard] Working Directory unresolved, using the current directory\n"
+    "[dir-whip] Working Directory unresolved, using the current directory\n"
 )
 
 WORKSPACE_MISMATCH_MESSAGE = (
@@ -96,7 +96,7 @@ def normalize_path(path):
     inherit the CWD drive; forward slashes + casefold (case-insensitive
     filesystem). POSIX branch: normpath identity (forward slashes).
 
-    MSYS mapping caveat (current semantics, consistent with guard.py's
+    MSYS mapping caveat (current semantics, consistent with dir_whip.py's
     SCR-006 legacy regex): /<letter>... and //<letter>... map to a drive
     letter, so forward-slash forms are NOT reliably UNC-safe -- a
     single-letter "server" such as //s/share is misread as drive S:
@@ -123,7 +123,7 @@ def normalize_path(path):
 def parse_terminal_cwd(config_path):
     """Parse terminal.cwd from a Hermes config.yaml (minimal parser).
 
-    Mirrors workspace-guard/config.py _parse_terminal_cwd_fallback: the
+    Mirrors dir-whip/config.py _parse_terminal_cwd_fallback: the
     `terminal:` block starts at column 0, `cwd:` is read inside it,
     quoted values are stripped; empty/placeholder value -> None;
     missing/unreadable file -> None.
@@ -246,7 +246,7 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     """Resolve the Working Directory via the v0.2.0 layered chain (spec 4.4).
 
     Chain order:
-      1. guard-config.yaml working_dir_root (authoritative when set)
+      1. dir-whip-config.yaml working_dir_root (authoritative when set)
       2. HERMES_SESSION_PROFILE -> HERMES_HOME/(config.yaml for "default"
          | profiles/<name>/config.yaml) terminal.cwd
       3. Profile enumeration + path matching: candidate roots R =
@@ -269,7 +269,7 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     if hh is None:
         hh = hermes_home(env)
 
-    # Step 1: guard-config working_dir_root (authoritative when set).
+    # Step 1: dir-whip-config working_dir_root (authoritative when set).
     guard_cfg = os.path.join(hh, GUARD_SUBDIR, CONFIG_FILE)
     root = _parse_yaml_scalar(guard_cfg, "working_dir_root")
     if root:
@@ -362,10 +362,10 @@ def _parse_allowed_root_files_lines(path):
 
 
 def allowed_root_files(hh=None):
-    """Root-file whitelist from guard-config.yaml (audit side of D1).
+    """Root-file whitelist from dir-whip-config.yaml (audit side of D1).
 
     Reads the `allowed_root_files` key from
-    <HERMES_HOME>/workspace-guard/guard-config.yaml. STRICT fallback: when
+    <HERMES_HOME>/dir-whip/dir-whip-config.yaml. STRICT fallback: when
     the config file or the key is absent, returns an EMPTY list -> every
     root file is flagged (fail-closed, over-report), matching the plugin
     guard's D1 semantics so guard and audit never disagree about root

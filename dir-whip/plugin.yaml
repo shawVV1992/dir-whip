@@ -1,4 +1,4 @@
-name: workspace-guard
+name: dir-whip
 version: 0.2.0
 description: Enforce Working Directory file discipline in Hermes
 manifest_version: 2
@@ -14,8 +14,8 @@ provides_hooks:
   - subagent_stop
   - pre_command
 emits:
-  - workspace-guard:blocked
-  - workspace-guard:external-write
-  - workspace-guard:allowlisted
-  - workspace-guard:approval-requested
-  - workspace-guard:approval-resolved
+  - dir-whip:blocked
+  - dir-whip:external-write
+  - dir-whip:allowlisted
+  - dir-whip:approval-requested
+  - dir-whip:approval-resolved

@@ -26,14 +26,14 @@ try:
         is_runtime_allowlisted,
         load_guard_config,
         refresh_resolution,
-        register_workspace_guard_commands,
+        register_dir_whip_commands,
         reset_cache,
         runtime_allowlist_clear,
         set_session_profile,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
-        workspace_guard_allow_path,
+        dir_whip_allow_path,
     )
 except ImportError:
     from config import (
@@ -44,18 +44,18 @@ except ImportError:
         is_runtime_allowlisted,
         load_guard_config,
         refresh_resolution,
-        register_workspace_guard_commands,
+        register_dir_whip_commands,
         reset_cache,
         runtime_allowlist_clear,
         set_session_profile,
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
-        workspace_guard_allow_path,
+        dir_whip_allow_path,
     )
 
 # get_session_cwd is a Hermes runtime API (tools/terminal_tool.py) absent
-# from the test venv. Guarded module-level import so guard.py never crashes
+# from the test venv. Guarded module-level import so dir_whip.py never crashes
 # when unavailable; callers fall back to working_dir_root. Tests inject a
 # fake via _session_cwd_fn.
 try:
@@ -63,7 +63,7 @@ try:
 except Exception:
     get_session_cwd = None
 
-logger = logging.getLogger("workspace-guard")
+logger = logging.getLogger("dir-whip")
 
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
@@ -76,19 +76,19 @@ _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 # Spec 5.12 (term-updated): injected once per session when the guard is
 # disabled because working_dir_root could not be resolved.
 FAIL_OPEN_WARNING_MESSAGE = (
-    "[workspace-guard] WARNING: The guard is DISABLED because the Working "
+    "[dir-whip] WARNING: The guard is DISABLED because the Working "
     "Directory\n"
     "could not be resolved. File writes are NOT being enforced.\n"
-    "Check guard-config.yaml (working_dir_root) or your profile's config.yaml\n"
+    "Check dir-whip-config.yaml (working_dir_root) or your profile's config.yaml\n"
     "(terminal.cwd) and restart the session."
 )
 
 # Spec 5.11: the plugin's ONLY tool (OpenAI function-call format required by
 # Hermes tools.registry). Registered at register() via ctx.register_tool.
 ALLOW_PATH_TOOL_SCHEMA = {
-    "name": "workspace_guard_allow_path",
+    "name": "dir_whip_allow_path",
     "description": (
-        "Add an absolute path to the workspace-guard runtime allowlist so "
+        "Add an absolute path to the dir-whip runtime allowlist so "
         "file operations under that path are exempt for this session (Tier 0). "
         "Use when the user explicitly specifies a path to write to."
     ),
@@ -126,7 +126,7 @@ _emit_enabled = False
 
 # Spec 5.4: session-start discipline reminder (top-level sessions only).
 REMINDER_MESSAGE = (
-    "[workspace-guard] Active. File writes in the Working Directory must be "
+    "[dir-whip] Active. File writes in the Working Directory must be "
     "inside a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). "
     "Use create_session_dir.py to create one before writing files."
 )
@@ -152,7 +152,7 @@ SKILL_DESCRIPTION = (
 # blocked). The full C6 template is delivered by the block message, NOT
 # by this prompt.
 DISCIPLINE_PROMPT = (
-    "[workspace-guard] 写前分类：任何创建或写入前，先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
+    "[dir-whip] 写前分类：任何创建或写入前，先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
     "会话目录落盘：工作目录内的写入必须落入会话目录的 Outputs/ 或 .tmp/。"
     "根目录禁写：工作目录根只允许白名单文件、会话目录和 .hermes/。"
     "被拦截时：遵循拦截消息创建会话目录后重试，回复 [Reason]/[Next]，不要重试同一路径。"
@@ -172,11 +172,11 @@ _NON_LITERAL_RE = re.compile(r"[$`]")
 
 
 def register(ctx):
-    """Register workspace-guard hooks, tool and event bus (5.7/5.8/5.14).
+    """Register dir-whip hooks, tool and event bus (5.7/5.8/5.14).
 
     Hooks: pre_tool_call, on_session_start, post_tool_call,
     post_approval_response, pre_command, subagent_start, subagent_stop.
-    Tool: workspace_guard_allow_path (the plugin's ONLY tool). Event bus:
+    Tool: dir_whip_allow_path (the plugin's ONLY tool). Event bus:
     capability detected via hasattr(ctx, "emit"); absent -> silent
     degradation. Fail-open: any registration error logs a warning; the
     plugin is disabled but Hermes continues normally.
@@ -200,15 +200,15 @@ def register(ctx):
         if hasattr(ctx, "register_tool"):
             try:
                 ctx.register_tool(
-                    "workspace_guard_allow_path",
-                    toolset="workspace-guard",
+                    "dir_whip_allow_path",
+                    toolset="dir-whip",
                     schema=ALLOW_PATH_TOOL_SCHEMA,
                     handler=_allow_path_handler,
                 )
             except Exception as exc:
-                logger.warning("workspace-guard: register_tool failed: %s", exc)
+                logger.warning("dir-whip: register_tool failed: %s", exc)
         # Spec 5.7 commands (status | stats | doctor) live in config.py (D3).
-        register_workspace_guard_commands(ctx)
+        register_dir_whip_commands(ctx)
         # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
         try:
             skill_md = Path(__file__).parent / "skills" / "workspace-organization" / "SKILL.md"
@@ -218,23 +218,23 @@ def register(ctx):
                 )
             else:
                 logger.debug(
-                    "workspace-guard: register_skill skipped (bundled SKILL.md "
+                    "dir-whip: register_skill skipped (bundled SKILL.md "
                     "or ctx.register_skill unavailable)"
                 )
         except Exception as exc:
-            logger.warning("workspace-guard: register_skill failed: %s", exc)
+            logger.warning("dir-whip: register_skill failed: %s", exc)
         try:
             if hasattr(ctx, "register_system_prompt_section"):
                 ctx.register_system_prompt_section(
-                    "workspace-guard-discipline", DISCIPLINE_PROMPT
+                    "dir-whip-discipline", DISCIPLINE_PROMPT
                 )
         except Exception as exc:
             logger.warning(
-                "workspace-guard: register_system_prompt_section failed: %s", exc
+                "dir-whip: register_system_prompt_section failed: %s", exc
             )
-        logger.debug("workspace-guard: registered successfully")
+        logger.debug("dir-whip: registered successfully")
     except Exception as exc:
-        logger.warning("workspace-guard: registration failed: %s", exc)
+        logger.warning("dir-whip: registration failed: %s", exc)
 
 
 def _guard_hook(tool_name, args, task_id=None, **kwargs):
@@ -242,7 +242,7 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
     try:
         return guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
-        logger.debug("workspace-guard: guard hook error (fail-open): %s", exc)
+        logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
         return None
 
 
@@ -299,7 +299,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
 
 
 def _get_ctx():
-    """Return the registered ctx (tests set guard._registered_ctx)."""
+    """Return the registered ctx (tests set dir_whip._registered_ctx)."""
     return _registered_ctx
 
 
@@ -340,11 +340,11 @@ def _emit_verdict(outcome, tool, rule_key, target, reason, working_dir_root,
         }
         line = json.dumps(event)
         if outcome in ("block", "fail-open"):
-            logger.warning("workspace-guard: verdict %s", line)
+            logger.warning("dir-whip: verdict %s", line)
         elif outcome == "external-write":
-            logger.info("workspace-guard: verdict %s", line)
+            logger.info("dir-whip: verdict %s", line)
         else:
-            logger.debug("workspace-guard: verdict %s", line)
+            logger.debug("dir-whip: verdict %s", line)
         # 5.14: verdict-derived bus events (privacy-shaped relative target).
         if bus_event and outcome == "block":
             _bus_emit("blocked", {
@@ -359,7 +359,7 @@ def _emit_verdict(outcome, tool, rule_key, target, reason, working_dir_root,
                 "target": rel_target,
             })
     except Exception as exc:
-        logger.debug("workspace-guard: verdict emission failed (fail-open): %s", exc)
+        logger.debug("dir-whip: verdict emission failed (fail-open): %s", exc)
 
 
 # ---------------------------------------------------------------- Fail-open warning (spec 5.12)
@@ -396,31 +396,31 @@ def _reset_fail_open_flag():
 # ---------------------------------------------------------------- Event bus (spec 5.14)
 
 def _bus_emit(event_name, payload):
-    """Emit a bare-name workspace-guard event (5.14); silent degradation.
+    """Emit a bare-name dir-whip event (5.14); silent degradation.
 
     Bus absent (capability flag off, no ctx, or ctx.emit missing) or emit
     raising -> exactly ONE DEBUG log line per emission attempt, no error.
-    The host forces the ``workspace-guard:`` namespace, so only the bare
+    The host forces the ``dir-whip:`` namespace, so only the bare
     name is passed (a namespaced name raises ValueError, fail-closed).
     """
     try:
         if not _emit_enabled:
             logger.debug(
-                "workspace-guard: event bus unavailable, skipping emit(%s)",
+                "dir-whip: event bus unavailable, skipping emit(%s)",
                 event_name,
             )
             return
         ctx = _get_ctx()
         if not ctx or not callable(getattr(ctx, "emit", None)):
             logger.debug(
-                "workspace-guard: event bus unavailable, skipping emit(%s)",
+                "dir-whip: event bus unavailable, skipping emit(%s)",
                 event_name,
             )
             return
         ctx.emit(event_name, payload or {})
     except Exception as exc:
         logger.debug(
-            "workspace-guard: event emit failed for %s (fail-open): %s",
+            "dir-whip: event emit failed for %s (fail-open): %s",
             event_name, exc,
         )
 
@@ -445,7 +445,7 @@ def _allow_path_handler(args, **kwargs):
     """Registered allow_path handler: config tool + allowlisted event (5.14)."""
     try:
         path = args.get("path") if isinstance(args, dict) else args
-        result = workspace_guard_allow_path(args, **kwargs)
+        result = dir_whip_allow_path(args, **kwargs)
         if path:
             working_dir_root, _ = _resolved_config()
             _bus_emit("allowlisted", {
@@ -455,7 +455,7 @@ def _allow_path_handler(args, **kwargs):
             })
         return result
     except Exception as exc:
-        logger.debug("workspace-guard: allow_path handler error (fail-open): %s", exc)
+        logger.debug("dir-whip: allow_path handler error (fail-open): %s", exc)
         return None
 
 
@@ -488,16 +488,16 @@ def on_start(session_id, model=None, platform=None, **kwargs):
             injected = ctx.inject_message(REMINDER_MESSAGE)
             if not injected:
                 logger.debug(
-                    "workspace-guard: session-start reminder skipped "
+                    "dir-whip: session-start reminder skipped "
                     "(inject_message unavailable)"
                 )
         else:
             logger.debug(
-                "workspace-guard: session-start reminder skipped "
+                "dir-whip: session-start reminder skipped "
                 "(inject_message unavailable)"
             )
     except Exception as exc:
-        logger.debug("workspace-guard: session start hook error: %s", exc)
+        logger.debug("dir-whip: session start hook error: %s", exc)
 
 
 def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
@@ -521,7 +521,7 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
             session_id=session_id,
         )
     except Exception as exc:
-        logger.debug("workspace-guard: post_tool_call hook error: %s", exc)
+        logger.debug("dir-whip: post_tool_call hook error: %s", exc)
 
 
 def _approval_granted(choice):
@@ -557,7 +557,7 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
                 "rule_key": "approval-requested",
             })
     except Exception as exc:
-        logger.debug("workspace-guard: post_approval_response hook error: %s", exc)
+        logger.debug("dir-whip: post_approval_response hook error: %s", exc)
 
 
 def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
@@ -582,7 +582,7 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
             reason=json.dumps(detail), working_dir_root=working_dir_root,
         )
     except Exception as exc:
-        logger.debug("workspace-guard: pre_command hook error: %s", exc)
+        logger.debug("dir-whip: pre_command hook error: %s", exc)
     return None
 
 
@@ -620,7 +620,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
             is_subagent=True,
         )
     except Exception as exc:
-        logger.debug("workspace-guard: subagent_start hook error: %s", exc)
+        logger.debug("dir-whip: subagent_start hook error: %s", exc)
 
 
 def on_subagent_stop(child_session_id=None, child_subagent_id=None,
@@ -653,7 +653,7 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
             is_subagent=True,
         )
     except Exception as exc:
-        logger.debug("workspace-guard: subagent_stop hook error: %s", exc)
+        logger.debug("dir-whip: subagent_stop hook error: %s", exc)
 
 
 # ---------------------------------------------------------------- Target extraction (spec 5.3 step 3)
@@ -681,13 +681,13 @@ def _extract_target_paths(tool_name, args):
 
 def _session_cwd(task_id):
     """Session CWD for relative-target resolution (guarded; None when
-    unavailable). Tests inject a fake via guard._session_cwd_fn."""
+    unavailable). Tests inject a fake via dir_whip._session_cwd_fn."""
     if callable(_session_cwd_fn):
         try:
             return _session_cwd_fn(task_id)
         except Exception as exc:
             logger.debug(
-                "workspace-guard: get_session_cwd(%r) failed: %s", task_id, exc
+                "dir-whip: get_session_cwd(%r) failed: %s", task_id, exc
             )
     return None
 
@@ -724,7 +724,7 @@ def _resolve_target(target, task_id, working_dir_root):
     base = _session_cwd(task_id)
     if not base:
         logger.debug(
-            "workspace-guard: session CWD unrecorded for task %r, resolving "
+            "dir-whip: session CWD unrecorded for task %r, resolving "
             "relative target against working_dir_root", task_id
         )
         base = working_dir_root
@@ -767,7 +767,7 @@ def _normalize_windows(path, working_dir_root):
     drive, _ = ntpath.splitdrive(path)
     if not drive:
         logger.warning(
-            "workspace-guard: target %r unclassifiable after "
+            "dir-whip: target %r unclassifiable after "
             "normalization (no drive); treating as external "
             "(fail-open)",
             path,
@@ -878,7 +878,7 @@ def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
 
 
 def _allowed_root_files():
-    """Root-file whitelist from guard-config.yaml (spec 5.6).
+    """Root-file whitelist from dir-whip-config.yaml (spec 5.6).
 
     Reads the SAME allowed_root_files key the audit reads, so guard and
     audit never disagree about root files. STRICT fallback: config missing
@@ -902,7 +902,7 @@ def _block_message(target, working_dir_root, is_subagent=False):
         fix_line = "Fix: write to the target directory passed by the parent agent."
     else:
         # D11: scripts path computed at runtime: <plugin_dir>/skills/
-        # workspace-organization/scripts (plugin_dir = directory of guard.py).
+        # workspace-organization/scripts (plugin_dir = directory of dir_whip.py).
         scripts_path = os.path.normpath(
             os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
@@ -921,7 +921,7 @@ def _block_message(target, working_dir_root, is_subagent=False):
         "Target: %s\n"
         "%s\n"
         "If this is a project directory, add it to exempt_paths in "
-        "HERMES_HOME/workspace-guard/guard-config.yaml\n"
+        "HERMES_HOME/dir-whip/dir-whip-config.yaml\n"
         "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line)
     )
 
@@ -1129,7 +1129,7 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
             return None
         if not terminal_guard_enabled():
             logger.debug(
-                "workspace-guard: terminal guard disabled via terminal_guard config"
+                "dir-whip: terminal guard disabled via terminal_guard config"
             )
             return None
 
@@ -1167,5 +1167,5 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
             return None
         return None
     except Exception as exc:
-        logger.debug("workspace-guard: terminal guard error (fail-open): %s", exc)
+        logger.debug("dir-whip: terminal guard error (fail-open): %s", exc)
         return None
