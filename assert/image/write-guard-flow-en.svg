@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="900" viewBox="0 0 920 900" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Hiragino Sans GB',sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="18%" r="95%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0a0e14"/>
+    </radialGradient>
+    <linearGradient id="startGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="diaGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d2150"/>
+      <stop offset="100%" stop-color="#1a1438"/>
+    </linearGradient>
+    <linearGradient id="allowGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b3a2a"/>
+      <stop offset="100%" stop-color="#0f2419"/>
+    </linearGradient>
+    <linearGradient id="logGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a2f12"/>
+      <stop offset="100%" stop-color="#241b08"/>
+    </linearGradient>
+    <linearGradient id="blockGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a1a1f"/>
+      <stop offset="100%" stop-color="#240d10"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" opacity="0.04"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <marker id="ah-cyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="ah-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="ah-amber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+    </marker>
+    <marker id="ah-red" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f85149"/>
+    </marker>
+  </defs>
+
+  <rect width="920" height="900" fill="url(#bg)"/>
+  <rect width="920" height="900" fill="url(#dots)"/>
+
+  <g fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M460,83 L460,145" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M460,255 L460,295" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M460,405 L460,445" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M460,555 L460,595" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M460,705 L460,745" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M545,350 L715,350" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M545,500 L680,500 L680,360 L715,360" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M545,650 L680,650 L680,370 L715,370" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M375,200 L260,200 L260,490 L230,490" stroke="#d29922" marker-end="url(#ah-amber)"/>
+    <path d="M375,800 L260,800 L260,510 L230,510" stroke="#d29922" marker-end="url(#ah-amber)"/>
+    <path d="M545,800 L690,800" stroke="#f85149" marker-end="url(#ah-red)"/>
+  </g>
+
+  <g font-size="11" font-weight="700" text-anchor="middle" dominant-baseline="central"
+     paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">
+    <text x="426" y="273" fill="#22d3ee">Yes</text>
+    <text x="426" y="423" fill="#22d3ee">No</text>
+    <text x="426" y="573" fill="#22d3ee">No</text>
+    <text x="426" y="723" fill="#22d3ee">No</text>
+    <text x="632" y="338" fill="#7ee787">Yes</text>
+    <text x="612" y="488" fill="#7ee787">Yes</text>
+    <text x="612" y="638" fill="#7ee787">Yes</text>
+    <text x="312" y="188" fill="#f0b429">No</text>
+    <text x="312" y="788" fill="#f0b429">No</text>
+    <text x="622" y="788" fill="#ff7b72">Yes</text>
+  </g>
+
+  <rect x="385" y="37" width="150" height="46" rx="23" fill="url(#startGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#glow)"/>
+  <text x="460" y="60" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="700" fill="#ffffff">Write Intent</text>
+
+  <g fill="url(#diaGrad)" stroke="#a371f7" stroke-width="1.8" filter="url(#soft)">
+    <polygon points="460,145 545,200 460,255 375,200"/>
+    <polygon points="460,295 545,350 460,405 375,350"/>
+    <polygon points="460,445 545,500 460,555 375,500"/>
+    <polygon points="460,595 545,650 460,705 375,650"/>
+    <polygon points="460,745 545,800 460,855 375,800"/>
+  </g>
+  <g text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="600" fill="#e6edf3">
+    <text x="460" y="200">In working directory?</text>
+    <text x="460" y="350">In session directory?</text>
+    <text x="460" y="491">Exempt path or</text>
+    <text x="460" y="509">runtime exemption?</text>
+    <text x="460" y="650">Root whitelist file?</text>
+    <text x="460" y="800" font-size="11.5">Write intent determinable?</text>
+  </g>
+
+  <rect x="50" y="472" width="180" height="56" rx="10" fill="url(#logGrad)" stroke="#d29922" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="140" y="500" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="#f0b429">Allow + Log</text>
+
+  <rect x="715" y="322" width="150" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="790" y="350" text-anchor="middle" dominant-baseline="central" font-size="17" font-weight="800" fill="#7ee787">Allow</text>
+
+  <rect x="690" y="772" width="200" height="56" rx="10" fill="url(#blockGrad)" stroke="#f85149" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="790" y="800" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ff7b72">Block + Guidance</text>
+</svg>

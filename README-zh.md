@@ -1,4 +1,6 @@
-﻿# dir-whip
+﻿![banner](assert/image/banner.png)
+
+# dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
@@ -97,22 +99,7 @@ hermes plugins disable dir-whip
 `YYYYMMDD_HHMMSS_TaskName/`，其中 `Outputs/` 存放正式交付物、`.tmp/` 存放
 中间文件。
 
-```mermaid
-flowchart TD
-    W([写入意图]) --> Q1{位于工作目录内?}
-    Q1 -- 否 --> A1[放行 + 记日志]
-    Q1 -- 是 --> Q2{位于会话目录内?}
-    Q2 -- 是 --> A2[放行]
-    Q2 -- 否 --> Q3{豁免路径或运行时豁免?}
-    Q3 -- 是 --> A2
-    Q3 -- 否 --> Q4{根白名单文件?}
-    Q4 -- 是 --> A2
-    Q4 -- 否 --> Q5{写入意图可判定?}
-    Q5 -- 是 --> A3[拦截 + 修正指引]
-    Q5 -- 否 --> A1
-```
-
-> TODO: 图示待补充（如终端写入观察路径的细化展示）。
+![写入守卫流程（含终端写入观察路径）](assert/image/write-guard-flow.svg)
 
 终端写入在 shell 层拦截：重定向（`>` `>>` `1>` `2>`）、`touch`，以及
 `cp`/`mv` 的目标路径。复杂管道只观察、不解析。

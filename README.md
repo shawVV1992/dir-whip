@@ -1,4 +1,6 @@
-﻿# dir-whip
+﻿![banner](assert/image/banner.png)
+
+# dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
@@ -102,22 +104,7 @@ Every Hermes conversation that produces files gets one Session Directory at
 the Working Directory root, named `YYYYMMDD_HHMMSS_TaskName/`, with `Outputs/`
 for formal deliverables and `.tmp/` for intermediate files.
 
-```mermaid
-flowchart TD
-    W([write intent]) --> Q1{inside Working Directory?}
-    Q1 -- no --> A1[allow + log]
-    Q1 -- yes --> Q2{inside a Session Directory?}
-    Q2 -- yes --> A2[allow]
-    Q2 -- no --> Q3{exempt or runtime-allowlisted?}
-    Q3 -- yes --> A2
-    Q3 -- no --> Q4{root allowlist file?}
-    Q4 -- yes --> A2
-    Q4 -- no --> Q5{write intent determinable?}
-    Q5 -- yes --> A3[block + fix-it message]
-    Q5 -- no --> A1
-```
-
-> TODO: diagram to be completed (e.g. terminal write observation path).
+![Write guard flow, including the terminal write observation path](assert/image/write-guard-flow-en.svg)
 
 Terminal writes are intercepted at the shell level: redirects (`>` `>>` `1>`
 `2>`), `touch`, and `cp`/`mv` destinations. Complex pipelines are observed,
