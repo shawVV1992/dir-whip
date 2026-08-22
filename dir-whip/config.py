@@ -1,5 +1,5 @@
 """Configuration loading, working_dir_root resolution and statistics for
-dir-whip (v0.2.0).
+dir-whip (v0.3.0).
 
 Inverted resolution chain (spec 5.5): dir-whip-config.yaml working_dir_root
 override (authoritative) -> current profile's terminal.cwd -> fail-open
@@ -144,6 +144,49 @@ def terminal_guard_enabled(config_path=None):
         return True
 
 
+def _parse_write_audit_value(value):
+    """Parse a write_audit config value (spec 5.18); default enabled (a
+    missing/unreadable value keeps the audit on)."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("disabled", "false", "0", "off")
+    return True
+
+
+def _parse_entry_cap_value(value):
+    """Parse a write_audit_entry_cap config value; default 2000 on
+    missing/unparseable/non-positive input (a bad value must not weaken
+    the guardrail; spec 5.18)."""
+    if isinstance(value, bool):
+        return 2000
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 2000
+    return parsed if parsed > 0 else 2000
+
+
+def write_audit_enabled(config_path=None):
+    """True when the root write audit is enabled (spec 5.18; default on)."""
+    try:
+        cfg = load_guard_config(config_path)
+        return bool(cfg.get("write_audit", True))
+    except Exception:
+        return True
+
+
+def write_audit_entry_cap(config_path=None):
+    """The root-entry cap for the write audit (spec 5.18; default 2000)."""
+    try:
+        cfg = load_guard_config(config_path)
+        return _parse_entry_cap_value(cfg.get("write_audit_entry_cap", 2000))
+    except Exception:
+        return 2000
+
+
 def _parse_allowed_root_files(value):
     """Parse the allowed_root_files config value (spec 5.6, D1).
 
@@ -160,7 +203,9 @@ def load_guard_config(config_path=None):
 
     Returns a dict with at least 'exempt_paths' (list), 'terminal_guard'
     (bool, default True), 'allowed_root_files' (list; STRICT fallback []
-    when the key is absent) and optionally 'working_dir_root' (str).
+    when the key is absent), 'write_audit' (bool, default True),
+    'write_audit_entry_cap' (int, default 2000) and optionally
+    'working_dir_root' (str).
     """
     if config_path is None:
         config_path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
@@ -170,6 +215,8 @@ def load_guard_config(config_path=None):
         "exempt_paths": [],
         "terminal_guard": True,
         "allowed_root_files": [],
+        "write_audit": True,
+        "write_audit_entry_cap": 2000,
     }
 
     if not config_path.is_file():
@@ -185,6 +232,10 @@ def load_guard_config(config_path=None):
                 result["working_dir_root"] = data["working_dir_root"]
             result["terminal_guard"] = _parse_terminal_guard_value(data.get("terminal_guard"))
             result["allowed_root_files"] = _parse_allowed_root_files(data.get("allowed_root_files"))
+            result["write_audit"] = _parse_write_audit_value(data.get("write_audit"))
+            result["write_audit_entry_cap"] = _parse_entry_cap_value(
+                data.get("write_audit_entry_cap", 2000)
+            )
     except ImportError:
         result = _load_guard_config_fallback(config_path)
     except Exception as exc:
@@ -209,6 +260,8 @@ def _load_guard_config_fallback(config_path):
         "exempt_paths": [],
         "terminal_guard": True,
         "allowed_root_files": [],
+        "write_audit": True,
+        "write_audit_entry_cap": 2000,
     }
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -243,6 +296,14 @@ def _load_guard_config_fallback(config_path):
                 rest = stripped[len("allowed_root_files:"):].strip()
                 if rest and rest != "[]":
                     result["allowed_root_files"].extend(_parse_inline_list(rest))
+                continue
+            if stripped.startswith("write_audit:"):
+                value = stripped[len("write_audit:"):].strip().strip("'\"")
+                result["write_audit"] = _parse_write_audit_value(value)
+                continue
+            if stripped.startswith("write_audit_entry_cap:"):
+                value = stripped[len("write_audit_entry_cap:"):].strip().strip("'\"")
+                result["write_audit_entry_cap"] = _parse_entry_cap_value(value)
                 continue
             if in_exempt and stripped.startswith("- "):
                 value = stripped[2:].strip().strip("'\"")

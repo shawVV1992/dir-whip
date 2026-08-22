@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S1: Create a session directory (v0.2.0, spec 4.1 + 4.4).
+"""S1: Create a session directory (v0.3.0, spec 4.1 + 4.4).
 
 Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly Outputs/ and .tmp/.
 Prints the absolute path of the created directory (forward slashes) as

@@ -17,3 +17,8 @@ exempt_paths: []
 # Root files allowed at the Working Directory root (D1: guard and
 # audit read the same key; strict fallback = empty list when absent).
 allowed_root_files: ["AGENTS.md"]
+
+# Write audit (5.18): post-hoc snapshot diff catches root writes the front
+# guard lets through. Further writes frozen until remediation.
+# write_audit: enabled          # default when absent
+# write_audit_entry_cap: 2000   # root entries cap; round skipped + WARNING on exceed

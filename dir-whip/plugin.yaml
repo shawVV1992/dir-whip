@@ -1,5 +1,5 @@
 name: dir-whip
-version: 0.2.0
+version: 0.3.0
 description: Enforce Working Directory file discipline in Hermes
 api_version: 1
 author: shawVV1992
@@ -8,6 +8,7 @@ provides_hooks:
   - pre_tool_call
   - on_session_start
   - post_tool_call
+  - transform_tool_result
   - post_approval_response
   - subagent_start
   - subagent_stop
@@ -18,3 +19,5 @@ emits:
   - dir-whip:allowlisted
   - dir-whip:approval-requested
   - dir-whip:approval-resolved
+  - dir-whip:write-audit-violation
+  - dir-whip:write-audit-gate-block

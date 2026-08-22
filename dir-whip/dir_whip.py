@@ -1,4 +1,4 @@
-"""Core guard logic: pre-tool-call interception and decision chain (v0.2.0).
+"""Core guard logic: pre-tool-call interception and decision chain (v0.3.0).
 
 Implements the spec 5.3 unified chain (Tier 0 exempt/allowlist -> root-file
 whitelist -> session dir -> block; external -> allow + log), the 5.10 coarse
@@ -33,6 +33,8 @@ try:
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
+        write_audit_enabled,
+        write_audit_entry_cap,
         dir_whip_allow_path,
     )
 except ImportError:
@@ -51,6 +53,8 @@ except ImportError:
         stats_record,
         stats_set_session,
         terminal_guard_enabled,
+        write_audit_enabled,
+        write_audit_entry_cap,
         dir_whip_allow_path,
     )
 
@@ -147,7 +151,7 @@ SKILL_DESCRIPTION = (
     "two-step confirmation for destructive operations."
 )
 
-# Spec 3.7/5.17: always-on discipline prompt (<=500 chars, four elements:
+# Spec 3.7/5.17: always-on discipline prompt (<=200 chars, four elements:
 # classify before write / session-dir writes / no root writes / when
 # blocked). The full C6 template is delivered by the block message, NOT
 # by this prompt.
@@ -170,16 +174,51 @@ _UNCERTAIN_COMMANDS = frozenset(
 )
 _NON_LITERAL_RE = re.compile(r"[$`]")
 
+# 4.3 (SCR-033): device paths exempt BEFORE normalization -- they never
+# enter the classification chain and produce no verdict/stats event (no
+# drive-inherited E:\dev\null fabrication on Windows).
+_DEVICE_PATHS = frozenset(("/dev/null", "/dev/stdout", "/dev/stderr"))
+# 4.1 (SCR-033): chain boundaries emitted by _tokenize_command. `&&` is
+# two `&` tokens (both boundaries); `&>` stays a single redirect token and
+# is NOT a boundary. Newlines are emitted as "\n" marker tokens.
+_CHAIN_BOUNDARY_TOKENS = frozenset((";", "|", "&", "\n"))
+
+# ================================================================
+# Root write audit state (spec 5.18). Detection backbone + the
+# handling ladder: L1 fire-once notice (transform_tool_result), L2
+# verdict/bus events, L3 pending-violation latch gate in guard().
+# ================================================================
+
+# One in-flight pre snapshot per (session_id, task_id) terminal call; the
+# post re-scan pops it and diffs. Commands blocked at pre store nothing,
+# so their post finds no pairing and skips (5.18 mechanism).
+_audit_pre_snapshots = {}
+_audit_pre_snapshots_lock = threading.Lock()
+
+# Session-scoped pending violations: {abs_path: {"first_seen": iso,
+# "announced": bool}} per owner session (5.18 latch). Child sessions
+# resolve into the parent's set via _audit_session_parents / the most
+# recent top-level session, matching the 5.4 child_session_ids gate.
+_audit_pending = {}
+_audit_pending_lock = threading.Lock()
+_audit_session_parents = {}
+_audit_top_session = None
+
+# One-time entry-cap WARNING per top-level session (reset at session
+# start, mirroring the fail-open warning flag).
+_audit_cap_warned = False
+
 
 def register(ctx):
     """Register dir-whip hooks, tool and event bus (5.7/5.8/5.14).
 
     Hooks: pre_tool_call, on_session_start, post_tool_call,
-    post_approval_response, pre_command, subagent_start, subagent_stop.
-    Tool: dir_whip_allow_path (the plugin's ONLY tool). Event bus:
-    capability detected via hasattr(ctx, "emit"); absent -> silent
-    degradation. Fail-open: any registration error logs a warning; the
-    plugin is disabled but Hermes continues normally.
+    post_approval_response, pre_command, subagent_start, subagent_stop,
+    transform_tool_result (5.18 L1 notice). Tool: dir_whip_allow_path
+    (the plugin's ONLY tool). Event bus: capability detected via
+    hasattr(ctx, "emit"); absent -> silent degradation. Fail-open: any
+    registration error logs a warning; the plugin is disabled but Hermes
+    continues normally.
     """
     global _registered_ctx, _emit_enabled
     try:
@@ -197,6 +236,7 @@ def register(ctx):
         ctx.register_hook("pre_command", on_pre_command)
         ctx.register_hook("subagent_start", on_subagent_start)
         ctx.register_hook("subagent_stop", on_subagent_stop)
+        ctx.register_hook("transform_tool_result", on_transform_tool_result)
         if hasattr(ctx, "register_tool"):
             try:
                 ctx.register_tool(
@@ -271,10 +311,28 @@ def guard(tool_name, args, task_id=None, **kwargs):
         _warn_fail_open_once(ctx, tool_name, session_id, is_subagent)
         return None
 
+    # L3 settlement gate (5.18): an unresolved pending violation latches
+    # the NEXT write-class call until remediation. Runs BEFORE target
+    # extraction / classification / the audit pre snapshot; a gated call
+    # never snapshots (the command did not run). Fail-open: a gate-side
+    # error allows the call (5.8), a failed re-scan keeps the latch.
+    unresolved = _audit_gate_unresolved(session_id, working_dir_root,
+                                        exempt_paths)
+    if unresolved:
+        return _audit_gate_block(tool_name, session_id, is_subagent,
+                                 working_dir_root, unresolved)
+
     if tool_name == "terminal":
-        return _guard_terminal(
+        result = _guard_terminal(
             args, task_id, working_dir_root, exempt_paths, is_subagent, session_id
         )
+        # 5.18 audit pre-snapshot runs ONLY when the front layer decided
+        # to allow -- this covers every command-will-execute path (heredoc
+        # demotion, guard-disabled, device exemption, uncertain tier);
+        # blocked calls never snapshot (nothing to pair at post).
+        if result is None:
+            _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths)
+        return result
 
     target_paths = _extract_target_paths(tool_name, args)
     if not target_paths:
@@ -471,6 +529,10 @@ def on_start(session_id, model=None, platform=None, **kwargs):
     try:
         if _is_child_session(session_id):
             return
+        # 5.18: top-level session start clears the audit state (pending
+        # violations, leftover pre snapshots, cap warning); child sessions
+        # skip and inherit the parent's latched state.
+        _audit_session_start(session_id)
         runtime_allowlist_clear()
         _reset_fail_open_flag()
         ctx = _get_ctx()
@@ -514,6 +576,13 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
         working_dir_root, _ = _resolved_config()
         targets = _extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
+        # 5.18: terminal re-scan -> diff -> violation classification. Runs
+        # alongside (never instead of) the landed: observation below; a
+        # blocked-at-pre call has no pre snapshot and skips here.
+        if tool_name == "terminal":
+            _audit_post_check(
+                session_id, task_id, is_subagent=_is_child_session(session_id),
+            )
         _emit_verdict(
             "allow", tool_name, "landed:" + str(tool_name), target,
             reason="write tool call completed (status: %s)" % (status or "ok"),
@@ -600,6 +669,9 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         if child_session_id:
             with _child_session_ids_lock:
                 _child_session_ids.add(child_session_id)
+            # 5.18: record the parent link so the child's audit detections
+            # resolve into the parent's pending-violation set.
+            _audit_register_child(child_session_id, parent_session_id)
         stats_set_session(is_subagent=True)
         detail = {
             "child_session_id": child_session_id,
@@ -636,6 +708,7 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         if child_session_id:
             with _child_session_ids_lock:
                 _child_session_ids.discard(child_session_id)
+            _audit_unregister_child(child_session_id)
         # Close the child stats context: flip is_subagent back to False but
         # PRESERVE the parent session fields (profile/session_id/started_at).
         stats_set_session(is_subagent=False)
@@ -935,10 +1008,11 @@ def _tokenize_command(command):
     Respects single quotes (fully literal), double quotes (backslash only
     escapes " \\ $ ` inside), and backslash escaping outside quotes.
     Unquoted whitespace separates tokens. Redirect operators (>, >>, 2>,
-    &>, 1>, 1>>, 2>>) and pipes / background ampersands are emitted as
-    standalone operator tokens. Lenient by design: unclosed quotes and
-    malformed input never raise (the remainder is absorbed into the
-    current token).
+    &>, 1>, 1>>, 2>>), pipes, background ampersands, semicolons and
+    newlines are emitted as standalone tokens (semicolons and newlines are
+    chain-boundary markers, 5.10 "Chain-aware target extraction"). Lenient
+    by design: unclosed quotes and malformed input never raise (the
+    remainder is absorbed into the current token).
     """
     if not isinstance(command, str):
         return []
@@ -947,7 +1021,11 @@ def _tokenize_command(command):
     n = len(command)
     while i < n:
         c = command[i]
-        if c in " \t\n\r":
+        if c in " \t\r":
+            i += 1
+            continue
+        if c == "\n":
+            tokens.append("\n")
             i += 1
             continue
         if c == "|":
@@ -969,6 +1047,10 @@ def _tokenize_command(command):
             else:
                 tokens.append(">")
                 i += 1
+            continue
+        if c == ";":
+            tokens.append(";")
+            i += 1
             continue
 
         # Word start: handle quoting and escapes until an unquoted
@@ -1013,7 +1095,7 @@ def _tokenize_command(command):
                     word.append("\\")
                     i += 1
                 continue
-            if c in " \t\n\r" or c in "|&>":
+            if c in " \t\n\r" or c in "|&>;":
                 break
             word.append(c)
             i += 1
@@ -1033,27 +1115,55 @@ def _tokenize_command(command):
     return tokens
 
 
-def _terminal_block_targets(tokens):
-    """Block-tier write targets (spec 5.10): redirects, touch args, cp/mv
-    destination. Returns a list of (target, rule_key) pairs.
+def _chain_segments(tokens):
+    """Split tokens into command segments at chain boundaries (5.10).
 
-    Non-literal targets (containing $ or `) are skipped -- they fall into
-    the uncertain tier (allow + log) instead.
+    Boundaries: ";", "|", a lone "&" (background), and the "\n" marker
+    token. "&&" surfaces as two "&" tokens, both boundaries, dropping the
+    empty segment between them; "&>" stays a single redirect token and
+    never splits. Quoted boundaries never reach here (the tokenizer keeps
+    them inside words).
+    """
+    segments = []
+    cur = []
+    for tok in tokens:
+        if tok in _CHAIN_BOUNDARY_TOKENS:
+            if cur:
+                segments.append(cur)
+                cur = []
+        else:
+            cur.append(tok)
+    if cur:
+        segments.append(cur)
+    return segments
+
+
+def _segment_block_targets(seg):
+    """Block-tier targets of ONE command segment (5.10).
+
+    Redirect targets (token after a redirect operator, unless it is an
+    operator, non-literal, or starts with "=" -- the residue of an
+    unquoted `>=` comparison), touch args and cp/mv destinations within
+    this segment only. Returns (target, rule_key) pairs.
     """
     out = []
-    n = len(tokens)
+    n = len(seg)
     redirect_idx = set()
-    for i, tok in enumerate(tokens):
+    for i, tok in enumerate(seg):
         if tok in _REDIRECT_TOKENS and i + 1 < n:
-            nxt = tokens[i + 1]
-            if nxt not in _OPERATOR_TOKENS and not _NON_LITERAL_RE.search(nxt):
+            nxt = seg[i + 1]
+            if (
+                nxt not in _OPERATOR_TOKENS
+                and not _NON_LITERAL_RE.search(nxt)
+                and not nxt.startswith("=")
+            ):
                 out.append((nxt, "terminal-redirect"))
                 redirect_idx.add(i + 1)
 
-    first = tokens[0]
+    first = seg[0]
     if first == "touch":
         for i in range(1, n):
-            tok = tokens[i]
+            tok = seg[i]
             if tok in _OPERATOR_TOKENS or i in redirect_idx or tok.startswith("-"):
                 continue
             if not _NON_LITERAL_RE.search(tok):
@@ -1061,7 +1171,7 @@ def _terminal_block_targets(tokens):
 
     if first in ("cp", "mv"):
         for i in range(n - 1, -1, -1):
-            tok = tokens[i]
+            tok = seg[i]
             if tok in _OPERATOR_TOKENS or i in redirect_idx or tok.startswith("-"):
                 continue
             if not _NON_LITERAL_RE.search(tok):
@@ -1071,23 +1181,49 @@ def _terminal_block_targets(tokens):
     return out
 
 
+def _terminal_block_targets(tokens):
+    """Block-tier write targets (spec 5.10), chain-aware (SCR-033).
+
+    Tokens are first split into command segments at chain boundaries
+    (5.10: `&&` / `;` / `|` / newline / lone `&`); redirect targets and
+    touch/cp-mv destinations are extracted ONLY inside the segment that
+    contains the write command, never across a chain boundary. Returns a
+    list of (target, rule_key) pairs.
+
+    Non-literal targets (containing $ or `) are skipped -- they fall into
+    the uncertain tier (allow + log) instead. Redirect targets starting
+    with "=" (residue of an unquoted `>=` split) are never valid targets.
+    """
+    out = []
+    for seg in _chain_segments(tokens):
+        out.extend(_segment_block_targets(seg))
+    return out
+
+
 def _terminal_uncertain(tokens):
     """Uncertain write-intent detection (5.10 allow-and-log tier).
 
-    Nested shells (bash -c / sh -c / powershell -Command), any command
-    starting with python/node/sed/tee/curl/wget/dd, or any non-literal
-    ($ or `) token -> True.
+    Any chain segment whose first token is python/node/sed/tee/curl/wget/
+    dd, any nested-shell invocation (bash -c / sh -c / powershell
+    -Command), any non-literal ($ or `) token, or any token starting with
+    "=" (residue of an unquoted `>=` comparison split by a > redirect,
+    spec 5.10 / 4.2) -> True.
     """
     if not tokens:
         return False
-    first = tokens[0]
-    if first in _UNCERTAIN_COMMANDS:
-        return True
-    if first in _NESTED_SHELLS and any(
-        t == "-c" or t.lower() == "-command" for t in tokens
-    ):
-        return True
-    return any(_NON_LITERAL_RE.search(t) for t in tokens)
+    for seg in _chain_segments(tokens):
+        if not seg:
+            continue
+        first = seg[0]
+        if first in _UNCERTAIN_COMMANDS:
+            return True
+        if first in _NESTED_SHELLS and any(
+            t == "-c" or t.lower() == "-command" for t in seg
+        ):
+            return True
+    return any(_NON_LITERAL_RE.search(t) for t in tokens) or any(
+        t.startswith("=") for t in tokens
+    )
 
 
 def _terminal_base(args, task_id, working_dir_root):
@@ -1116,11 +1252,14 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
     """Terminal write interception (spec 5.10 coarse tiers).
 
     - terminal_guard disabled -> terminal never blocked (DEBUG log).
+    - Heredoc (`<<`) blanket demotion (4.4): the WHOLE command is judged
+      uncertain (allow + log), no body parsing, no block extraction.
     - Block tier: redirect / touch / cp-mv targets classify through the
-      shared chain; strictest wins (any block -> block).
+      shared chain, per command segment (4.1); a target that is a device
+      path (4.3) is exempt BEFORE normalization and emits nothing.
     - Uncertain tier: nested shells, python/node/sed/tee/curl/wget/dd,
-      dynamic paths -> ALLOW + LOG (rule_key terminal-write-uncertain),
-      NO approval gate.
+      dynamic paths, `=`-residue tokens -> ALLOW + LOG (rule_key
+      terminal-write-uncertain), NO approval gate.
     - Read-only / unparseable -> allow (no verdict event).
     - Any exception -> None (fail-open).
     """
@@ -1139,7 +1278,21 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
             return None
         base = _terminal_base(args, task_id, working_dir_root)
 
+        # 4.4 heredoc blanket demotion: never parse the body, never block.
+        if "<<" in command:
+            _emit_verdict(
+                "allow", "terminal", "terminal-write-uncertain", None,
+                reason="heredoc detected, blanket demotion",
+                working_dir_root=working_dir_root,
+                is_subagent=is_subagent, session_id=session_id,
+            )
+            return None
+
         for target, rule_key in _terminal_block_targets(tokens):
+            # 4.3 device paths are exempt BEFORE normalization: no
+            # verdict/stats event, no drive-inherited path fabrication.
+            if target in _DEVICE_PATHS:
+                continue
             abs_target = _resolve_terminal_target(target, base)
             normalized = normalize_target(abs_target, working_dir_root)
             verdict = classify_target(normalized, working_dir_root, exempt_paths, is_subagent)
@@ -1170,3 +1323,470 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
     except Exception as exc:
         logger.debug("dir-whip: terminal guard error (fail-open): %s", exc)
         return None
+
+
+
+# ---------------------------------------------------------------- Root write audit (spec 5.18)
+
+# The detection backbone: snapshot/diff/classify kernels, session-scoped
+# pending-violation state (the L3 latch input for later lanes) and the
+# pre/post hook wiring. Ladder steps (L1 notice, L2 bus sidecar, L3 gate
+# block) are later lanes; everything here is fail-open (5.8).
+
+
+def snapshot(root):
+    """Snap the top-level entries of root (spec 5.18 mechanism).
+
+    Recorded per entry: (st_size, st_mtime_ns, is_dir) -- exactly the
+    fidelity the diff needs. Scan OSError -> None (fail-open; callers
+    silently skip the audit round). Never raises.
+    """
+    try:
+        entries = {}
+        with os.scandir(root) as it:
+            for entry in it:
+                st = entry.stat()
+                entries[entry.name] = (st.st_size, st.st_mtime_ns, entry.is_dir())
+        return entries
+    except OSError:
+        return None
+
+
+def diff_snapshots(before, after):
+    """Four-state diff between two snapshots (spec 5.18).
+
+    Returns {"added", "modified", "deleted", "unrelated"} name lists
+    (name-sorted): new entries, same-name entries whose (size, mtime_ns,
+    is_dir) changed, vanished entries, and unchanged entries. Pure --
+    no filesystem access.
+    """
+    before = before or {}
+    after = after or {}
+    before_keys = set(before)
+    after_keys = set(after)
+    common = before_keys & after_keys
+    return {
+        "added": sorted(after_keys - before_keys),
+        "modified": sorted(
+            name for name in common if before[name] != after[name]
+        ),
+        "deleted": sorted(before_keys - after_keys),
+        "unrelated": sorted(
+            name for name in common if before[name] == after[name]
+        ),
+    }
+
+
+def audit_classify_diff(diff, before, after, working_dir_root, exempt_paths,
+                        is_subagent=False):
+    """Classify a snapshot diff into violations (spec 5.18).
+
+    Only FILE entries are judged (is_dir -> never a violation; directory
+    mtimes -- session dirs, `.git/`, `.hermes/` -- are ignored). A
+    violation is a NEW or MODIFIED root-level file that classifies as a
+    root-file block through the shared chain: not on the root allowlist,
+    not in exempt_paths, not inside any session directory (the same
+    allowed_root_files / exempt_paths keys the guard reads, so the layers
+    never disagree). Deletions are RECORD-ONLY (5.8 delete principle) --
+    surfaced in "recorded", never judged.
+
+    Returns {"violations": [abs paths], "recorded": [deleted abs paths]}.
+    """
+    violations = []
+    recorded = []
+    for name in list(diff.get("added", [])) + list(diff.get("modified", [])):
+        info = (after or {}).get(name)
+        if info is None or info[2]:
+            continue  # directory entries never violate (5.18)
+        abs_path = os.path.join(working_dir_root, name)
+        verdict = classify_target(
+            abs_path, working_dir_root, exempt_paths, is_subagent
+        )
+        if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
+            violations.append(abs_path)
+    for name in diff.get("deleted", []):
+        info = (before or {}).get(name)
+        if info is None or info[2]:
+            continue
+        recorded.append(os.path.join(working_dir_root, name))
+    return {"violations": sorted(violations), "recorded": sorted(recorded)}
+
+
+def _audit_norm_path(path):
+    """Deterministic pending-set key: absolute + native-normalized."""
+    return os.path.normpath(str(path))
+
+
+def _audit_now():
+    """ISO-8601 timestamp (seconds precision) for first_seen."""
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _audit_owner_session(session_id):
+    """Resolve the pending-set owner for a session (5.18 session scoping).
+
+    Child sessions (child_session_ids gate, 5.4) write into the PARENT's
+    pending set: the explicit parent link recorded by subagent_start wins;
+    otherwise the most recent top-level session (the parent in the common
+    sequential layout). Returns None when unknown -- callers fall back to
+    the session id itself.
+    """
+    if session_id and _is_child_session(session_id):
+        with _audit_pending_lock:
+            return _audit_session_parents.get(session_id) or _audit_top_session
+    return session_id
+
+
+def audit_pending_snapshot(session_id=None):
+    """Read-only copy of a session's pending violations (Lane 2b gate).
+
+    The L3 gate reads this set; keys are absolute normpath'd paths, each
+    value is {"first_seen": ISO-8601, "announced": bool}. "announced" is
+    flipped by L1 (audit_mark_announced) so the fire-once notice never
+    repeats; first_seen is preserved across re-detections. Child sessions
+    resolve into the parent's set.
+    """
+    owner = _audit_owner_session(session_id) or session_id
+    with _audit_pending_lock:
+        return {
+            path: dict(entry)
+            for path, entry in _audit_pending.get(owner, {}).items()
+        }
+
+
+def audit_pending_add(session_id, path, first_seen=None):
+    """Add one pending violation (detection fills this structure).
+
+    Existing entries are kept untouched on re-detection (first_seen and
+    announced survive, so L1 fire-once semantics hold across rounds).
+    """
+    owner = _audit_owner_session(session_id) or session_id
+    key = _audit_norm_path(path)
+    with _audit_pending_lock:
+        bucket = _audit_pending.setdefault(owner, {})
+        if key in bucket:
+            return
+        bucket[key] = {
+            "first_seen": first_seen or _audit_now(),
+            "announced": False,
+        }
+
+
+def audit_pending_clear(session_id):
+    """Clear a session's pending violations (top-level session start)."""
+    with _audit_pending_lock:
+        _audit_pending.pop(session_id, None)
+
+
+def audit_mark_announced(session_id, path):
+    """Flip the fire-once announced flag (L1 notice lane calls this)."""
+    owner = _audit_owner_session(session_id) or session_id
+    key = _audit_norm_path(path)
+    with _audit_pending_lock:
+        entry = _audit_pending.get(owner, {}).get(key)
+        if entry:
+            entry["announced"] = True
+
+
+def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None):
+    """Settlement judgment for the L3 gate (Lane 2b input): re-scan the
+    root and return the pending paths that STILL violate (file present and
+    still classifying as an unprotected root-level file). A pending path
+    is settled when it is gone, moved outside the root, or legalized
+    (allowlist / exempt / session dir). Fail-open: a failed re-scan keeps
+    the full pending set (the gate stays latched).
+    """
+    try:
+        pending = audit_pending_snapshot(session_id)
+        if not pending:
+            return []
+        if working_dir_root is None:
+            working_dir_root, exempt_paths = _resolved_config()
+        if working_dir_root is None:
+            return sorted(pending)
+        after = snapshot(working_dir_root)
+        if after is None:
+            return sorted(pending)
+        unresolved = []
+        for path in pending:
+            if not os.path.lexists(path):
+                continue  # gone -> settled
+            if not _within_working_dir(path, working_dir_root):
+                continue  # moved outside the root -> settled
+            verdict = classify_target(
+                path, working_dir_root, exempt_paths or [], is_subagent=False
+            )
+            if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
+                unresolved.append(path)
+        return sorted(unresolved)
+    except Exception as exc:
+        logger.debug("dir-whip: audit settlement check error (fail-open): %s", exc)
+        return sorted(audit_pending_snapshot(session_id))
+
+
+def _audit_register_child(child_session_id, parent_session_id):
+    """Record a child session's parent link (pending-set inheritance)."""
+    try:
+        with _audit_pending_lock:
+            _audit_session_parents[child_session_id] = (
+                parent_session_id or _audit_top_session
+            )
+    except Exception as exc:
+        logger.debug("dir-whip: audit register child error: %s", exc)
+
+
+def _audit_unregister_child(child_session_id):
+    """Drop a child session's parent link when the subagent stops."""
+    try:
+        with _audit_pending_lock:
+            _audit_session_parents.pop(child_session_id, None)
+    except Exception as exc:
+        logger.debug("dir-whip: audit unregister child error: %s", exc)
+
+
+def _audit_session_start(session_id):
+    """Top-level session start: clear this session's pending violations
+    and leftover pre snapshots, reset the one-time cap warning, and record
+    the current top-level session (child-inheritance fallback)."""
+    try:
+        audit_pending_clear(session_id)
+        with _audit_pre_snapshots_lock:
+            stale = [k for k in _audit_pre_snapshots if k[0] == session_id]
+            for k in stale:
+                _audit_pre_snapshots.pop(k, None)
+        global _audit_cap_warned, _audit_top_session
+        _audit_cap_warned = False
+        _audit_top_session = session_id
+    except Exception as exc:
+        logger.debug("dir-whip: audit session start error: %s", exc)
+
+
+# ---------------------------------------------------------------- L1 fire-once notice (spec 5.18)
+
+def _audit_notice_message(paths):
+    """The single L1 notice text (5.18): the paths and the remediation.
+    One notice per result listing every unannounced violation; only this
+    notice ever enters the conversation (context hygiene)."""
+    lines = [
+        "[dir-whip] Write audit: the following file(s) were written to the "
+        "Working Directory root outside any Session Directory:"
+    ]
+    for path in paths:
+        lines.append("  - %s" % str(path).replace("\\", "/"))
+    lines.append(
+        "Remediation: move the file(s) into a Session Directory "
+        "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
+        "allowed_root_files in dir-whip-config.yaml. Further writes to "
+        "the Working Directory are blocked until then."
+    )
+    return "\n".join(lines)
+
+
+def on_transform_tool_result(tool_name=None, args=None, result=None,
+                             session_id=None, task_id=None, **kwargs):
+    """L1 fire-once notice hook (5.18), registered at register().
+
+    Hermes first-party precedent (security-guidance): returning a string
+    REPLACES the tool result the model sees next turn; None leaves it
+    unchanged. The audit is terminal-triggered, so only TERMINAL results
+    are decorated. Appends ONE notice naming every unannounced pending
+    violation, then flips the announced flags (HARD fire-once constraint:
+    one notice per violation, never re-appended -- context hygiene).
+    Non-string results are untouched; JSON error results are not
+    decorated; audit disabled or nothing unannounced -> None. Fail-open:
+    any exception -> None, never raised.
+
+    ORDERING FIX (live-verified 2026-08-22): for the terminal tool Hermes
+    fires transform_tool_result BEFORE post_tool_call, so the audit re-scan
+    (_audit_post_check) is run HERE first -- it pops the pre snapshot and
+    fills the pending set, then the notice below reads it. The
+    post_tool_call _audit_post_check call stays as an order-agnostic no-op
+    fallback (the snapshot is already popped, so it skips). Because
+    _audit_post_check pops its snapshot, the audit runs exactly once
+    regardless of which hook fires first.
+    """
+    try:
+        if tool_name != "terminal":
+            return None
+        if not write_audit_enabled():
+            return None
+        # Ordering fix: run the audit re-scan BEFORE reading the pending set
+        # (transform fires before post_tool_call for terminal). Safe even if
+        # the command was blocked-at-pre (no snapshot -> early return).
+        _audit_post_check(
+            session_id, task_id, is_subagent=_is_child_session(session_id),
+        )
+        if not isinstance(result, str):
+            return None
+        # Don't decorate error results (security-guidance precedent): the
+        # model already has bigger problems; the notice waits for the
+        # next eligible result instead.
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2:
+                return None
+        except (ValueError, TypeError):
+            pass
+        pending = audit_pending_snapshot(session_id)
+        unannounced = [p for p, entry in pending.items() if not entry["announced"]]
+        if not unannounced:
+            return None
+        for path in unannounced:
+            audit_mark_announced(session_id, path)
+        return result + "\n\n" + _audit_notice_message(unannounced)
+    except Exception as exc:
+        logger.debug("dir-whip: transform_tool_result error (fail-open): %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------- L3 settlement gate (spec 5.18)
+
+def _audit_gate_unresolved(session_id, working_dir_root, exempt_paths):
+    """Unresolved pending paths for the L3 gate (empty -> gate open).
+
+    Respects the write_audit switch (disabled -> open). A failed root
+    re-scan is handled inside audit_unresolved_paths (full pending set ->
+    latch stays); any other gate-side error fails OPEN (5.8 -- the gate
+    never breaks the guard).
+    """
+    try:
+        if not write_audit_enabled():
+            return []
+        return audit_unresolved_paths(session_id, working_dir_root, exempt_paths)
+    except Exception as exc:
+        logger.debug("dir-whip: audit gate check error (fail-open): %s", exc)
+        return []
+
+
+def _audit_gate_block_message(display_paths, is_subagent):
+    """L3 gate block message (5.18): unresolved paths + remediation, with
+    the C6 [Reason]/[Next] cue (subagent variant: report to the parent)."""
+    lines = [
+        "BLOCKED: earlier command(s) wrote file(s) to the Working Directory "
+        "root that still need remediation:"
+    ]
+    for path in display_paths:
+        lines.append("  - %s" % path)
+    if is_subagent:
+        lines.append("Fix: report the pending path(s) to the parent agent "
+                     "for remediation (do not create a session directory).")
+    else:
+        lines.append(
+            "Fix: move the file(s) into a Session Directory "
+            "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
+            "allowed_root_files in dir-whip-config.yaml."
+        )
+    lines.append("Reply using the [Reason]/[Next] template.")
+    return "\n".join(lines)
+
+
+def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
+                      unresolved):
+    """Standard block-channel response for the L3 latch (5.18).
+
+    Records a write-audit-gate-block verdict (5.13 stats/log; no generic
+    blocked bus event -- the gate has its own) and emits the 5.14
+    write-audit-gate-block bus event with privacy-shaped relative paths,
+    then returns the block dict for the pre-tool channel.
+    """
+    rel_paths = [_relativize_target(path, working_dir_root) for path in unresolved]
+    _emit_verdict(
+        "block", tool_name, "write-audit-gate-block", None,
+        reason="%d unresolved root write audit violation(s)" % len(unresolved),
+        working_dir_root=working_dir_root,
+        is_subagent=is_subagent, session_id=session_id, bus_event=False,
+    )
+    _bus_emit("write-audit-gate-block", {
+        "outcome": "block",
+        "rule_key": "write-audit-gate-block",
+        "paths": list(rel_paths),
+        "latch": "latched",
+    })
+    display = [str(path).replace("\\", "/") for path in unresolved]
+    return {
+        "action": "block",
+        "message": _audit_gate_block_message(display, is_subagent),
+    }
+
+
+def _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths):
+    """Take the pre snapshot for an ALLOWED terminal call (5.18).
+
+    Audit disabled (write_audit: false) -> nothing. Root entry count
+    above write_audit_entry_cap -> round skipped + ONE WARNING per session
+    (not repeated). Scan OSError -> fail-open (no snapshot stored, so the
+    post skips). Any exception -> nothing (fail-open, 5.8).
+    """
+    try:
+        if not write_audit_enabled():
+            return
+        snap = snapshot(working_dir_root)
+        if snap is None:
+            return
+        cap = write_audit_entry_cap()
+        if len(snap) > cap:
+            global _audit_cap_warned
+            if not _audit_cap_warned:
+                _audit_cap_warned = True
+                logger.warning(
+                    "dir-whip: write audit skipped: root entry count %d "
+                    "exceeds write_audit_entry_cap %d", len(snap), cap,
+                )
+            return
+        with _audit_pre_snapshots_lock:
+            _audit_pre_snapshots[(session_id, task_id)] = (
+                snap, working_dir_root, tuple(exempt_paths),
+            )
+    except Exception as exc:
+        logger.debug("dir-whip: audit pre-snapshot error (fail-open): %s", exc)
+
+
+def _audit_post_check(session_id, task_id, is_subagent=False):
+    """Post terminal re-scan: diff the pre snapshot and classify (5.18).
+
+    Pops the (session_id, task_id) pairing; no pairing (blocked-at-pre,
+    cap skip, disabled, scan failure) -> nothing. Each violation joins the
+    session's pending set and emits ONE write-audit-violation verdict
+    event (tool="audit", relative target, 5.13 privacy; bus_event=False)
+    plus the 5.14 write-audit-violation bus sidecar with a relative path,
+    the session-scope flag and first_seen. Deletions are record-only,
+    never events. The L1 notice is NOT an event (5.18). Fail-open: never
+    raises.
+    """
+    try:
+        with _audit_pre_snapshots_lock:
+            record = _audit_pre_snapshots.pop((session_id, task_id), None)
+        if record is None:
+            return
+        before, working_dir_root, exempt_paths = record
+        if not write_audit_enabled():
+            return
+        after = snapshot(working_dir_root)
+        if after is None:
+            return
+        diff = diff_snapshots(before, after)
+        classified = audit_classify_diff(
+            diff, before, after, working_dir_root, list(exempt_paths), is_subagent,
+        )
+        for path in classified["violations"]:
+            audit_pending_add(session_id, path)
+            _emit_verdict(
+                "block", "audit", "write-audit-violation", path,
+                reason="root write audit violation (5.18)",
+                working_dir_root=working_dir_root,
+                is_subagent=is_subagent, session_id=session_id,
+                bus_event=False,
+            )
+            _bus_emit("write-audit-violation", {
+                "outcome": "block",
+                "rule_key": "write-audit-violation",
+                "path": _relativize_target(path, working_dir_root),
+                "is_subagent": bool(is_subagent),
+                "first_seen": (
+                    audit_pending_snapshot(session_id)
+                    .get(_audit_norm_path(path), {})
+                    .get("first_seen")
+                ),
+            })
+    except Exception as exc:
+        logger.debug("dir-whip: audit post check error (fail-open): %s", exc)
