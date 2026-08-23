@@ -145,9 +145,8 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
 # Trigger words within the first 57 chars; avoids "organize/clean up
 # sessions" phrasing (F4). Matches SKILL.md frontmatter description.
 SKILL_DESCRIPTION = (
-    "Use when creating, saving, writing, moving, or deleting files in a "
-    "Hermes workspace, organizing deliverables, or auditing workspace "
-    "compliance."
+    "在 Hermes 工作区中创建、保存、写入、移动或删除文件，组织交付物，"
+    "或审计工作区合规性时使用。"
 )
 
 # Spec 3.7/5.17: always-on discipline prompt (<=200 chars, four elements:
