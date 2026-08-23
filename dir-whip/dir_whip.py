@@ -143,12 +143,11 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
 
 # Spec 3.1: bundled skill description (frontmatter + register_skill).
 # Trigger words within the first 57 chars; avoids "organize/clean up
-# sessions" phrasing (F4).
+# sessions" phrasing (F4). Matches SKILL.md frontmatter description.
 SKILL_DESCRIPTION = (
-    "Use when creating, saving, writing, moving, or deleting files, "
-    "organizing deliverables, designing workspace layout, or auditing "
-    "workspace compliance. Enforces session directory discipline and "
-    "two-step confirmation for destructive operations."
+    "Use when creating, saving, writing, moving, or deleting files in a "
+    "Hermes workspace, organizing deliverables, or auditing workspace "
+    "compliance."
 )
 
 # Spec 3.7/5.17: always-on discipline prompt (<=200 chars, four elements:
