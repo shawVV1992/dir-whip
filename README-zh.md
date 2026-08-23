@@ -9,7 +9,7 @@
 
 本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
 
-dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 8 个钩子拦截违规、审计层捕获漏网。1 条命令即可安装，支持 Windows、Linux、WSL 与 macOS。
+dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 8 个钩子拦截违规、审计层捕获漏网。
 
 注意：dir-whip 权限范围仅限于工作目录（Initial Project Directory），工作目录之外的写入不受管控，新建的项目目录不受管控。
 
