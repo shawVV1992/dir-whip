@@ -1,24 +1,17 @@
 ---
 name: workspace-organization
-description: Use when creating, saving, writing, moving, or deleting files, organizing deliverables, designing workspace layout, or auditing workspace compliance. Enforces session directory discipline and two-step confirmation for destructive operations.
+description: Use when creating, saving, writing, moving, or deleting files in a Hermes workspace, organizing deliverables, designing workspace layout, or auditing workspace compliance.
 ---
 
 # Workspace Organization
 
-File discipline for Hermes agent workspaces. Teaches session directory
-structure, file placement rules, the root-forbid rule, and governance
-workflows. The skill is bundled inside the dir-whip plugin and loads
-explicitly by its qualified name `dir-whip:workspace-organization`
-when deep reference is needed; a short always-on discipline prompt covers
-day-to-day behavior.
+File discipline for Hermes agent workspaces. Enforces session directory
+structure, file placement rules, and root-forbid governance. Loaded via
+`dir-whip:workspace-organization` when deep reference is needed.
 
-## Behavior Layers
+## Scope Check (Layer 0)
 
-Evaluate in order. Each layer builds on the previous.
-
-### Layer 0: Scope Check (short-circuit)
-
-Determine whether this skill applies BEFORE doing anything else.
+Evaluate in order. First match wins. Do NOT evaluate subsequent conditions.
 
 ```
 IF project_list tool available AND active_id not null AND CWD under project folders
@@ -29,65 +22,36 @@ OTHERWISE
   -> DEFAULT MODE. Proceed to Layer 1.
 ```
 
-Evaluate in order. First match wins. Do NOT evaluate subsequent conditions.
-
-### Layer 1: Instant Discipline (every file operation)
+## Instant Discipline (Layer 1)
 
 Triggered by: any file write, create, save, delete, or move.
 
-**Step 1 - classify the target before writing.** State the target class
-explicitly before every create/write:
+**Target classification (state before every write):**
 
 | Target classification | Guard behavior |
 |---|---|
-| Inside a Session Directory (`working_dir_root/YYYYMMDD_HHMMSS_TaskName/...`) | Allow |
+| Inside a Session Directory (`YYYYMMDD_HHMMSS_TaskName/...`) | Allow |
 | Root whitelist file (`allowed_root_files`) | Allow |
-| External path (outside the Working Directory) | Allow + logged (fail-open) |
-| Working Directory root, non-whitelist (anything else at root) | Block |
+| External path (outside Working Directory) | Allow + logged (fail-open) |
+| Working Directory root, non-whitelist | Block |
 
-**Step 2 - session directory discipline:**
+**Session directory discipline:**
+1. Inside valid Session Directory? → proceed
+2. Not inside one? → create lazily: `python scripts/create_session_dir.py <task_name> --workspace <working_dir>`, then write to `Outputs/` or `.tmp/`
+3. Delete/overwrite/move? → Apply Confirmation Protocol
 
-```
-1. Am I inside a valid Session Directory?
-   - YES -> proceed with operation
-   - NO  -> create a Session Directory first (lazy creation):
-            python scripts/create_session_dir.py <task_name> --workspace <working_dir>
-            then write to Outputs/ or .tmp/ within it
+**Root forbid:** Root allows ONLY: `allowed_root_files`, session-format directories, `.hermes/`. Everything else → use Session Directory.
 
-2. Is this a delete / overwrite / move?
-   -> Apply the Confirmation Protocol (below)
+**File placement:** Formal → `Outputs/`, scratch → `.tmp/`, NEVER root directly.
 
-3. Execute operation
-```
+## Governance Mode (Layer 2)
 
-Key rule: Session Directory is created LAZILY at first file write, NOT at
-conversation start. Conversations that produce no files create no
-directories.
-
-**Step 3 - root forbid.** The Working Directory root allows EXACTLY:
-`allowed_root_files` whitelist files, session-format directories
-(`YYYYMMDD_HHMMSS_TaskName/`) and their contents, and `.hermes/`. Every
-other creation at the root is strongly forbidden - use a Session Directory
-instead.
-
-File placement:
-- Formal deliverables -> `Outputs/`
-- Intermediate scripts, debug files, scratch work -> `.tmp/`
-- NEVER save to the Working Directory root directly
-
-### Layer 2: Governance Mode (on request or cron)
-
-Triggered by:
-- User says "tidy workspace" / "organize files" / equivalent
-- Cron job with the attached skill
+Triggered by: user says "tidy workspace" or cron job.
 
 ```
-1. Run audit: python scripts/audit_workspace.py --workspace <working_dir>
-2. If violations found:
-   - Classify each violation (misplaced deliverable / temp file / unknown)
-   - Propose action (move to session dir / move to .tmp / leave)
-   - Execute with user confirmation (or auto in cron mode for .tmp cleanup)
-3. If no violations: report "OK" (or [SILENT] in cron mode)
+1. Run: python scripts/audit_workspace.py --workspace <working_dir>
+2. Violations found? Classify → propose → execute with confirmation
+3. No violations? Report "OK" (or [SILENT] in cron mode)
 ```
 
 ## Session Directory Structure
@@ -102,62 +66,36 @@ Triggered by:
 └── ...
 ```
 
-Rules:
-- Root allows ONLY: `allowed_root_files` whitelist files, `.hermes/`, and
-  session-format directories (`YYYYMMDD_HHMMSS_TaskName/`) with their contents
-- Every session dir MUST contain both Outputs/ and .tmp/
-- Outputs/ blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
-- .tmp/ eligible for age-based cleanup (default: 30 days)
+**Rules:** Root allows ONLY whitelist files + `.hermes/` + session dirs. Session dirs MUST contain `Outputs/` and `.tmp/`. `.tmp/` eligible for age-based cleanup (default: 30 days).
 
 ## Confirmation Protocol
 
-Applies to: delete, overwrite, move operations.
-
-**Rule: Instruction is not confirmation.**
+Applies to: delete, overwrite, move operations. **Instruction is NOT confirmation.**
 
 ```
-Step 1: Agent reports the operation
-  "I will [delete/overwrite/move] the following file(s):
-   - /path/to/file1
-   - /path/to/file2
-   Confirm? (yes/no)"
-
-Step 2: User replies with explicit confirmation
-  "yes" / "confirm" / "go ahead" -> execute
-  Anything else -> abort
+Step 1: Agent lists files and asks "Confirm? (yes/no)"
+Step 2: User replies "yes"/"confirm"/"go ahead" → execute; anything else → abort
 ```
 
-The user's initial instruction ("delete X") triggers Step 1. It is NEVER
-treated as confirmation itself.
-
-Anti-patterns (NEVER do these):
-- User says "delete old files" -> agent deletes without listing them first
-- Agent interprets silence as confirmation
+Anti-patterns: deleting without listing first, interpreting silence as confirmation.
 
 ## Cron Governance Mode
 
-Designed for Hermes cron with the hybrid pattern:
-
 ```
-Cron job configuration:
-  script: scripts/audit_workspace.py --gate (pre-run gate, zero tokens)
-  skill: dir-whip:workspace-organization   # qualified plugin-skill name
-  prompt: "If audit found violations, classify and archive misplaced files.
-           If no violations, respond with [SILENT]."
+Cron config:
+  script: scripts/audit_workspace.py --gate
+  skill: dir-whip:workspace-organization
+  prompt: "If violations, classify and archive. If none, [SILENT]."
 
 Flow:
-  1. script= runs audit_workspace.py --gate
-  2. stdout "OK" -> {"wakeAgent": false} -> silent tick, no delivery
-  3. stdout violations -> {"wakeAgent": true} -> agent wakes
-  4. Agent classifies violations and moves files to appropriate session dirs
-  5. Agent reports summary (delivered to the configured platform)
+  1. script= runs --gate
+  2. "OK" → {"wakeAgent": false} → silent tick
+  3. violations → {"wakeAgent": true} → agent wakes
+  4. Agent classifies and moves files
+  5. Agent reports summary
 ```
 
-Gate failure: when the `--workspace` mismatch check fails, the audit exits 2
-with the reason on stderr and emits NO wakeAgent line - the cron tick fails
-visibly and the agent is NOT woken. On Working Directory resolution failure
-the audit follows the fail-open chain: it falls back to CWD with one stderr
-warning and proceeds.
+Gate failure: exit 2 on stderr, no wakeAgent. Resolution failure: fail-open to CWD.
 
 ## Scripts
 
@@ -168,30 +106,11 @@ All scripts: Python 3.11, `--help` support, forward-slash output paths.
 | create_session_dir.py | Create session dir with Outputs/ + .tmp/ | `--workspace` |
 | audit_workspace.py | Compliance audit with gate + cron .tmp cleanup | `--workspace`, `--json`, `--gate`, `--days` |
 
-Boundary validation: scripts validate the target against the resolved
-Working Directory (layered chain: dir-whip-config override -> profile
-terminal.cwd -> candidate roots -> fail-open). An explicit `--workspace`
-must match the resolved root (exit 2 on mismatch); a resolution failure
-fails open to CWD with one warning.
-
-## Creation Workflow Examples
-
-### Negative example (wrong)
-
-- User asks "save the report"; the agent writes directly to
-  `<working_dir>/report.md` - a root write, not whitelisted -> blocked by
-  the guard with fix instructions.
-
-### Positive example (correct)
-
-- The agent classifies the target as a session-dir write; runs
-  `python scripts/create_session_dir.py <task_name> --workspace <working_dir>`;
-  writes the deliverable to `Outputs/report.md` (or scratch to `.tmp/`).
+Boundary: `--workspace` must match resolved root (exit 2 on mismatch). Resolution failure: fail-open to CWD with warning.
 
 ## Interception Response Template
 
-When a write is blocked by the guard, reply with this template (aligned
-with the guard's block message):
+When blocked, reply with:
 
 ```
 [Reason] The target <path> is not allowed: <rule reason>.
@@ -200,78 +119,44 @@ with the guard's block message):
   then write to its Outputs/ or .tmp/ subdirectory.
 ```
 
-### Subagent variant
-
-A blocked subagent replies:
-
-```
-[Reason] The target <path> is not allowed: <rule reason>.
-[Next] I will write to the target directory passed by the parent agent.
-```
-
-and reports the block back to the parent. Subagents never create session
-directories themselves.
+**Subagent variant:** Replace "I will create" with "I will write to the target directory passed by the parent agent."
 
 ## Subagent File Protocol
 
-- The PARENT ensures the target directory EXISTS before delegating (creating
-  the parent Session Directory first if needed - lazy creation stays the
-  parent's job).
-- Subagents write to the target directory passed by the parent. Default: the
-  parent session's `.tmp/`. The parent may explicitly pass an `Outputs/` path
-  for formal deliverables, or a per-subagent subdirectory (e.g. `.tmp/<task>/`)
-  to avoid concurrent name clashes.
-- Subagents do NOT create their own session directories and do NOT promote
-  their own outputs (`.tmp/` -> `Outputs/` promotion is the parent's review
-  step).
-- When the target directory is missing or a write is blocked, the subagent
-  reports back to the parent instead of creating a session directory itself.
+- Parent ensures target directory exists before delegating (lazy creation is parent's job)
+- Subagents write to parent's `.tmp/` (default) or explicit `Outputs/`/per-task subdirectory
+- Subagents do NOT create session directories or promote outputs (`.tmp/` → `Outputs/` is parent's review)
+- Missing target or blocked write → report back to parent
 
 ## Terminal Write Discipline
 
-Layer 1 applies equally to writes made through the `terminal` tool. The
-guard coarsely intercepts: redirects (`>` `>>` `1>` `2>`), `touch`, and
-`cp`/`mv` destinations. Deep intent parsing is removed; uncertain write
-intent is allowed and logged (no approval gate).
+Layer 1 applies to terminal writes. Guard intercepts: redirects (`>` `>>`), `touch`, `cp`/`mv` destinations. Uncertain intent allowed + logged.
 
 Rules:
-1. Prefer Session Directories for all file writes, including via terminal.
-2. When the USER explicitly specifies a target path in the conversation
-   (e.g. "write to C:/Users/me/Reports/R1.md"), call the
-   `dir_whip_allow_path(path)` tool to register that path BEFORE
-   writing, so the guard's Tier 0 allows it.
-3. When a write is blocked by the guard, create a Session Directory
-   (`python scripts/create_session_dir.py <task_name> --workspace <working_dir>`)
-   and re-target the write there. Never bypass the guard.
+1. Prefer Session Directories for all writes
+2. USER specifies path → call `dir_whip_allow_path(path)` BEFORE writing
+3. Blocked → create Session Directory and re-target (never bypass guard)
 
 ## Guarded Path Classification
 
-The plugin guard classifies every file write. Know these outcomes so a
-block message never surprises you:
-
-- Paths inside a Session Directory or matching exempt/runtime-allowlisted
-  paths: allowed.
-- Root whitelist files (`allowed_root_files`): allowed.
-- Paths at the Working Directory root that are not whitelist files: blocked -
-  create a Session Directory.
-- Paths outside the Working Directory: allowed + logged (external).
-- Uncertain terminal write intent: allowed + logged.
+| Location | Behavior |
+|----------|----------|
+| Inside Session Directory or exempt path | Allow |
+| Root whitelist file (`allowed_root_files`) | Allow |
+| Root, non-whitelist | Block → create Session Directory |
+| Outside Working Directory | Allow + logged (external) |
+| Uncertain terminal intent | Allow + logged |
 
 ## Compliance Audit
 
-To audit and fix violations:
-
-1. Run: `python scripts/audit_workspace.py --workspace <dir>` (add `--json`
-   for machine-readable output)
-2. See `references/workspace-audit.md` for the checklist
-3. In cron mode the audit auto-cleans expired `.tmp/` contents (age-based,
-   default 30 days); interactive runs only propose and never delete
+1. Run: `python scripts/audit_workspace.py --workspace <dir>` (add `--json`)
+2. See `references/workspace-audit.md` for checklist
+3. Cron: auto-cleans `.tmp/` (age-based, default 30 days); interactive: propose only
 
 ## Pitfalls
 
-- Session directory creation is lazy - do NOT create one at conversation start
-- In project mode this skill does not apply at all - defer to project conventions
-- Confirmation protocol: listing files is NOT the same as confirming deletion
-- When existing code repos are outside the workspace root, point at them via
-  the workspace rules file instead of relocating them
-- Don't assume project file rules from one context apply to general workspace design
+- Session dir creation is lazy - NOT at conversation start
+- Project mode: this skill does not apply
+- Confirmation: listing ≠ confirming deletion
+- Existing repos outside workspace → use rules file, don't relocate
+- Don't assume project file rules from other contexts
