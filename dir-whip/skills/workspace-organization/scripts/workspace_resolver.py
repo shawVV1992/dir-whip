@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S0: Shared READ-ONLY workspace resolver (v0.3.0, spec 4.4).
+"""S0: Shared READ-ONLY workspace resolver (v0.3.1, spec 4.4).
 
 Shared Working Directory resolution module imported by the two session
 scripts (create_session_dir.py, audit_workspace.py) -- the ONLY

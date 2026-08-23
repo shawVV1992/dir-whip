@@ -1,4 +1,4 @@
-"""Core guard logic: pre-tool-call interception and decision chain (v0.3.0).
+"""Core guard logic: pre-tool-call interception and decision chain (v0.3.1).
 
 Implements the spec 5.3 unified chain (Tier 0 exempt/allowlist -> root-file
 whitelist -> session dir -> block; external -> allow + log), the 5.10 coarse

@@ -1,5 +1,5 @@
 """Configuration loading, working_dir_root resolution and statistics for
-dir-whip (v0.3.0).
+dir-whip (v0.3.1).
 
 Inverted resolution chain (spec 5.5): dir-whip-config.yaml working_dir_root
 override (authoritative) -> current profile's terminal.cwd -> fail-open
