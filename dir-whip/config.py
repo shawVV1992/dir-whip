@@ -94,7 +94,7 @@ _register_config_path = None
 # working_dir_root is re-resolved per top-level session at on_session_start
 # (single-threaded session loop assumption, same as stats). _session_root
 # starts as the register-time value and is REPLACED by refresh_resolution
-# (including None on fail-open 鈥?a stale value is never kept).
+# (including None on fail-open — a stale value is never kept).
 _session_root = None
 _session_root_initialized = False
 
@@ -259,7 +259,7 @@ def load_guard_config(config_path=None):
 def resolve_working_dir_root(ctx, config_path=None):
     """Resolve the Working Directory for the current profile (spec 5.5).
 
-    Inverted 3-step chain (plugin side 鈥?deliberately different from the
+    Inverted 3-step chain (plugin side — deliberately different from the
     script-side 4-step chain in workspace_resolver.py):
     1. dir-whip-config.yaml explicit working_dir_root -> authoritative when set
     2. current profile terminal.cwd: HERMES_HOME/config.yaml for "default",
@@ -310,7 +310,7 @@ def refresh_resolution(ctx):
     against the session's ctx.profile_name, so a desktop multi-profile
     process never keeps the register-time (other-profile) root. On success
     _session_root = <root> (same INFO source log as the chain); on
-    fail-open _session_root = None + WARNING 鈥?a stale value from a
+    fail-open _session_root = None + WARNING — a stale value from a
     previous session is NEVER kept. Returns _session_root.
     """
     global _session_root, _session_root_initialized

@@ -1,4 +1,4 @@
-"""Statistics: counters, jsonl persistence and rollover (spec 5.13) 鈥?pure
+"""Statistics: counters, jsonl persistence and rollover (spec 5.13) — pure
 state module.
 
 In-memory counters (outcome x tool x rule_key x is_subagent), session
