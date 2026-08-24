@@ -25,7 +25,6 @@ try:
         is_runtime_allowlisted,
         load_guard_config,
         refresh_resolution,
-        register_dir_whip_commands,
         reset_cache,
         runtime_allowlist_clear,
         set_session_profile,
@@ -44,7 +43,6 @@ except ImportError:
         is_runtime_allowlisted,
         load_guard_config,
         refresh_resolution,
-        register_dir_whip_commands,
         reset_cache,
         runtime_allowlist_clear,
         set_session_profile,
@@ -55,6 +53,11 @@ except ImportError:
         write_audit_entry_cap,
         dir_whip_allow_path,
     )
+
+try:
+    from .report import register_dir_whip_commands
+except ImportError:
+    from report import register_dir_whip_commands
 
 try:
     from .paths import (
