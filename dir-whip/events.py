@@ -1,4 +1,4 @@
-"""Structured verdict events (spec 5.13 logging part + 5.14 bus fanout) 鈥?deep module.
+"""Structured verdict events (spec 5.13 logging part + 5.14 bus fanout) — deep module.
 
 Records one single-line verdict event per guard decision (stats counters +
 stats.jsonl append + leveled log) and fans out verdict-derived bus events.
