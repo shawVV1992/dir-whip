@@ -27,6 +27,13 @@ class _SessionState:
         self.emit_enabled = False
         self.session_cwd_fn = None       # 宿主 API 注入槽（ADR-0007；register 时装填）
         self.child_session_ids = set()   # 受 self.lock 保护
+        # P6 precomputed plugin paths/version (31.13): filled once at
+        # register(); None until then (direct-call fallbacks keep the
+        # __file__-based derivation).
+        self.plugin_dir = None
+        self.script_resolver_path = None
+        self.skill_md_path = None
+        self.plugin_version = None
 
 
 class _AuditState:

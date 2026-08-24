@@ -36,9 +36,9 @@ except ImportError:
     from paths import relativize_target, within_working_dir
 
 try:
-    from .sessions import _is_child_session
+    from .sessions import _is_child_session, _record_top_session
 except ImportError:
-    from sessions import _is_child_session
+    from sessions import _is_child_session, _record_top_session
 
 logger = logging.getLogger("dir-whip")
 
@@ -493,3 +493,22 @@ __all__ = [
     "pending_clear",
     "mark_announced",
 ]
+
+
+def _audit_session_start(session_id):
+    """Top-level session start: clear this session's pending violations
+    and leftover pre snapshots, reset the one-time cap warning, and record
+    the current top-level session (child-inheritance fallback)."""
+    try:
+        audit_pending_clear(session_id)
+        with state.audit.lock:
+            stale = [k for k in state.audit.pre_snapshots if k[0] == session_id]
+            for k in stale:
+                state.audit.pre_snapshots.pop(k, None)
+            # Lock strengthening (31.13, Controller addition #4): the
+            # top_session / cap_warned writes share the pending lock per
+            # the state.py skeleton intent.
+            _record_top_session(session_id)
+            state.audit.cap_warned = False
+    except Exception as exc:
+        logger.debug("dir-whip: audit session start error: %s", exc)

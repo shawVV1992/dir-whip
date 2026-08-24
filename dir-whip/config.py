@@ -94,15 +94,6 @@ _runtime_allowlist_lock = threading.Lock()
 # kept). All of this lives in state.session (see state.py).
 
 
-def _get_plugin_dir():
-    """Return the plugin directory (SCR-013: no longer the config source).
-
-    Kept for the plugin's own sibling resources; the runtime config now
-    lives at HERMES_HOME/dir-whip/dir-whip-config.yaml.
-    """
-    return Path(__file__).parent
-
-
 def parse_terminal_cwd(config_path):
     """Parse terminal.cwd from a Hermes config.yaml file.
 

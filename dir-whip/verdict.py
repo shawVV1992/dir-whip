@@ -1,20 +1,16 @@
-"""Core guard logic: pre-tool-call interception and decision chain (v0.3.1).
+"""Verdict chain: guard decision, classification, terminal interception
+(spec 5.3/5.10/5.12) -the plugin's core guard logic.
 
-Implements the spec 5.3 unified chain (Tier 0 exempt/allowlist -> root-file
-whitelist -> session dir -> block; external -> allow + log), the 5.10 coarse
-terminal tiers (block: redirect/touch/cp-mv; uncertain: allow + log), the
-exact block message (main + subagent variant), the 5.12 fail-open warning,
-and the 5.13 structured single-line verdict events (logging part; event-bus
-emit is task 26.7). There is NO approve tier and NO memo machinery.
+Pure decision layer: no host imports, no hook registration (the assembly
+layer in __init__.py owns hooks and fail-open). Depends on the lower
+layers paths/terminal/events/state/config + sessions/audit (sanctioned
+import-back of pre-existing dependencies). Extracted from dir_whip.py
+(task 31.13).
 """
 
-import datetime
-import json
 import logging
-import ntpath
 import os
 import re
-from pathlib import Path
 
 try:
     from . import state
@@ -22,9 +18,17 @@ except ImportError:
     import state
 
 try:
-    from . import audit
+    from .audit import (
+        _audit_gate_block,
+        _audit_gate_unresolved,
+        _audit_pre_snapshot,
+    )
 except ImportError:
-    import audit
+    from audit import (
+        _audit_gate_block,
+        _audit_gate_unresolved,
+        _audit_pre_snapshot,
+    )
 
 try:
     from .config import (
@@ -33,16 +37,7 @@ try:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
-        refresh_resolution,
-        reset_cache,
-        runtime_allowlist_clear,
-        set_session_profile,
-        stats_record,
-        stats_set_session,
         terminal_guard_enabled,
-        write_audit_enabled,
-        write_audit_entry_cap,
-        dir_whip_allow_path,
     )
 except ImportError:
     from config import (
@@ -51,76 +46,23 @@ except ImportError:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
-        refresh_resolution,
-        reset_cache,
-        runtime_allowlist_clear,
-        set_session_profile,
-        stats_record,
-        stats_set_session,
         terminal_guard_enabled,
-        write_audit_enabled,
-        write_audit_entry_cap,
-        dir_whip_allow_path,
     )
 
 try:
-    from .audit import (
-        _audit_gate_block,
-        _audit_gate_unresolved,
-        _audit_post_check,
-        _audit_pre_snapshot,
-        audit_pending_clear,
-        on_transform_tool_result,
-    )
+    from .events import _verdict_reason, emit
 except ImportError:
-    from audit import (
-        _audit_gate_block,
-        _audit_gate_unresolved,
-        _audit_post_check,
-        _audit_pre_snapshot,
-        audit_pending_clear,
-        on_transform_tool_result,
-    )
+    from events import _verdict_reason, emit
 
 try:
-    from .sessions import (
-        _is_child_session,
-        _record_top_session,
-        on_subagent_start,
-        on_subagent_stop,
-    )
+    from .paths import is_absolute_any, normalize_target, within_working_dir
 except ImportError:
-    from sessions import (
-        _is_child_session,
-        _record_top_session,
-        on_subagent_start,
-        on_subagent_stop,
-    )
+    from paths import is_absolute_any, normalize_target, within_working_dir
 
 try:
-    from .events import _bus_emit, _verdict_reason, emit
+    from .sessions import _is_child_session
 except ImportError:
-    from events import _bus_emit, _verdict_reason, emit
-
-try:
-    from .report import register_dir_whip_commands
-except ImportError:
-    from report import register_dir_whip_commands
-
-try:
-    from .paths import (
-        is_absolute_any,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
-except ImportError:
-    from paths import (
-        is_absolute_any,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
+    from sessions import _is_child_session
 
 try:
     from .terminal import (
@@ -137,54 +79,10 @@ except ImportError:
         _tokenize_command,
     )
 
-# get_session_cwd is a Hermes runtime API (tools/terminal_tool.py) absent
-# from the test venv. Guarded module-level import so dir_whip.py never crashes
-# when unavailable; callers fall back to working_dir_root. Tests inject a
-# fake via state.session.session_cwd_fn.
-try:
-    from hermes_cli.tools.terminal_tool import get_session_cwd
-except Exception:
-    get_session_cwd = None
-
-# Host API injection slot (ADR-0007): filled at module load from the guarded
-# import; tests inject a fake via state.session.session_cwd_fn.
-state.session.session_cwd_fn = get_session_cwd
-
 logger = logging.getLogger("dir-whip")
 
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
-
-# Spec 5.12 (term-updated): injected once per session when the guard is
-# disabled because working_dir_root could not be resolved.
-FAIL_OPEN_WARNING_MESSAGE = (
-    "[dir-whip] WARNING: The guard is DISABLED because the Working "
-    "Directory\n"
-    "could not be resolved. File writes are NOT being enforced.\n"
-    "Check dir-whip-config.yaml (working_dir_root) or your profile's config.yaml\n"
-    "(terminal.cwd) and restart the session."
-)
-
-# Spec 5.11: the plugin's ONLY tool (OpenAI function-call format required by
-# Hermes tools.registry). Registered at register() via ctx.register_tool.
-ALLOW_PATH_TOOL_SCHEMA = {
-    "name": "dir_whip_allow_path",
-    "description": (
-        "Add an absolute path to the dir-whip runtime allowlist so "
-        "file operations under that path are exempt for this session (Tier 0). "
-        "Use when the user explicitly specifies a path to write to."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Absolute path to allow (forward slashes)",
-            }
-        },
-        "required": ["path"],
-    },
-}
 
 # Spec 5.12 (term-updated): injected once per session when the guard is
 # disabled because working_dir_root could not be resolved.
@@ -209,15 +107,6 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
     ("approve", "always", "session", "granted", "allow", "smart_approve")
 )
 
-# Spec 3.1: bundled skill description (frontmatter + register_skill).
-# Trigger words within the first 57 chars; avoids "organize/clean up
-# sessions" phrasing (F4). Matches SKILL.md frontmatter description.
-SKILL_DESCRIPTION = (
-    "Use when creating, saving, writing, moving, or deleting files in a "
-    "Hermes workspace, organizing deliverables, or auditing workspace "
-    "compliance."
-)
-
 # Spec 3.7/5.17: always-on discipline prompt (<=200 chars, four elements:
 # classify before write / session-dir writes / no root writes / when
 # blocked). The full C6 template is delivered by the block message, NOT
@@ -228,94 +117,6 @@ DISCIPLINE_PROMPT = (
     "根目录禁写：工作目录根只允许白名单文件、会话目录和 .hermes/。"
     "被拦截时：遵循拦截消息创建会话目录后重试，回复 [Reason]/[Next]，不要重试同一路径。"
 )
-
-# ================================================================
-# Root write audit state (spec 5.18). Detection backbone + the
-# handling ladder: L1 fire-once notice (transform_tool_result), L2
-# verdict/bus events, L3 pending-violation latch gate in guard().
-# (State lives in state.audit; see state.py.)
-# ================================================================
-
-
-def register(ctx):
-    """Register dir-whip hooks, tool and event bus (5.7/5.8/5.14).
-
-    Hooks: pre_tool_call, on_session_start, post_tool_call,
-    post_approval_response, pre_command, subagent_start, subagent_stop,
-    transform_tool_result (5.18 L1 notice). Tool: dir_whip_allow_path
-    (the plugin's ONLY tool). Event bus: capability detected via
-    hasattr(ctx, "emit"); absent -> silent degradation. Fail-open: any
-    registration error logs a warning; the plugin is disabled but Hermes
-    continues normally.
-    """
-    try:
-        state.session.registered_ctx = ctx
-        # Assembly-layer injection (ADR-0007): wire the audit classifier
-        # BEFORE any hook can fire (31.13 moves this to __init__.py with
-        # verdict.classify_target).
-        audit.set_classifier(classify_target)
-        try:
-            state.session.emit_enabled = bool(getattr(ctx, "emit", None))
-        except Exception:
-            state.session.emit_enabled = False
-        reset_cache()
-        get_cached_config(ctx)
-        ctx.register_hook("pre_tool_call", _guard_hook)
-        ctx.register_hook("on_session_start", on_start)
-        ctx.register_hook("post_tool_call", on_post_tool_call)
-        ctx.register_hook("post_approval_response", on_post_approval_response)
-        ctx.register_hook("pre_command", on_pre_command)
-        ctx.register_hook("subagent_start", on_subagent_start)
-        ctx.register_hook("subagent_stop", on_subagent_stop)
-        ctx.register_hook("transform_tool_result", on_transform_tool_result)
-        if hasattr(ctx, "register_tool"):
-            try:
-                ctx.register_tool(
-                    "dir_whip_allow_path",
-                    toolset="dir-whip",
-                    schema=ALLOW_PATH_TOOL_SCHEMA,
-                    handler=_allow_path_handler,
-                )
-            except Exception as exc:
-                logger.warning("dir-whip: register_tool failed: %s", exc)
-        # Spec 5.7 command (/dir-whip merged report, SCR-029) lives in
-        # config.py (D3).
-        register_dir_whip_commands(ctx)
-        # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
-        try:
-            skill_md = Path(__file__).parent / "skills" / "workspace-organization" / "SKILL.md"
-            if skill_md.is_file() and hasattr(ctx, "register_skill"):
-                ctx.register_skill(
-                    "workspace-organization", skill_md, description=SKILL_DESCRIPTION
-                )
-            else:
-                logger.debug(
-                    "dir-whip: register_skill skipped (bundled SKILL.md "
-                    "or ctx.register_skill unavailable)"
-                )
-        except Exception as exc:
-            logger.warning("dir-whip: register_skill failed: %s", exc)
-        try:
-            if hasattr(ctx, "register_system_prompt_section"):
-                ctx.register_system_prompt_section(
-                    "dir-whip-discipline", DISCIPLINE_PROMPT
-                )
-        except Exception as exc:
-            logger.warning(
-                "dir-whip: register_system_prompt_section failed: %s", exc
-            )
-        logger.debug("dir-whip: registered successfully")
-    except Exception as exc:
-        logger.warning("dir-whip: registration failed: %s", exc)
-
-
-def _guard_hook(tool_name, args, task_id=None, **kwargs):
-    """Pre-tool-call hook (5.8: never raises; fail-open -> None)."""
-    try:
-        return guard(tool_name, args, task_id, **kwargs)
-    except Exception as exc:
-        logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
-        return None
 
 
 def guard(tool_name, args, task_id=None, **kwargs):
@@ -330,7 +131,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
 
     is_subagent = bool(kwargs.get("is_subagent", False))
     session_id = kwargs.get("session_id")
-    # 5.13: verdicts split by is_subagent — child membership in the
+    # 5.13: verdicts split by is_subagent -child membership in the
     # child_session_ids set (5.4) implies a subagent write.
     if not is_subagent and session_id and _is_child_session(session_id):
         is_subagent = True
@@ -419,7 +220,7 @@ def _reset_fail_open_flag():
     state.session.fail_open_warned = False
 
 
-# ---------------------------------------------------------------- Observation hooks (spec 5.4/5.13/5.15/5.16)
+# ---------------------------------------------------------------- Observation helpers
 
 def _resolved_config():
     """Cached (working_dir_root, exempt_paths); (None, []) on failure."""
@@ -429,157 +230,9 @@ def _resolved_config():
         return (None, [])
 
 
-def _allow_path_handler(args, **kwargs):
-    """Registered allow_path handler: config tool + allowlisted event (5.14)."""
-    try:
-        path = args.get("path") if isinstance(args, dict) else args
-        result = dir_whip_allow_path(args, **kwargs)
-        if path:
-            working_dir_root, _ = _resolved_config()
-            _bus_emit("allowlisted", {
-                "outcome": "allowlisted",
-                "rule_key": "runtime-allowlist",
-                "target": relativize_target(path, working_dir_root),
-            })
-        return result
-    except Exception as exc:
-        logger.debug("dir-whip: allow_path handler error (fail-open): %s", exc)
-        return None
-
-
-def on_start(session_id, model=None, platform=None, **kwargs):
-    """on_session_start hook (5.4): top-level sessions only.
-
-    Top-level: clear the runtime allowlist, reset the fail-open warning
-    flag, inject the discipline reminder. Child sessions (session_id in
-    child_session_ids) SKIP all three. Gateway degrade: inject_message
-    unavailable or falsy -> DEBUG log, no crash.
-    """
-    try:
-        if _is_child_session(session_id):
-            return
-        # 5.18: top-level session start clears the audit state (pending
-        # violations, leftover pre snapshots, cap warning); child sessions
-        # skip and inherit the parent's latched state.
-        _audit_session_start(session_id)
-        runtime_allowlist_clear()
-        _reset_fail_open_flag()
-        ctx = _get_ctx()
-        profile = getattr(ctx, "profile_name", None) if ctx else None
-        # SCR-027: session-scoped resolution — re-resolve working_dir_root
-        # from THIS session's profile (child sessions skip and inherit).
-        set_session_profile(profile)
-        refresh_resolution(ctx)
-        stats_set_session(
-            profile=profile,
-            session_id=session_id,
-            is_subagent=False,
-            started_at=datetime.datetime.now().isoformat(timespec="seconds"),
-        )
-        if ctx and hasattr(ctx, "inject_message"):
-            injected = ctx.inject_message(REMINDER_MESSAGE)
-            if not injected:
-                logger.debug(
-                    "dir-whip: session-start reminder skipped "
-                    "(inject_message unavailable)"
-                )
-        else:
-            logger.debug(
-                "dir-whip: session-start reminder skipped "
-                "(inject_message unavailable)"
-            )
-    except Exception as exc:
-        logger.debug("dir-whip: session start hook error: %s", exc)
-
-
-def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
-                      session_id=None, status=None, **kwargs):
-    """post_tool_call observer (5.13 D2): write-class completion.
-
-    Records the completion + result state of write_file / patch / terminal
-    calls with rule_key ``landed:<tool>``; other tools are ignored.
-    """
-    try:
-        if tool_name not in ("write_file", "patch", "terminal"):
-            return
-        working_dir_root, _ = _resolved_config()
-        targets = _extract_target_paths(tool_name, args) if isinstance(args, dict) else []
-        target = targets[0] if targets else None
-        # 5.18: terminal re-scan -> diff -> violation classification. Runs
-        # alongside (never instead of) the landed: observation below; a
-        # blocked-at-pre call has no pre snapshot and skips here.
-        if tool_name == "terminal":
-            _audit_post_check(
-                session_id, task_id, is_subagent=_is_child_session(session_id),
-            )
-        emit(
-            "allow", tool_name, "landed:" + str(tool_name), target,
-            "write tool call completed (status: %s)" % (status or "ok"),
-            session_id, _is_child_session(session_id),
-        )
-    except Exception as exc:
-        logger.debug("dir-whip: post_tool_call hook error: %s", exc)
-
-
 def _approval_granted(choice):
     """Map host approval choices to granted/denied (5.13 D2)."""
     return str(choice or "").strip().lower() in _APPROVAL_GRANTED_CHOICES
-
-
-def on_post_approval_response(choice=None, session_key=None, surface=None,
-                              command=None, pattern_key=None, **kwargs):
-    """post_approval_response observer (5.13 D2) + approval events (5.14).
-
-    Granted/denied mapped from the host choice vocabulary. approval-resolved
-    is ALWAYS emitted with the outcome; approval-requested is emitted ONLY
-    when the payload exposes a request/entry state (verified absent in the
-    local hermes-agent payloads). Privacy: no command/description text.
-    """
-    try:
-        granted = _approval_granted(choice)
-        rule_key = "approval:granted" if granted else "approval:denied"
-        emit(
-            "allow" if granted else "block", "approval", rule_key, None,
-            "host approval %s" % ("granted" if granted else "denied"),
-            kwargs.get("session_id"), False,
-        )
-        _bus_emit("approval-resolved", {
-            "outcome": "granted" if granted else "denied",
-            "rule_key": rule_key,
-        })
-        if "request" in kwargs or "entry" in kwargs:
-            _bus_emit("approval-requested", {
-                "outcome": "requested",
-                "rule_key": "approval-requested",
-            })
-    except Exception as exc:
-        logger.debug("dir-whip: post_approval_response hook error: %s", exc)
-
-
-def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
-                   session_key=None, platform=None, **kwargs):
-    """pre_command observer (5.15): record only, never block.
-
-    The host ignores the return value; always returns None. Records
-    surface / command / alias_used plus args_raw / session_key / platform
-    when present, rule_key ``pre-command:<command>``.
-    """
-    try:
-        working_dir_root, _ = _resolved_config()
-        detail = {"surface": surface, "alias_used": alias_used}
-        if args_raw is not None:
-            detail["args_raw"] = args_raw
-        if session_key is not None:
-            detail["session_key"] = session_key
-        if platform is not None:
-            detail["platform"] = platform
-        emit(
-            "allow", "command", "pre-command:" + str(command or ""), None,
-            json.dumps(detail), None, False,
-        )
-    except Exception as exc:
-        logger.debug("dir-whip: pre_command hook error: %s", exc)
-    return None
 
 
 # ---------------------------------------------------------------- Target extraction (spec 5.3 step 3)
@@ -709,14 +362,18 @@ def _block_message(target, working_dir_root, is_subagent=False):
     if is_subagent:
         fix_line = "Fix: write to the target directory passed by the parent agent."
     else:
-        # D11: scripts path computed at runtime: <plugin_dir>/skills/
-        # workspace-organization/scripts (plugin_dir = directory of dir_whip.py).
-        scripts_path = os.path.normpath(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "skills", "workspace-organization", "scripts",
+        # D11: scripts path precomputed at register (P6, 31.13):
+        # <plugin_dir>/skills/workspace-organization/scripts; falls back
+        # to the __file__-based derivation for unregistered direct calls.
+        scripts_path = state.session.script_resolver_path
+        if not scripts_path:
+            scripts_path = os.path.normpath(
+                os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "skills", "workspace-organization", "scripts",
+                )
             )
-        ).replace("\\", "/")
+        scripts_path = scripts_path.replace("\\", "/")
         fix_line = (
             "Fix: Create a session directory first:\n"
             "  python %s/create_session_dir.py <task_name> --workspace %s\n"
@@ -823,22 +480,3 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
     except Exception as exc:
         logger.debug("dir-whip: terminal guard error (fail-open): %s", exc)
         return None
-
-
-
-
-
-def _audit_session_start(session_id):
-    """Top-level session start: clear this session's pending violations
-    and leftover pre snapshots, reset the one-time cap warning, and record
-    the current top-level session (child-inheritance fallback)."""
-    try:
-        audit_pending_clear(session_id)
-        with state.audit.lock:
-            stale = [k for k in state.audit.pre_snapshots if k[0] == session_id]
-            for k in stale:
-                state.audit.pre_snapshots.pop(k, None)
-        state.audit.cap_warned = False
-        _record_top_session(session_id)
-    except Exception as exc:
-        logger.debug("dir-whip: audit session start error: %s", exc)

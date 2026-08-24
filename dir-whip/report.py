@@ -13,6 +13,11 @@ import re
 from pathlib import Path
 
 try:
+    from . import state
+except ImportError:
+    import state
+
+try:
     from .config import (
         _effective_root,
         _get_hermes_home,
@@ -116,8 +121,11 @@ def _plugin_version(path=None):
     """The plugin version from the sibling plugin.yaml (the single version
     source, SCR-029). Simple text parse, NO PyYAML: the first `version:`
     line. On ANY failure (missing/unreadable file, no match) -> 'unknown';
-    never raises.
+    never raises. P6 (31.13): the register-time precomputed value in
+    state.session.plugin_version wins when present.
     """
+    if path is None and state.session.plugin_version:
+        return state.session.plugin_version
     if path is None:
         path = Path(__file__).resolve().parent / "plugin.yaml"
     try:
