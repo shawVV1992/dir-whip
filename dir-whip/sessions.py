@@ -17,9 +17,14 @@ except ImportError:
     import state
 
 try:
-    from .config import get_cached_config, stats_set_session
+    from .config import get_cached_config
 except ImportError:
-    from config import get_cached_config, stats_set_session
+    from config import get_cached_config
+
+try:
+    from .stats import stats_set_session
+except ImportError:
+    from stats import stats_set_session
 
 try:
     from .events import emit

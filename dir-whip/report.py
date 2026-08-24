@@ -23,7 +23,6 @@ try:
         _get_hermes_home,
         _paths_equal,
         _profile_terminal_cwd,
-        _stats_jsonl_path,
         load_guard_config,
         parse_terminal_cwd,
     )
@@ -33,10 +32,14 @@ except ImportError:
         _get_hermes_home,
         _paths_equal,
         _profile_terminal_cwd,
-        _stats_jsonl_path,
         load_guard_config,
         parse_terminal_cwd,
     )
+
+try:
+    from .stats import _stats_jsonl_path
+except ImportError:
+    from stats import _stats_jsonl_path
 
 logger = logging.getLogger("dir-whip")
 
@@ -248,7 +251,7 @@ def register_dir_whip_commands(ctx):
     argument reaches the same handler, which renders the one-line Usage
     (SCR-029: status/stats/doctor subcommands removed). Guarded: a ctx
     without register_command still registers. allow_path is a TOOL and is
-    NOT registered here (dir_whip.py registers it).
+    NOT registered here (__init__.py registers it).
     """
     global _cmd_ctx
     _cmd_ctx = ctx

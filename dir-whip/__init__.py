@@ -19,13 +19,15 @@ except ImportError:
     _get_session_cwd = None
 
 try:
-    from . import audit, config, events, sessions, state, verdict
+    from . import audit, config, events, report, sessions, state, stats, verdict
 except ImportError:
     import audit
     import config
     import events
+    import report
     import sessions
     import state
+    import stats
     import verdict
 
 try:
@@ -90,7 +92,7 @@ def register(ctx):
         state.session.skill_md_path = os.path.join(
             plugin_dir, "skills", "workspace-organization", "SKILL.md"
         )
-        state.session.plugin_version = config._plugin_version()
+        state.session.plugin_version = report._plugin_version()
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
         audit.set_classifier(verdict.classify_target)
@@ -122,8 +124,8 @@ def register(ctx):
             except Exception as exc:
                 logger.warning("dir-whip: register_tool failed: %s", exc)
         # Spec 5.7 command (/dir-whip merged report, SCR-029) lives in
-        # config.py (D3).
-        config.register_dir_whip_commands(ctx)
+        # report.py (D3).
+        report.register_dir_whip_commands(ctx)
         # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
         try:
             skill_md = Path(state.session.skill_md_path)
@@ -186,7 +188,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         # from THIS session's profile (child sessions skip and inherit).
         config.set_session_profile(profile)
         config.refresh_resolution(ctx)
-        config.stats_set_session(
+        stats.set_session(
             profile=profile,
             session_id=session_id,
             is_subagent=False,

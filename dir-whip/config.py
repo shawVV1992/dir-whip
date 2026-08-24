@@ -31,9 +31,10 @@ except Exception:
     lazy_singleton = None
 
 try:
-    from . import state
+    from . import state, stats
 except ImportError:
     import state
+    import stats
 
 try:
     from .paths import (
@@ -49,34 +50,6 @@ except ImportError:
         _profile_home,
         relativize_target,
     )
-
-try:
-    from .stats import (
-        STATS_ROLLOVER_BYTES,
-        _stats_jsonl_path,
-        end_session,
-        record,
-        reset,
-        set_session,
-        snapshot,
-    )
-except ImportError:
-    from stats import (
-        STATS_ROLLOVER_BYTES,
-        _stats_jsonl_path,
-        end_session,
-        record,
-        reset,
-        set_session,
-        snapshot,
-    )
-
-# Re-export aliases (old names kept until task 31.9).
-stats_record = record
-stats_set_session = set_session
-stats_snapshot = snapshot
-stats_end_session = end_session
-stats_reset = reset
 
 _cache_lock = threading.Lock()
 _cached_result = None
@@ -529,26 +502,6 @@ def reset_cache():
     state.session.session_root = None
     state.session.session_root_initialized = False
     state.session.session_profile = None
-    stats_reset()
-
-
-# Re-export aliases for the report command surface (test compatibility;
-# transitional until task 31.9 removes all re-exports). Placed at the END
-# of the module: report.py imports config at module level, so a top-level
-# import here would cycle — by the time this line runs, every name report
-# needs from config is already defined (config always loads before report
-# via __init__.py's import order).
-try:
-    from .report import (
-        _dir_whip_cmd,
-        _plugin_version,
-        register_dir_whip_commands,
-    )
-except ImportError:
-    from report import (
-        _dir_whip_cmd,
-        _plugin_version,
-        register_dir_whip_commands,
-    )
+    stats.reset()
 
 
