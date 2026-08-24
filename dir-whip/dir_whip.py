@@ -59,6 +59,11 @@ except ImportError:
     )
 
 try:
+    from .events import _bus_emit, _verdict_reason, emit
+except ImportError:
+    from events import _bus_emit, _verdict_reason, emit
+
+try:
     from .report import register_dir_whip_commands
 except ImportError:
     from report import register_dir_whip_commands
@@ -326,16 +331,14 @@ def guard(tool_name, args, task_id=None, **kwargs):
         normalized = normalize_target(abs_target, working_dir_root)
         verdict = classify_target(normalized, working_dir_root, exempt_paths, is_subagent)
         if verdict["outcome"] == "block":
-            _emit_verdict(
+            emit(
                 "block", tool_name, verdict["rule_key"], normalized,
-                reason="write blocked by guard rule", working_dir_root=working_dir_root,
-                is_subagent=is_subagent, session_id=session_id,
+                "write blocked by guard rule", session_id, is_subagent,
             )
             return {"action": "block", "message": verdict["message"]}
-        _emit_verdict(
+        emit(
             verdict["outcome"], tool_name, verdict["rule_key"], normalized,
-            reason=_verdict_reason(verdict["outcome"]), working_dir_root=working_dir_root,
-            is_subagent=is_subagent, session_id=session_id,
+            _verdict_reason(verdict["outcome"]), session_id, is_subagent,
         )
     return None
 
@@ -343,65 +346,6 @@ def guard(tool_name, args, task_id=None, **kwargs):
 def _get_ctx():
     """Return the registered ctx (tests set state.session.registered_ctx)."""
     return state.session.registered_ctx
-
-
-def _verdict_reason(outcome):
-    """Short reason string for a verdict event (5.13)."""
-    if outcome == "external-write":
-        return "target outside working_dir_root"
-    return None
-
-
-# ---------------------------------------------------------------- Structured verdict events (spec 5.13, logging part)
-
-def _emit_verdict(outcome, tool, rule_key, target, reason, working_dir_root,
-                  is_subagent=False, session_id=None, bus_event=True):
-    """Emit ONE single-line structured verdict event (5.13 logging part).
-
-    Levels: block / fail-open -> WARNING; external-write -> INFO; other
-    allows -> DEBUG. Also records the verdict via config stats (counters +
-    stats.jsonl append). Verdict-derived bus events (blocked /
-    external-write, 5.14) are emitted unless bus_event=False (callers that
-    handle their own events, e.g. approval). Never raises (fail-open, 5.8).
-    """
-    try:
-        stats_record(
-            outcome, tool, rule_key, target=target, reason=reason,
-            is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
-        )
-        rel_target = relativize_target(target, working_dir_root)
-        event = {
-            "outcome": outcome,
-            "reason": reason,
-            "tool": tool,
-            "target": rel_target,
-            "rule_key": rule_key,
-            "is_subagent": bool(is_subagent),
-            "session_id": session_id,
-            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        }
-        line = json.dumps(event)
-        if outcome in ("block", "fail-open"):
-            logger.warning("dir-whip: verdict %s", line)
-        elif outcome == "external-write":
-            logger.info("dir-whip: verdict %s", line)
-        else:
-            logger.debug("dir-whip: verdict %s", line)
-        # 5.14: verdict-derived bus events (privacy-shaped relative target).
-        if bus_event and outcome == "block":
-            _bus_emit("blocked", {
-                "outcome": outcome,
-                "rule_key": rule_key,
-                "target": rel_target,
-            })
-        elif bus_event and outcome == "external-write":
-            _bus_emit("external-write", {
-                "outcome": outcome,
-                "rule_key": rule_key,
-                "target": rel_target,
-            })
-    except Exception as exc:
-        logger.debug("dir-whip: verdict emission failed (fail-open): %s", exc)
 
 
 # ---------------------------------------------------------------- Fail-open warning (spec 5.12)
@@ -420,10 +364,9 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
                 ctx.inject_message(FAIL_OPEN_WARNING_MESSAGE)
         except Exception:
             pass
-    _emit_verdict(
+    emit(
         "fail-open", tool_name, "fail-open", None,
-        reason="working_dir_root unresolved", working_dir_root=None,
-        is_subagent=is_subagent, session_id=session_id,
+        "working_dir_root unresolved", session_id, is_subagent,
     )
 
 
@@ -431,38 +374,6 @@ def _reset_fail_open_flag():
     """Reset the one-time fail-open warning flag (26.7's on_session_start
     calls this; tests use it too)."""
     state.session.fail_open_warned = False
-
-
-# ---------------------------------------------------------------- Event bus (spec 5.14)
-
-def _bus_emit(event_name, payload):
-    """Emit a bare-name dir-whip event (5.14); silent degradation.
-
-    Bus absent (capability flag off, no ctx, or ctx.emit missing) or emit
-    raising -> exactly ONE DEBUG log line per emission attempt, no error.
-    The host forces the ``dir-whip:`` namespace, so only the bare
-    name is passed (a namespaced name raises ValueError, fail-closed).
-    """
-    try:
-        if not state.session.emit_enabled:
-            logger.debug(
-                "dir-whip: event bus unavailable, skipping emit(%s)",
-                event_name,
-            )
-            return
-        ctx = _get_ctx()
-        if not ctx or not callable(getattr(ctx, "emit", None)):
-            logger.debug(
-                "dir-whip: event bus unavailable, skipping emit(%s)",
-                event_name,
-            )
-            return
-        ctx.emit(event_name, payload or {})
-    except Exception as exc:
-        logger.debug(
-            "dir-whip: event emit failed for %s (fail-open): %s",
-            event_name, exc,
-        )
 
 
 # ---------------------------------------------------------------- Observation hooks (spec 5.4/5.13/5.15/5.16)
@@ -564,12 +475,10 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
             _audit_post_check(
                 session_id, task_id, is_subagent=_is_child_session(session_id),
             )
-        _emit_verdict(
+        emit(
             "allow", tool_name, "landed:" + str(tool_name), target,
-            reason="write tool call completed (status: %s)" % (status or "ok"),
-            working_dir_root=working_dir_root,
-            is_subagent=_is_child_session(session_id),
-            session_id=session_id,
+            "write tool call completed (status: %s)" % (status or "ok"),
+            session_id, _is_child_session(session_id),
         )
     except Exception as exc:
         logger.debug("dir-whip: post_tool_call hook error: %s", exc)
@@ -592,11 +501,10 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
     try:
         granted = _approval_granted(choice)
         rule_key = "approval:granted" if granted else "approval:denied"
-        _emit_verdict(
+        emit(
             "allow" if granted else "block", "approval", rule_key, None,
-            reason="host approval %s" % ("granted" if granted else "denied"),
-            working_dir_root=None, session_id=kwargs.get("session_id"),
-            bus_event=False,  # approval events are emitted below
+            "host approval %s" % ("granted" if granted else "denied"),
+            kwargs.get("session_id"), False,
         )
         _bus_emit("approval-resolved", {
             "outcome": "granted" if granted else "denied",
@@ -628,9 +536,9 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
             detail["session_key"] = session_key
         if platform is not None:
             detail["platform"] = platform
-        _emit_verdict(
+        emit(
             "allow", "command", "pre-command:" + str(command or ""), None,
-            reason=json.dumps(detail), working_dir_root=working_dir_root,
+            json.dumps(detail), None, False,
         )
     except Exception as exc:
         logger.debug("dir-whip: pre_command hook error: %s", exc)
@@ -668,10 +576,9 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
             if value is not None:
                 detail[key] = value
         working_dir_root, _ = _resolved_config()
-        _emit_verdict(
+        emit(
             "allow", "subagent", "subagent-start", None,
-            reason=json.dumps(detail), working_dir_root=working_dir_root,
-            is_subagent=True,
+            json.dumps(detail), None, True,
         )
     except Exception as exc:
         logger.debug("dir-whip: subagent_start hook error: %s", exc)
@@ -702,10 +609,9 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         if duration_ms is not None:
             detail["duration_ms"] = duration_ms
         working_dir_root, _ = _resolved_config()
-        _emit_verdict(
+        emit(
             "allow", "subagent", "subagent-stop", None,
-            reason=json.dumps(detail), working_dir_root=working_dir_root,
-            is_subagent=True,
+            json.dumps(detail), None, True,
         )
     except Exception as exc:
         logger.debug("dir-whip: subagent_stop hook error: %s", exc)
@@ -917,11 +823,9 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
 
         # 4.4 heredoc blanket demotion: never parse the body, never block.
         if "<<" in command:
-            _emit_verdict(
+            emit(
                 "allow", "terminal", "terminal-write-uncertain", None,
-                reason="heredoc detected, blanket demotion",
-                working_dir_root=working_dir_root,
-                is_subagent=is_subagent, session_id=session_id,
+                "heredoc detected, blanket demotion", session_id, is_subagent,
             )
             return None
 
@@ -934,26 +838,20 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
             normalized = normalize_target(abs_target, working_dir_root)
             verdict = classify_target(normalized, working_dir_root, exempt_paths, is_subagent)
             if verdict["outcome"] == "block":
-                _emit_verdict(
+                emit(
                     "block", "terminal", rule_key, normalized,
-                    reason="terminal write target blocked",
-                    working_dir_root=working_dir_root,
-                    is_subagent=is_subagent, session_id=session_id,
+                    "terminal write target blocked", session_id, is_subagent,
                 )
                 return {"action": "block", "message": verdict["message"]}
-            _emit_verdict(
+            emit(
                 verdict["outcome"], "terminal", rule_key, normalized,
-                reason=_verdict_reason(verdict["outcome"]),
-                working_dir_root=working_dir_root,
-                is_subagent=is_subagent, session_id=session_id,
+                _verdict_reason(verdict["outcome"]), session_id, is_subagent,
             )
 
         if _terminal_uncertain(tokens):
-            _emit_verdict(
+            emit(
                 "allow", "terminal", "terminal-write-uncertain", None,
-                reason="write intent detected, target uncertain",
-                working_dir_root=working_dir_root,
-                is_subagent=is_subagent, session_id=session_id,
+                "write intent detected, target uncertain", session_id, is_subagent,
             )
             return None
         return None
@@ -1326,11 +1224,10 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
     then returns the block dict for the pre-tool channel.
     """
     rel_paths = [relativize_target(path, working_dir_root) for path in unresolved]
-    _emit_verdict(
+    emit(
         "block", tool_name, "write-audit-gate-block", None,
-        reason="%d unresolved root write audit violation(s)" % len(unresolved),
-        working_dir_root=working_dir_root,
-        is_subagent=is_subagent, session_id=session_id, bus_event=False,
+        "%d unresolved root write audit violation(s)" % len(unresolved),
+        session_id, is_subagent,
     )
     _bus_emit("write-audit-gate-block", {
         "outcome": "block",
@@ -1405,12 +1302,9 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
         )
         for path in classified["violations"]:
             audit_pending_add(session_id, path)
-            _emit_verdict(
+            emit(
                 "block", "audit", "write-audit-violation", path,
-                reason="root write audit violation (5.18)",
-                working_dir_root=working_dir_root,
-                is_subagent=is_subagent, session_id=session_id,
-                bus_event=False,
+                "root write audit violation (5.18)", session_id, is_subagent,
             )
             _bus_emit("write-audit-violation", {
                 "outcome": "block",
