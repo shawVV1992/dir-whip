@@ -3,12 +3,12 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.3.1](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.4.0](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
 dir-whip provides three-layer Working Directory (Initial Project Directory)
-file discipline for [Hermes-agent](https://github.com/NousResearch/hermes-agent): the skill teaches rules, the plugin blocks violations with 8 hooks,and the audit layer catches what slips through. 
+file discipline for [Hermes-agent](https://github.com/NousResearch/hermes-agent): the skill teaches rules, the plugin blocks violations with 8 hooks, and the audit layer catches what slips through. 
 
 **Note:** dir-whip only applies to the Working Directory (Initial Project
 Directory). Writes outside the Working Directory and newly created project

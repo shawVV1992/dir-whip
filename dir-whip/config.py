@@ -451,7 +451,8 @@ def dir_whip_allow_path(args, **kwargs):
     Accepts either the tool-handler contract (args dict + extra kwargs such
     as task_id, per Hermes registry dispatch) or a bare path string (direct
     helper/test callers). Returns a confirmation string. This is the
-    plugin's ONLY tool. Wiring into ctx.register_tool happens in dir_whip.py.
+    plugin's ONLY tool. Wiring into ctx.register_tool happens in __init__.py
+    (register).
     """
     path = args.get("path") if isinstance(args, dict) else args
     return runtime_allowlist_add(path)
@@ -536,7 +537,7 @@ def reset_cache():
 # of the module: report.py imports config at module level, so a top-level
 # import here would cycle — by the time this line runs, every name report
 # needs from config is already defined (config always loads before report
-# via dir_whip.py's import order).
+# via __init__.py's import order).
 try:
     from .report import (
         _dir_whip_cmd,

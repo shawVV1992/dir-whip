@@ -14,9 +14,9 @@ Directory with the v0.2.0 layered chain (spec 4.4):
     3. profile enumeration + TERMINAL_CWD candidate roots, path matching
     4. fail-open: None + exactly ONE concise stderr WARNING
 
-Self-contained: stdlib only, no PyYAML (absent from the venv) -- config
-parsing is minimal line-based, mirroring the plugin fallback parser
-(dir-whip/config.py _parse_terminal_cwd_fallback).
+Self-contained: stdlib only, no PyYAML dependency -- config parsing is
+minimal line-based, mirroring the plugin's PyYAML-based parser
+(dir-whip/config.py parse_terminal_cwd).
 
 Functions:
     hermes_home()            -- Hermes home (HERMES_HOME override first;
@@ -96,7 +96,7 @@ def normalize_path(path):
     inherit the CWD drive; forward slashes + casefold (case-insensitive
     filesystem). POSIX branch: normpath identity (forward slashes).
 
-    MSYS mapping caveat (current semantics, consistent with dir_whip.py's
+    MSYS mapping caveat (current semantics, consistent with paths.py's
     SCR-006 legacy regex): /<letter>... and //<letter>... map to a drive
     letter, so forward-slash forms are NOT reliably UNC-safe -- a
     single-letter "server" such as //s/share is misread as drive S:
@@ -123,7 +123,7 @@ def normalize_path(path):
 def parse_terminal_cwd(config_path):
     """Parse terminal.cwd from a Hermes config.yaml (minimal parser).
 
-    Mirrors dir-whip/config.py _parse_terminal_cwd_fallback: the
+    Mirrors dir-whip/config.py parse_terminal_cwd (PyYAML-based): the
     `terminal:` block starts at column 0, `cwd:` is read inside it,
     quoted values are stripped; empty/placeholder value -> None;
     missing/unreadable file -> None.
