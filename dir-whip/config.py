@@ -31,6 +31,11 @@ except Exception:
     lazy_singleton = None
 
 try:
+    from . import state
+except ImportError:
+    import state
+
+try:
     from .paths import (
         _get_hermes_home,
         _paths_equal,
@@ -44,11 +49,6 @@ except ImportError:
         _profile_home,
         relativize_target,
     )
-
-try:
-    from . import stats as _stats
-except ImportError:
-    import stats as _stats
 
 try:
     from .stats import (
@@ -85,23 +85,13 @@ _cache_initialized = False
 _runtime_allowlist = set()
 _runtime_allowlist_lock = threading.Lock()
 
-# Register-time resolution context (spec 5.5: resolved ONCE at register()).
-_register_ctx = None
-_register_config_path = None
-
 # SCR-027 session-scoped resolution: a desktop process registers under the
 # ACTIVE profile but later sessions can be a DIFFERENT profile, so the
 # working_dir_root is re-resolved per top-level session at on_session_start
-# (single-threaded session loop assumption, same as stats). _session_root
-# starts as the register-time value and is REPLACED by refresh_resolution
-# (including None on fail-open — a stale value is never kept).
-_session_root = None
-_session_root_initialized = False
-
-# The session's profile (set at on_session_start); stats.jsonl is written
-# into that profile's home so a default-profile session never lands in the
-# active profile's home (SCR-027).
-_session_profile = None
+# (single-threaded session loop assumption, same as stats). The session
+# root starts as the register-time value and is REPLACED by
+# refresh_resolution (including None on fail-open — a stale value is never
+# kept). All of this lives in state.session (see state.py).
 
 
 def _get_plugin_dir():
@@ -309,19 +299,18 @@ def refresh_resolution(ctx):
     Called at every top-level on_session_start: the same 3-step chain runs
     against the session's ctx.profile_name, so a desktop multi-profile
     process never keeps the register-time (other-profile) root. On success
-    _session_root = <root> (same INFO source log as the chain); on
-    fail-open _session_root = None + WARNING — a stale value from a
-    previous session is NEVER kept. Returns _session_root.
+    state.session.session_root = <root> (same INFO source log as the
+    chain); on fail-open session_root = None + WARNING — a stale value
+    from a previous session is NEVER kept. Returns the session root.
     """
-    global _session_root, _session_root_initialized
-    _session_root = resolve_working_dir_root(ctx)
-    _session_root_initialized = True
-    return _session_root
+    state.session.session_root = resolve_working_dir_root(ctx)
+    state.session.session_root_initialized = True
+    return state.session.session_root
 
 
 def get_session_root():
     """The session-scoped working_dir_root (None = guard disabled)."""
-    return _session_root
+    return state.session.session_root
 
 
 def _effective_root(ctx):
@@ -331,9 +320,9 @@ def _effective_root(ctx):
     first on_start the register-time resolution is the initial value, so a
     lazy refresh here keeps them correct in tests and pre-session contexts.
     """
-    if not _session_root_initialized:
+    if not state.session.session_root_initialized:
         refresh_resolution(ctx)
-    return _session_root
+    return state.session.session_root
 
 
 def _profile_config_path(hermes_home, profile):
@@ -377,9 +366,7 @@ def set_session_profile(profile):
     stats.jsonl for the session is written into THIS profile's home (via
     _profile_home), not the register-time active profile's.
     """
-    global _session_profile
-    _session_profile = profile
-    _stats._session_profile = profile
+    state.session.session_profile = profile
 
 
 def is_inside_session_dir(path, working_dir_root):
@@ -491,7 +478,9 @@ def _resolve_config(ctx, config_path=None):
 
 def _resolve_registered_config():
     """Zero-arg factory for lazy_singleton (register-time resolution)."""
-    return _resolve_config(_register_ctx, _register_config_path)
+    return _resolve_config(
+        state.session.registered_ctx, state.session.register_config_path
+    )
 
 
 if lazy_singleton is not None:
@@ -505,20 +494,19 @@ def get_cached_config(ctx, config_path=None):
 
     Returns (working_dir_root, exempt_paths) tuple. working_dir_root may
     be None (guard disabled). The root slot is SESSION-SCOPED (SCR-027):
-    the first resolution (register-time) seeds _session_root, and every
+    the first resolution (register-time) seeds the session root, and every
     top-level on_session_start refreshes it via refresh_resolution(ctx);
     consumers therefore read the session root, never a stale
     register-time value. Backed by plugins.plugin_utils.lazy_singleton
     when the Hermes runtime provides it (spec 5.8), otherwise a local
     lock-guarded cache. reset_cache() clears either.
     """
-    global _cached_result, _cache_initialized, _register_ctx, _register_config_path
-    global _session_root, _session_root_initialized
+    global _cached_result, _cache_initialized
     if _registered_config_accessor is not None:
-        if _register_ctx is None:
+        if state.session.registered_ctx is None:
             # First caller is register(); capture its ctx for the factory.
-            _register_ctx = ctx
-            _register_config_path = config_path
+            state.session.registered_ctx = ctx
+            state.session.register_config_path = config_path
         result = _registered_config_accessor()
     else:
         if not _cache_initialized:
@@ -527,17 +515,16 @@ def get_cached_config(ctx, config_path=None):
                     _cached_result = _resolve_config(ctx, config_path)
                     _cache_initialized = True
         result = _cached_result
-    if not _session_root_initialized:
+    if not state.session.session_root_initialized:
         # Initial value of the session root = the register-time resolution.
-        _session_root = result[0]
-        _session_root_initialized = True
+        state.session.session_root = result[0]
+        state.session.session_root_initialized = True
     return (get_session_root(), result[1])
 
 
 def reset_cache():
     """Reset config cache, stats and runtime allowlist (register/re-register)."""
-    global _cached_result, _cache_initialized, _session_root, _session_root_initialized
-    global _session_profile
+    global _cached_result, _cache_initialized
     with _cache_lock:
         _cached_result = None
         _cache_initialized = False
@@ -547,10 +534,9 @@ def reset_cache():
         _runtime_allowlist.clear()
     # Session-scoped state: re-seeded at register (get_cached_config) and at
     # the next top-level on_session_start.
-    _session_root = None
-    _session_root_initialized = False
-    _session_profile = None
-    _stats._session_profile = None
+    state.session.session_root = None
+    state.session.session_root_initialized = False
+    state.session.session_profile = None
     stats_reset()
 
 

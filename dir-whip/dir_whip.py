@@ -14,8 +14,12 @@ import logging
 import ntpath
 import os
 import re
-import threading
 from pathlib import Path
+
+try:
+    from . import state
+except ImportError:
+    import state
 
 try:
     from .config import (
@@ -92,11 +96,15 @@ except ImportError:
 # get_session_cwd is a Hermes runtime API (tools/terminal_tool.py) absent
 # from the test venv. Guarded module-level import so dir_whip.py never crashes
 # when unavailable; callers fall back to working_dir_root. Tests inject a
-# fake via _session_cwd_fn.
+# fake via state.session.session_cwd_fn.
 try:
     from hermes_cli.tools.terminal_tool import get_session_cwd
 except Exception:
     get_session_cwd = None
+
+# Host API injection slot (ADR-0007): filled at module load from the guarded
+# import; tests inject a fake via state.session.session_cwd_fn.
+state.session.session_cwd_fn = get_session_cwd
 
 logger = logging.getLogger("dir-whip")
 
@@ -134,25 +142,15 @@ ALLOW_PATH_TOOL_SCHEMA = {
     },
 }
 
-# Context stored at register() time.
-_registered_ctx = None
-
-# Spec 5.12: one-time fail-open warning per session (reset by
-# _reset_fail_open_flag; on_session_start wiring is task 26.7).
-_fail_open_warned = False
-
-# Session-CWD accessor for relative-target resolution (spec 5.3 step 4).
-# Tests inject a fake; degrades to working_dir_root when unavailable.
-_session_cwd_fn = get_session_cwd
-
-# Spec 5.4: child sessions (subagent_start -> subagent_stop) are tracked so
-# on_session_start skips the top-level actions for them. Lock-guarded set.
-_child_session_ids = set()
-_child_session_ids_lock = threading.Lock()
-
-# Spec 5.14: event-bus capability flag, detected at register() (hasattr
-# ctx.emit). Bus absent -> no emit, no error, one DEBUG line per attempt.
-_emit_enabled = False
+# Spec 5.12 (term-updated): injected once per session when the guard is
+# disabled because working_dir_root could not be resolved.
+FAIL_OPEN_WARNING_MESSAGE = (
+    "[dir-whip] WARNING: The guard is DISABLED because the Working "
+    "Directory\n"
+    "could not be resolved. File writes are NOT being enforced.\n"
+    "Check dir-whip-config.yaml (working_dir_root) or your profile's config.yaml\n"
+    "(terminal.cwd) and restart the session."
+)
 
 # Spec 5.4: session-start discipline reminder (top-level sessions only).
 REMINDER_MESSAGE = (
@@ -191,26 +189,8 @@ DISCIPLINE_PROMPT = (
 # Root write audit state (spec 5.18). Detection backbone + the
 # handling ladder: L1 fire-once notice (transform_tool_result), L2
 # verdict/bus events, L3 pending-violation latch gate in guard().
+# (State lives in state.audit; see state.py.)
 # ================================================================
-
-# One in-flight pre snapshot per (session_id, task_id) terminal call; the
-# post re-scan pops it and diffs. Commands blocked at pre store nothing,
-# so their post finds no pairing and skips (5.18 mechanism).
-_audit_pre_snapshots = {}
-_audit_pre_snapshots_lock = threading.Lock()
-
-# Session-scoped pending violations: {abs_path: {"first_seen": iso,
-# "announced": bool}} per owner session (5.18 latch). Child sessions
-# resolve into the parent's set via _audit_session_parents / the most
-# recent top-level session, matching the 5.4 child_session_ids gate.
-_audit_pending = {}
-_audit_pending_lock = threading.Lock()
-_audit_session_parents = {}
-_audit_top_session = None
-
-# One-time entry-cap WARNING per top-level session (reset at session
-# start, mirroring the fail-open warning flag).
-_audit_cap_warned = False
 
 
 def register(ctx):
@@ -224,13 +204,12 @@ def register(ctx):
     registration error logs a warning; the plugin is disabled but Hermes
     continues normally.
     """
-    global _registered_ctx, _emit_enabled
     try:
-        _registered_ctx = ctx
+        state.session.registered_ctx = ctx
         try:
-            _emit_enabled = bool(getattr(ctx, "emit", None))
+            state.session.emit_enabled = bool(getattr(ctx, "emit", None))
         except Exception:
-            _emit_enabled = False
+            state.session.emit_enabled = False
         reset_cache()
         get_cached_config(ctx)
         ctx.register_hook("pre_tool_call", _guard_hook)
@@ -362,8 +341,8 @@ def guard(tool_name, args, task_id=None, **kwargs):
 
 
 def _get_ctx():
-    """Return the registered ctx (tests set dir_whip._registered_ctx)."""
-    return _registered_ctx
+    """Return the registered ctx (tests set state.session.registered_ctx)."""
+    return state.session.registered_ctx
 
 
 def _verdict_reason(outcome):
@@ -434,9 +413,8 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
     _reset_fail_open_flag). Gateway degrade: inject_message unavailable or
     falsy -> the WARNING log line is the delivery. Never raises.
     """
-    global _fail_open_warned
-    if not _fail_open_warned:
-        _fail_open_warned = True
+    if not state.session.fail_open_warned:
+        state.session.fail_open_warned = True
         try:
             if ctx and hasattr(ctx, "inject_message"):
                 ctx.inject_message(FAIL_OPEN_WARNING_MESSAGE)
@@ -452,8 +430,7 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
 def _reset_fail_open_flag():
     """Reset the one-time fail-open warning flag (26.7's on_session_start
     calls this; tests use it too)."""
-    global _fail_open_warned
-    _fail_open_warned = False
+    state.session.fail_open_warned = False
 
 
 # ---------------------------------------------------------------- Event bus (spec 5.14)
@@ -467,7 +444,7 @@ def _bus_emit(event_name, payload):
     name is passed (a namespaced name raises ValueError, fail-closed).
     """
     try:
-        if not _emit_enabled:
+        if not state.session.emit_enabled:
             logger.debug(
                 "dir-whip: event bus unavailable, skipping emit(%s)",
                 event_name,
@@ -492,8 +469,8 @@ def _bus_emit(event_name, payload):
 
 def _is_child_session(session_id):
     """True when session_id is a live child (subagent) session (5.4)."""
-    with _child_session_ids_lock:
-        return session_id in _child_session_ids
+    with state.session.lock:
+        return session_id in state.session.child_session_ids
 
 
 def _resolved_config():
@@ -671,8 +648,8 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
     """
     try:
         if child_session_id:
-            with _child_session_ids_lock:
-                _child_session_ids.add(child_session_id)
+            with state.session.lock:
+                state.session.child_session_ids.add(child_session_id)
             # 5.18: record the parent link so the child's audit detections
             # resolve into the parent's pending-violation set.
             _audit_register_child(child_session_id, parent_session_id)
@@ -710,8 +687,8 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
     """
     try:
         if child_session_id:
-            with _child_session_ids_lock:
-                _child_session_ids.discard(child_session_id)
+            with state.session.lock:
+                state.session.child_session_ids.discard(child_session_id)
             _audit_unregister_child(child_session_id)
         # Close the child stats context: flip is_subagent back to False but
         # PRESERVE the parent session fields (profile/session_id/started_at).
@@ -759,10 +736,10 @@ def _extract_target_paths(tool_name, args):
 
 def _session_cwd(task_id):
     """Session CWD for relative-target resolution (guarded; None when
-    unavailable). Tests inject a fake via dir_whip._session_cwd_fn."""
-    if callable(_session_cwd_fn):
+    unavailable). Tests inject a fake via state.session.session_cwd_fn."""
+    if callable(state.session.session_cwd_fn):
         try:
-            return _session_cwd_fn(task_id)
+            return state.session.session_cwd_fn(task_id)
         except Exception as exc:
             logger.debug(
                 "dir-whip: get_session_cwd(%r) failed: %s", task_id, exc
@@ -1092,8 +1069,8 @@ def _audit_owner_session(session_id):
     the session id itself.
     """
     if session_id and _is_child_session(session_id):
-        with _audit_pending_lock:
-            return _audit_session_parents.get(session_id) or _audit_top_session
+        with state.audit.lock:
+            return state.audit.session_parents.get(session_id) or state.audit.top_session
     return session_id
 
 
@@ -1107,10 +1084,10 @@ def audit_pending_snapshot(session_id=None):
     resolve into the parent's set.
     """
     owner = _audit_owner_session(session_id) or session_id
-    with _audit_pending_lock:
+    with state.audit.lock:
         return {
             path: dict(entry)
-            for path, entry in _audit_pending.get(owner, {}).items()
+            for path, entry in state.audit.pending.get(owner, {}).items()
         }
 
 
@@ -1122,8 +1099,8 @@ def audit_pending_add(session_id, path, first_seen=None):
     """
     owner = _audit_owner_session(session_id) or session_id
     key = _audit_norm_path(path)
-    with _audit_pending_lock:
-        bucket = _audit_pending.setdefault(owner, {})
+    with state.audit.lock:
+        bucket = state.audit.pending.setdefault(owner, {})
         if key in bucket:
             return
         bucket[key] = {
@@ -1134,16 +1111,16 @@ def audit_pending_add(session_id, path, first_seen=None):
 
 def audit_pending_clear(session_id):
     """Clear a session's pending violations (top-level session start)."""
-    with _audit_pending_lock:
-        _audit_pending.pop(session_id, None)
+    with state.audit.lock:
+        state.audit.pending.pop(session_id, None)
 
 
 def audit_mark_announced(session_id, path):
     """Flip the fire-once announced flag (L1 notice lane calls this)."""
     owner = _audit_owner_session(session_id) or session_id
     key = _audit_norm_path(path)
-    with _audit_pending_lock:
-        entry = _audit_pending.get(owner, {}).get(key)
+    with state.audit.lock:
+        entry = state.audit.pending.get(owner, {}).get(key)
         if entry:
             entry["announced"] = True
 
@@ -1187,9 +1164,9 @@ def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None)
 def _audit_register_child(child_session_id, parent_session_id):
     """Record a child session's parent link (pending-set inheritance)."""
     try:
-        with _audit_pending_lock:
-            _audit_session_parents[child_session_id] = (
-                parent_session_id or _audit_top_session
+        with state.audit.lock:
+            state.audit.session_parents[child_session_id] = (
+                parent_session_id or state.audit.top_session
             )
     except Exception as exc:
         logger.debug("dir-whip: audit register child error: %s", exc)
@@ -1198,8 +1175,8 @@ def _audit_register_child(child_session_id, parent_session_id):
 def _audit_unregister_child(child_session_id):
     """Drop a child session's parent link when the subagent stops."""
     try:
-        with _audit_pending_lock:
-            _audit_session_parents.pop(child_session_id, None)
+        with state.audit.lock:
+            state.audit.session_parents.pop(child_session_id, None)
     except Exception as exc:
         logger.debug("dir-whip: audit unregister child error: %s", exc)
 
@@ -1210,13 +1187,12 @@ def _audit_session_start(session_id):
     the current top-level session (child-inheritance fallback)."""
     try:
         audit_pending_clear(session_id)
-        with _audit_pre_snapshots_lock:
-            stale = [k for k in _audit_pre_snapshots if k[0] == session_id]
+        with state.audit.lock:
+            stale = [k for k in state.audit.pre_snapshots if k[0] == session_id]
             for k in stale:
-                _audit_pre_snapshots.pop(k, None)
-        global _audit_cap_warned, _audit_top_session
-        _audit_cap_warned = False
-        _audit_top_session = session_id
+                state.audit.pre_snapshots.pop(k, None)
+        state.audit.cap_warned = False
+        state.audit.top_session = session_id
     except Exception as exc:
         logger.debug("dir-whip: audit session start error: %s", exc)
 
@@ -1385,16 +1361,15 @@ def _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths):
             return
         cap = write_audit_entry_cap()
         if len(snap) > cap:
-            global _audit_cap_warned
-            if not _audit_cap_warned:
-                _audit_cap_warned = True
+            if not state.audit.cap_warned:
+                state.audit.cap_warned = True
                 logger.warning(
                     "dir-whip: write audit skipped: root entry count %d "
                     "exceeds write_audit_entry_cap %d", len(snap), cap,
                 )
             return
-        with _audit_pre_snapshots_lock:
-            _audit_pre_snapshots[(session_id, task_id)] = (
+        with state.audit.lock:
+            state.audit.pre_snapshots[(session_id, task_id)] = (
                 snap, working_dir_root, tuple(exempt_paths),
             )
     except Exception as exc:
@@ -1414,8 +1389,8 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
     raises.
     """
     try:
-        with _audit_pre_snapshots_lock:
-            record = _audit_pre_snapshots.pop((session_id, task_id), None)
+        with state.audit.lock:
+            record = state.audit.pre_snapshots.pop((session_id, task_id), None)
         if record is None:
             return
         before, working_dir_root, exempt_paths = record

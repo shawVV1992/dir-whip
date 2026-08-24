@@ -4,8 +4,8 @@ state module.
 In-memory counters (outcome x tool x rule_key x is_subagent), session
 context fields, and one-JSON-line-per-event persistence with 5MB rollover.
 No host imports (SCR-035 core module discipline, ADR-0007); the stats
-globals live at module level until task 31.9 moves them into the state
-containers. Extracted in task 31.7 (previously part of the config module).
+state lives in state.stats (task 31.9). Extracted in task 31.7 (previously
+part of the config module).
 """
 
 import copy
@@ -13,7 +13,11 @@ import datetime
 import json
 import logging
 import os
-import threading
+
+try:
+    from . import state
+except ImportError:
+    import state
 
 try:
     from .paths import _get_hermes_home, _profile_home, relativize_target
@@ -26,20 +30,6 @@ STATS_ROLLOVER_BYTES = 5 * 1024 * 1024
 STATS_JSONL_NAME = "stats.jsonl"
 STATS_ARCHIVE_NAME = "stats.jsonl.1"
 
-_stats_lock = threading.Lock()
-# outcome x tool x rule_key x is_subagent -> count
-_stats_counters = {}
-_stats_session = {
-    "profile": None,
-    "session_id": None,
-    "is_subagent": False,
-    "started_at": None,
-}
-
-# The session's profile (set at on_session_start via config.set_session_profile);
-# stats.jsonl is written into that profile's home (SCR-027).
-_session_profile = None
-
 
 def stats_reset():
     """Clear in-memory stats (counters + session context).
@@ -47,17 +37,17 @@ def stats_reset():
     Called at register/re-register so no counters or session fields leak
     into the next session (5.13 D2).
     """
-    with _stats_lock:
-        _stats_counters.clear()
+    with state.stats.lock:
+        state.stats.counters.clear()
         _reset_stats_session_locked()
 
 
 def _reset_stats_session_locked():
-    """Reset the stats session fields; callers must hold _stats_lock."""
-    _stats_session["profile"] = None
-    _stats_session["session_id"] = None
-    _stats_session["is_subagent"] = False
-    _stats_session["started_at"] = None
+    """Reset the stats session fields; callers must hold state.stats.lock."""
+    state.stats.session["profile"] = None
+    state.stats.session["session_id"] = None
+    state.stats.session["is_subagent"] = False
+    state.stats.session["started_at"] = None
 
 
 def stats_end_session():
@@ -67,7 +57,7 @@ def stats_end_session():
     started_at) so a closed child session's context never leaks into
     later events; in-memory counters are untouched (5.13 D2/D3).
     """
-    with _stats_lock:
+    with state.stats.lock:
         _reset_stats_session_locked()
 
 
@@ -77,21 +67,21 @@ def stats_set_session(profile=None, session_id=None, is_subagent=None, started_a
     Only the provided fields are updated (None leaves a field unchanged);
     the full reset is stats_reset().
     """
-    with _stats_lock:
+    with state.stats.lock:
         if profile is not None:
-            _stats_session["profile"] = str(profile)
+            state.stats.session["profile"] = str(profile)
         if session_id is not None:
-            _stats_session["session_id"] = str(session_id)
+            state.stats.session["session_id"] = str(session_id)
         if is_subagent is not None:
-            _stats_session["is_subagent"] = bool(is_subagent)
+            state.stats.session["is_subagent"] = bool(is_subagent)
         if started_at is not None:
-            _stats_session["started_at"] = str(started_at)
+            state.stats.session["started_at"] = str(started_at)
 
 
 def stats_snapshot():
     """Return a deep copy of the counters (outcome x tool x rule_key x is_subagent)."""
-    with _stats_lock:
-        return copy.deepcopy(_stats_counters)
+    with state.stats.lock:
+        return copy.deepcopy(state.stats.counters)
 
 
 def _now_iso():
@@ -109,8 +99,8 @@ def _stats_jsonl_path():
     behavior).
     """
     home = _get_hermes_home()
-    if _session_profile:
-        home = _profile_home(home, _session_profile)
+    if state.session.session_profile:
+        home = _profile_home(home, state.session.session_profile)
     return home / "dir-whip" / STATS_JSONL_NAME
 
 
@@ -153,19 +143,19 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
     logging).
     """
     if is_subagent is None:
-        is_subagent = _stats_session.get("is_subagent", False)
+        is_subagent = state.stats.session.get("is_subagent", False)
     is_subagent = bool(is_subagent)
-    with _stats_lock:
-        by_outcome = _stats_counters.setdefault(outcome, {})
+    with state.stats.lock:
+        by_outcome = state.stats.counters.setdefault(outcome, {})
         by_tool = by_outcome.setdefault(tool, {})
         by_rule = by_tool.setdefault(rule_key, {})
         by_rule[is_subagent] = by_rule.get(is_subagent, 0) + 1
         try:
             _append_stats_event({
-                "profile": _stats_session.get("profile"),
-                "session_id": _stats_session.get("session_id"),
+                "profile": state.stats.session.get("profile"),
+                "session_id": state.stats.session.get("session_id"),
                 "is_subagent": is_subagent,
-                "started_at": _stats_session.get("started_at"),
+                "started_at": state.stats.session.get("started_at"),
                 "ts": _now_iso(),
                 "outcome": outcome,
                 "reason": reason,
