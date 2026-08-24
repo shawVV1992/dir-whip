@@ -72,11 +72,24 @@ Triggered by: any file write, create, save, delete, or move.
 
 ### 3. File placement decision (Outputs vs .tmp)
 
-| File type | Destination |
-|-----------|-------------|
-| User-requested deliverable (report, document, analysis result) | `Outputs/` |
-| Intermediate scripts, debug files, scratch work | `.tmp/` |
-| Unsure | `.tmp/` (default) |
+Classify BEFORE writing, by intent. First match wins:
+
+1. **User-requested deliverable** -- a file the user asked for and will take
+   away: report, document, analysis result, chart, export. -> `Outputs/`
+2. **Working artifact** -- anything needed only to produce the deliverable:
+   scripts, intermediate data, debug output, drafts still being iterated. -> `.tmp/`
+3. **Unsure?** -> `.tmp/` (default; promotion later is always possible, demotion pollutes the deliverable folder)
+
+Anchor: `.tmp/` is eligible for age-based cleanup (audit cron, default 30 days).
+If you would miss this file after a 30-day cleanup, it belongs in `Outputs/`.
+
+Extension hints (intent wins over extension):
+- Deliverable-like: `.md` report, `.pdf`, `.docx`, `.xlsx`, `.png`/`.svg` result
+- Scratch-like: `.log`, `.pyc`, debug dumps, temp copies, intermediate `.csv`/`.json`
+
+Subagent: no placement decision -- write to the parent-passed directory
+(default `.tmp/`; `Outputs/` only when the parent passes it). See the
+Subagent File Protocol below.
 
 ### 4. Confirmation Protocol
 
