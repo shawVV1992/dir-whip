@@ -19,7 +19,6 @@ from pathlib import Path
 
 try:
     from .config import (
-        _relativize_target,
         get_cached_config,
         is_exempt,
         is_inside_session_dir,
@@ -39,7 +38,6 @@ try:
     )
 except ImportError:
     from config import (
-        _relativize_target,
         get_cached_config,
         is_exempt,
         is_inside_session_dir,
@@ -56,6 +54,21 @@ except ImportError:
         write_audit_enabled,
         write_audit_entry_cap,
         dir_whip_allow_path,
+    )
+
+try:
+    from .paths import (
+        is_absolute_any,
+        normalize_target,
+        relativize_target,
+        within_working_dir,
+    )
+except ImportError:
+    from paths import (
+        is_absolute_any,
+        normalize_target,
+        relativize_target,
+        within_working_dir,
     )
 
 try:
@@ -86,11 +99,6 @@ logger = logging.getLogger("dir-whip")
 
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
-
-# MSYS-style forward-slash drive forms (SCR-006, task 9.9).
-# Matches /c/..., //c/... (single drive letter) but NOT UNC \\server\share.
-_MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
-_CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 
 # Spec 5.12 (term-updated): injected once per session when the guard is
 # disabled because working_dir_root could not be resolved.
@@ -379,7 +387,7 @@ def _emit_verdict(outcome, tool, rule_key, target, reason, working_dir_root,
             outcome, tool, rule_key, target=target, reason=reason,
             is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
         )
-        rel_target = _relativize_target(target, working_dir_root)
+        rel_target = relativize_target(target, working_dir_root)
         event = {
             "outcome": outcome,
             "reason": reason,
@@ -503,7 +511,7 @@ def _allow_path_handler(args, **kwargs):
             _bus_emit("allowlisted", {
                 "outcome": "allowlisted",
                 "rule_key": "runtime-allowlist",
-                "target": _relativize_target(path, working_dir_root),
+                "target": relativize_target(path, working_dir_root),
             })
         return result
     except Exception as exc:
@@ -759,25 +767,6 @@ def _session_cwd(task_id):
     return None
 
 
-_DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
-
-
-def _is_absolute_any(target):
-    """Rooted on the local OS, Windows-drive-rooted, or backslash-rooted.
-
-    On POSIX, posixpath.isabs() returns False for Windows-style paths like
-    ``E:/ws/x.txt`` or ``\\evil\\file.txt``; joining such a target onto the
-    base would double-prefix it (``E:/ws/E:/ws/x.txt``). Rooted targets
-    resolve as-is and the classifier then decides external vs in-workspace
-    via the normalized root.
-    """
-    if os.path.isabs(target):
-        return True
-    if _DRIVE_ROOTED_RE.match(target):
-        return True
-    return target.startswith("\\") and not target.startswith("\\\\")
-
-
 def _resolve_target(target, task_id, working_dir_root):
     """Resolve a target to absolute (spec 5.3 step 4).
 
@@ -785,7 +774,7 @@ def _resolve_target(target, task_id, working_dir_root):
     (None) fall back to working_dir_root (conservative, DEBUG log). Never
     uses os.getcwd() (the plugin process CWD may differ).
     """
-    if _is_absolute_any(target):
+    if is_absolute_any(target):
         return target
 
     base = _session_cwd(task_id)
@@ -796,105 +785,6 @@ def _resolve_target(target, task_id, working_dir_root):
         )
         base = working_dir_root
     return os.path.join(base, target)
-
-
-# ---------------------------------------------------------------- Path normalization (SCR-006)
-
-def _normalize_windows(path, working_dir_root):
-    """Normalize a target path on Windows (MSYS mapping + drive inheritance).
-
-    1. Map MSYS forward-slash forms to drive-qualified paths:
-       /c/..., //c/... -> C:/<rest>; /cygdrive/c/... -> C:/<rest>.
-       UNC paths (//server/share) do not match these regexes.
-    2. os.path.normpath (separator and dot-segment normalization).
-    3. Drive inheritance: rooted paths that still lack a drive get the
-       drive of working_dir_root; skipped if working_dir_root has no drive.
-    4. Fail-open: a path that STILL has no drive after inheritance is
-       unclassifiable on Windows; log a warning and return it unchanged
-       (never raise -- the caller classifies it as external and allows).
-    """
-    match = _MSYS_DRIVE_RE.match(path)
-    if match:
-        drive, rest = match.group(1), match.group(2)
-        path = "%s:/%s" % (drive.upper(), rest or "")
-    else:
-        match = _CYGWIN_DRIVE_RE.match(path)
-        if match:
-            drive, rest = match.group(1), match.group(2)
-            path = "%s:/%s" % (drive.upper(), rest or "")
-
-    path = os.path.normpath(path)
-
-    drive, _ = ntpath.splitdrive(path)
-    if not drive and working_dir_root:
-        root_drive, _ = ntpath.splitdrive(working_dir_root)
-        if root_drive:
-            path = root_drive + path
-
-    drive, _ = ntpath.splitdrive(path)
-    if not drive:
-        logger.warning(
-            "dir-whip: target %r unclassifiable after "
-            "normalization (no drive); treating as external "
-            "(fail-open)",
-            path,
-        )
-
-    return path
-
-
-def _normalize_posix(path):
-    """Normalize a target path on POSIX hosts (normpath identity)."""
-    return os.path.normpath(path)
-
-
-def _looks_windowsy(path):
-    """Windows-style target on ANY host (SCR-006 cross-platform).
-
-    MSYS/Cygwin forms, drive-rooted paths, and single-backslash-rooted
-    paths follow Windows normalization even on POSIX hosts (a WSL/Git-Bash
-    session can carry Windows-style roots and targets).
-    """
-    return bool(
-        _DRIVE_ROOTED_RE.match(path)
-        or _MSYS_DRIVE_RE.match(path)
-        or _CYGWIN_DRIVE_RE.match(path)
-        or (path.startswith("\\") and not path.startswith("\\\\"))
-    )
-
-
-def normalize_target(path, working_dir_root):
-    """Normalize a target path before classification (chain step 0)."""
-    if os.name == "nt" or _looks_windowsy(path):
-        return _normalize_windows(path, working_dir_root)
-    return _normalize_posix(path)
-
-
-# ---------------------------------------------------------------- Classification (spec 5.3 steps 6/7)
-
-def _within_working_dir(target, working_dir_root):
-    """Containment of target under working_dir_root (5.3 step 6).
-
-    Windows-style (drive-rooted) pairs are compared case-insensitively on
-    ANY host — Windows paths follow Windows matching rules even on POSIX
-    (SCR-006; e.g. a WSL session carrying a Windows-style root). Native
-    paths use os.path.relpath (case-sensitive on POSIX).
-    """
-    target_fwd = str(target).replace("\\", "/")
-    root_fwd = str(working_dir_root).replace("\\", "/")
-    if _DRIVE_ROOTED_RE.match(target_fwd) and _DRIVE_ROOTED_RE.match(root_fwd):
-        target_cf = target_fwd.casefold()
-        root_cf = root_fwd.casefold()
-        if target_cf == root_cf:
-            return True
-        prefix = root_cf.rstrip("/") + "/"
-        return target_cf.startswith(prefix)
-    try:
-        rel = os.path.relpath(target, working_dir_root)
-    except ValueError:
-        # Different drive on Windows: cannot relate -> external.
-        return False
-    return not rel.startswith("..")
 
 
 def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
@@ -915,7 +805,7 @@ def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
     if is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}
 
-    if not _within_working_dir(target, working_dir_root):
+    if not within_working_dir(target, working_dir_root):
         return {"outcome": "external-write", "rule_key": "external-write"}
 
     try:
@@ -1009,7 +899,7 @@ def _terminal_base(args, task_id, working_dir_root):
 
 def _resolve_terminal_target(target, base):
     """Resolve a terminal write target against the relative-target base."""
-    if _is_absolute_any(target):
+    if is_absolute_any(target):
         return target
     return os.path.join(base, target)
 
@@ -1278,7 +1168,7 @@ def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None)
         for path in pending:
             if not os.path.lexists(path):
                 continue  # gone -> settled
-            if not _within_working_dir(path, working_dir_root):
+            if not within_working_dir(path, working_dir_root):
                 continue  # moved outside the root -> settled
             verdict = classify_target(
                 path, working_dir_root, exempt_paths or [], is_subagent=False
@@ -1456,7 +1346,7 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
     write-audit-gate-block bus event with privacy-shaped relative paths,
     then returns the block dict for the pre-tool channel.
     """
-    rel_paths = [_relativize_target(path, working_dir_root) for path in unresolved]
+    rel_paths = [relativize_target(path, working_dir_root) for path in unresolved]
     _emit_verdict(
         "block", tool_name, "write-audit-gate-block", None,
         reason="%d unresolved root write audit violation(s)" % len(unresolved),
@@ -1547,7 +1437,7 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
             _bus_emit("write-audit-violation", {
                 "outcome": "block",
                 "rule_key": "write-audit-violation",
-                "path": _relativize_target(path, working_dir_root),
+                "path": relativize_target(path, working_dir_root),
                 "is_subagent": bool(is_subagent),
                 "first_seen": (
                     audit_pending_snapshot(session_id)

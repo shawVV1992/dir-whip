@@ -1,4 +1,4 @@
-"""Terminal lexer and coarse tiering (spec 5.10) — pure functions.
+"""Terminal lexer and coarse tiering (spec 5.10) 鈥?pure functions.
 
 Tokenizes shell commands and extracts block-tier write targets
 (redirect / touch / cp-mv) and uncertain write-intent signals. Pure

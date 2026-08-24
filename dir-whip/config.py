@@ -10,7 +10,6 @@ the HERMES_HOME env override before the platform default (D5).
 
 import copy
 import datetime
-import hashlib
 import json
 import logging
 import os
@@ -31,6 +30,11 @@ try:
     from plugins.plugin_utils import lazy_singleton
 except Exception:
     lazy_singleton = None
+
+try:
+    from .paths import _paths_equal, relativize_target
+except ImportError:
+    from paths import _paths_equal, relativize_target
 
 _cache_lock = threading.Lock()
 _cached_result = None
@@ -504,32 +508,6 @@ def _now_iso():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _hash_prefix(value):
-    """Deterministic privacy-preserving prefix for external paths (5.13)."""
-    return "h:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-
-
-def _relativize_target(target, working_dir_root):
-    """Privacy: target relative to working_dir_root; external -> hash prefix.
-
-    None target stays None (omitted). External paths (outside the root,
-    different drive, or unrelatable) become a 'h:<sha256-prefix>' hash so
-    no absolute external path ever lands in stats.jsonl (5.13 privacy).
-    """
-    if target is None:
-        return None
-    target = str(target)
-    if working_dir_root is None:
-        return _hash_prefix(target)
-    try:
-        rel = os.path.relpath(target, str(working_dir_root))
-    except ValueError:  # different drive on Windows -> cannot relate
-        return _hash_prefix(target)
-    if os.path.isabs(rel) or rel == os.pardir or rel.startswith(".." + os.sep):
-        return _hash_prefix(target)
-    return rel.replace("\\", "/")
-
-
 def _stats_jsonl_path():
     """stats.jsonl location: the session profile's home dir-whip dir.
 
@@ -602,7 +580,7 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
                 "reason": reason,
                 "tool": tool,
                 "rule_key": rule_key,
-                "target": _relativize_target(target, working_dir_root),
+                "target": relativize_target(target, working_dir_root),
             })
         except Exception as exc:
             logger.debug("dir-whip: stats write failed (ignored): %s", exc)
@@ -754,15 +732,6 @@ def _profile_terminal_cwd(ctx):
         return parse_terminal_cwd(cfg_path)
     except Exception:
         return None
-
-
-def _paths_equal(a, b):
-    """Forward-slash path equality; case-insensitive on Windows."""
-    a = str(a).replace("\\", "/")
-    b = str(b).replace("\\", "/")
-    if os.name == "nt":
-        return a.casefold() == b.casefold()
-    return a == b
 
 
 def _guard_config_key_present(key):
