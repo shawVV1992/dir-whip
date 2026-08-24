@@ -132,6 +132,11 @@ def _parse_terminal_guard_value(value):
         return value
     if isinstance(value, str):
         return value.strip().lower() not in ("disabled", "false", "0", "off")
+    # PyYAML coerces the YAML 1.1 boolean forms 0/1 to int; treat numeric
+    # 0 as disabled so the PyYAML path matches the fallback parser (which
+    # sees the raw string "0").
+    if isinstance(value, (int, float)):
+        return value != 0
     return True
 
 
@@ -153,6 +158,11 @@ def _parse_write_audit_value(value):
         return value
     if isinstance(value, str):
         return value.strip().lower() not in ("disabled", "false", "0", "off")
+    # PyYAML coerces the YAML 1.1 boolean forms 0/1 to int; treat numeric
+    # 0 as disabled so the PyYAML path matches the fallback parser (which
+    # sees the raw string "0") and the spec 5.18 switch semantics.
+    if isinstance(value, (int, float)):
+        return value != 0
     return True
 
 
