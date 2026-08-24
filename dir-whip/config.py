@@ -18,6 +18,8 @@ import re
 import threading
 from pathlib import Path
 
+import yaml
+
 logger = logging.getLogger("dir-whip")
 
 SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
@@ -85,39 +87,12 @@ def parse_terminal_cwd(config_path):
     Returns the cwd string or None if not found/unparseable.
     """
     try:
-        import yaml
-    except ImportError:
-        return _parse_terminal_cwd_fallback(config_path)
-
-    try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict):
             terminal = data.get("terminal", {})
             if isinstance(terminal, dict):
                 return terminal.get("cwd")
-    except Exception:
-        pass
-    return None
-
-
-def _parse_terminal_cwd_fallback(config_path):
-    """Minimal YAML parser for terminal.cwd when PyYAML is unavailable."""
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        in_terminal = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped == "terminal:":
-                in_terminal = True
-                continue
-            if in_terminal:
-                if stripped.startswith("cwd:"):
-                    value = stripped[4:].strip().strip("'\"")
-                    return value if value else None
-                if not line.startswith(" ") and not line.startswith("\t"):
-                    in_terminal = False
     except Exception:
         pass
     return None
@@ -132,9 +107,8 @@ def _parse_terminal_guard_value(value):
         return value
     if isinstance(value, str):
         return value.strip().lower() not in ("disabled", "false", "0", "off")
-    # PyYAML coerces the YAML 1.1 boolean forms 0/1 to int; treat numeric
-    # 0 as disabled so the PyYAML path matches the fallback parser (which
-    # sees the raw string "0").
+    # PyYAML parses the YAML 1.1 integer forms 0/1 as int; treat numeric 0
+    # as disabled per the switch semantics (spec 5.6).
     if isinstance(value, (int, float)):
         return value != 0
     return True
@@ -158,9 +132,8 @@ def _parse_write_audit_value(value):
         return value
     if isinstance(value, str):
         return value.strip().lower() not in ("disabled", "false", "0", "off")
-    # PyYAML coerces the YAML 1.1 boolean forms 0/1 to int; treat numeric
-    # 0 as disabled so the PyYAML path matches the fallback parser (which
-    # sees the raw string "0") and the spec 5.18 switch semantics.
+    # PyYAML parses the YAML 1.1 integer forms 0/1 as int; treat numeric 0
+    # as disabled per the switch semantics (spec 5.18).
     if isinstance(value, (int, float)):
         return value != 0
     return True
@@ -233,7 +206,6 @@ def load_guard_config(config_path=None):
         return result
 
     try:
-        import yaml
         with open(config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict):
@@ -246,90 +218,9 @@ def load_guard_config(config_path=None):
             result["write_audit_entry_cap"] = _parse_entry_cap_value(
                 data.get("write_audit_entry_cap", 2000)
             )
-    except ImportError:
-        result = _load_guard_config_fallback(config_path)
     except Exception as exc:
         logger.debug("dir-whip: failed to load dir-whip-config.yaml: %s", exc)
 
-    return result
-
-
-def _parse_inline_list(text):
-    """Parse an inline YAML list of quoted strings (e.g. '["AGENTS.md"]')."""
-    items = []
-    for part in re.split(r"[,\[\]]", text):
-        part = part.strip().strip("'\"")
-        if part:
-            items.append(part)
-    return items
-
-
-def _load_guard_config_fallback(config_path):
-    """Minimal parser for dir-whip-config.yaml when PyYAML is unavailable."""
-    result = {
-        "exempt_paths": [],
-        "terminal_guard": True,
-        "allowed_root_files": [],
-        "write_audit": True,
-        "write_audit_entry_cap": 2000,
-    }
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        in_exempt = False
-        in_allowed = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if stripped.startswith("exempt_paths:"):
-                in_exempt = True
-                in_allowed = False
-                rest = stripped[len("exempt_paths:"):].strip()
-                if rest and rest != "[]":
-                    result["exempt_paths"].append(rest)
-                continue
-            if stripped.startswith("working_dir_root:"):
-                value = stripped[len("working_dir_root:"):].strip().strip("'\"")
-                if value:
-                    result["working_dir_root"] = value
-                in_exempt = False
-                in_allowed = False
-                continue
-            if stripped.startswith("terminal_guard:"):
-                value = stripped[len("terminal_guard:"):].strip().strip("'\"")
-                result["terminal_guard"] = _parse_terminal_guard_value(value)
-                continue
-            if stripped.startswith("allowed_root_files:"):
-                in_exempt = False
-                in_allowed = True
-                rest = stripped[len("allowed_root_files:"):].strip()
-                if rest and rest != "[]":
-                    result["allowed_root_files"].extend(_parse_inline_list(rest))
-                continue
-            if stripped.startswith("write_audit:"):
-                value = stripped[len("write_audit:"):].strip().strip("'\"")
-                result["write_audit"] = _parse_write_audit_value(value)
-                continue
-            if stripped.startswith("write_audit_entry_cap:"):
-                value = stripped[len("write_audit_entry_cap:"):].strip().strip("'\"")
-                result["write_audit_entry_cap"] = _parse_entry_cap_value(value)
-                continue
-            if in_exempt and stripped.startswith("- "):
-                value = stripped[2:].strip().strip("'\"")
-                if value:
-                    result["exempt_paths"].append(value)
-                continue
-            if in_allowed and stripped.startswith("- "):
-                value = stripped[2:].strip().strip("'\"")
-                if value:
-                    result["allowed_root_files"].append(value)
-                continue
-            if in_exempt or in_allowed:
-                in_exempt = False
-                in_allowed = False
-    except Exception:
-        pass
     return result
 
 
