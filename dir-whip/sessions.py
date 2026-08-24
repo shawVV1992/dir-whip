@@ -17,9 +17,9 @@ except ImportError:
     import state
 
 try:
-    from .config import stats_set_session
+    from .config import get_cached_config, stats_set_session
 except ImportError:
-    from config import stats_set_session
+    from config import get_cached_config, stats_set_session
 
 try:
     from .events import emit
@@ -90,6 +90,10 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         ):
             if value is not None:
                 detail[key] = value
+        # Config-cache side effect (was _resolved_config() in dir_whip.py):
+        # seeds the cache / session root / registered ctx when not yet
+        # initialized; the result is unused since the seven-param emit.
+        get_cached_config(state.session.registered_ctx)
         emit(
             "allow", "subagent", "subagent-start", None,
             json.dumps(detail), None, True,
@@ -122,6 +126,10 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         }
         if duration_ms is not None:
             detail["duration_ms"] = duration_ms
+        # Config-cache side effect (was _resolved_config() in dir_whip.py):
+        # seeds the cache / session root / registered ctx when not yet
+        # initialized; the result is unused since the seven-param emit.
+        get_cached_config(state.session.registered_ctx)
         emit(
             "allow", "subagent", "subagent-stop", None,
             json.dumps(detail), None, True,
