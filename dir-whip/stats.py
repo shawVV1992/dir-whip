@@ -1,11 +1,11 @@
-"""Statistics: counters, jsonl persistence and rollover (spec 5.13) — pure
+"""Statistics: counters, jsonl persistence and rollover (spec 5.13) 鈥?pure
 state module.
 
 In-memory counters (outcome x tool x rule_key x is_subagent), session
 context fields, and one-JSON-line-per-event persistence with 5MB rollover.
 No host imports (SCR-035 core module discipline, ADR-0007); the stats
 globals live at module level until task 31.9 moves them into the state
-containers. Extracted from config.py (task 31.7).
+containers. Extracted in task 31.7 (previously part of the config module).
 """
 
 import copy
@@ -16,9 +16,9 @@ import os
 import threading
 
 try:
-    from .paths import relativize_target
+    from .paths import _get_hermes_home, _profile_home, relativize_target
 except ImportError:
-    from paths import relativize_target
+    from paths import _get_hermes_home, _profile_home, relativize_target
 
 logger = logging.getLogger("dir-whip")
 
@@ -35,6 +35,10 @@ _stats_session = {
     "is_subagent": False,
     "started_at": None,
 }
+
+# The session's profile (set at on_session_start via config.set_session_profile);
+# stats.jsonl is written into that profile's home (SCR-027).
+_session_profile = None
 
 
 def stats_reset():
@@ -104,13 +108,6 @@ def _stats_jsonl_path():
     session profile is set yet, use HERMES_HOME directly (register-time
     behavior).
     """
-    # Late import: config.py re-exports stats names (transitional until
-    # 31.9), so a module-level config import would cycle. _session_profile
-    # is re-read on every call (it changes at runtime).
-    try:
-        from .config import _get_hermes_home, _profile_home, _session_profile
-    except ImportError:
-        from config import _get_hermes_home, _profile_home, _session_profile
     home = _get_hermes_home()
     if _session_profile:
         home = _profile_home(home, _session_profile)

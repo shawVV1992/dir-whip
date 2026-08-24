@@ -31,9 +31,24 @@ except Exception:
     lazy_singleton = None
 
 try:
-    from .paths import _paths_equal, relativize_target
+    from .paths import (
+        _get_hermes_home,
+        _paths_equal,
+        _profile_home,
+        relativize_target,
+    )
 except ImportError:
-    from paths import _paths_equal, relativize_target
+    from paths import (
+        _get_hermes_home,
+        _paths_equal,
+        _profile_home,
+        relativize_target,
+    )
+
+try:
+    from . import stats as _stats
+except ImportError:
+    import stats as _stats
 
 try:
     from .stats import (
@@ -87,20 +102,6 @@ _session_root_initialized = False
 # into that profile's home so a default-profile session never lands in the
 # active profile's home (SCR-027).
 _session_profile = None
-
-
-def _get_hermes_home():
-    """Return the Hermes home directory path (D5).
-
-    HERMES_HOME environment override FIRST, then the platform default:
-    Windows LOCALAPPDATA/hermes, POSIX ~/.hermes.
-    """
-    env_home = os.environ.get("HERMES_HOME")
-    if env_home:
-        return Path(env_home)
-    if os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA", "")) / "hermes"
-    return Path.home() / ".hermes"
 
 
 def _get_plugin_dir():
@@ -343,24 +344,7 @@ def set_session_profile(profile):
     """
     global _session_profile
     _session_profile = profile
-
-
-def _profile_home(hermes_home, profile):
-    """The profile's home directory, aware of both layouts (SCR-026/027).
-
-    profile default: home-shaped (parent named "profiles", i.e. HERMES_HOME
-    IS a named profile's dir) -> hermes_home.parent.parent (the default
-    home is two levels up); otherwise hermes_home. profile named: home IS
-    the profile dir -> hermes_home; otherwise hermes_home/profiles/<name>.
-    """
-    hermes_home = Path(hermes_home)
-    if not profile or profile == "default":
-        if hermes_home.parent.name == "profiles":
-            return hermes_home.parent.parent
-        return hermes_home
-    if hermes_home.name == profile and hermes_home.parent.name == "profiles":
-        return hermes_home
-    return hermes_home / "profiles" / profile
+    _stats._session_profile = profile
 
 
 def is_inside_session_dir(path, working_dir_root):
@@ -531,6 +515,7 @@ def reset_cache():
     _session_root = None
     _session_root_initialized = False
     _session_profile = None
+    _stats._session_profile = None
     stats_reset()
 
 
