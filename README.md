@@ -96,7 +96,7 @@ hermes plugins disable dir-whip
 
 | Layer | Role | Form |
 |-------|------|------|
-| **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + always-on prompt (≤200 chars) |
+| **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + always-on prompt (≤400 chars) |
 | **Plugin (enforces)** | Blocks violations before they land | 8 hooks: `pre_tool_call` interception + write audit + session/subagent observation |
 | **Scripts (tools)** | CLI helpers for agents and cron | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | Sole configuration source | `dir-whip-config.yaml` |

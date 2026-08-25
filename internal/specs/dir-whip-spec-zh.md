@@ -31,7 +31,7 @@ Hermes agent 不能可靠地遵守文件纪律规则。文件散落在 Working D
 
 | 层 | 职责 | 形态 |
 |----|------|------|
-| Skill | 教 agent 怎么做 | 打包的 SKILL.md，经 `ctx.register_skill()` 注册（opt-in 加载）+ 常驻纪律提示（≤200 字） |
+| Skill | 教 agent 怎么做 | 打包的 SKILL.md，经 `ctx.register_skill()` 注册（opt-in 加载）+ 常驻纪律提示（≤400 字符，英文） |
 | Plugin | 不让 agent 不这么做 | Hermes plugin（pre_tool_call 守卫 + 观察类 hooks） |
 
 skill 随插件包分发：安装插件即获得 skill、脚本与配置模板。两层保持零运行时耦合
@@ -287,14 +287,25 @@ agent 应理解 plugin 的分类，以便正确应对 block / allow 结果并如
 
 ### 3.7 常驻纪律提示（C2，Q10）
 
-在 `register()` 时经 `register_system_prompt_section()` 注入。上限 **≤200 字**
-（上游上限 4000）。该提示每轮计费，必须保持最小化。内容（四要素）：
+在 `register()` 时经 `register_system_prompt_section()` 注入。上限 **≤400 字符**
+（中文≤200 字，英文≤400 chars；上游上限 4000），2026-08-25 统一改为英文。
+该提示每轮计费，必须保持最小化。内容（四要素 + 来自 skill 建文件规则的
+落盘/allowlist 扩展）：
 
-1. **写前分类** —— 任何创建/写入前陈述目标类别（会话目录 / 根白名单 / 外部）
-2. **会话目录落盘** —— Working Directory 内的写入进入 Session Directory
-   （Outputs/ 或 .tmp/）
-3. **根目录禁写** —— 根只允许白名单文件 + 会话目录 + `.hermes/`
-4. **被拦截时** —— 按守卫 block 消息中的响应模板回复
+1. **写前分类（Classify before write）** —— 任何创建/写入前陈述目标类别
+   （session-dir / allowlist file(file:) / external）
+2. **会话目录落盘（Session-dir placement）** —— Working Directory 内的写入进入
+   Session Directory（交付物->Outputs/ 其余->.tmp/）；不在会话目录内则先
+   `python scripts/create_session_dir.py <task> --workspace <root>` 创建
+3. **根目录禁写（Root forbid）** —— 根只允许白名单文件 + 会话目录 + `.hermes/`
+4. **被拦截时（When blocked）** —— 按守卫 block 消息的 Fix 重试，回复
+   `[Reason]/[Next]`；用户指定路径先 `dir_whip_allow_path`
+
+实际注入词（`|` 结构化分隔，E-C）：
+
+```
+[dir-whip] Classify before write | session-dir / allowlist file(file:) / external. If not in session dir, create: python scripts/create_session_dir.py <task> --workspace <root>. WD writes -> session dir: deliverable->Outputs/ else .tmp/. Root only: allowlist files, session dirs, .hermes/. User path -> dir_whip_allow_path first. Blocked -> follow Fix, reply [Reason]/[Next].
+```
 
 完整 C6 模板（3.9）由插件 block 消息携带，不由提示承载。
 

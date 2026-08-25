@@ -120,15 +120,19 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
     ("approve", "always", "session", "granted", "allow", "smart_approve")
 )
 
-# Spec 3.7/5.17: always-on discipline prompt (<=200 chars, four elements:
-# classify before write / session-dir writes / no root writes / when
-# blocked). The full C6 template is delivered by the block message, NOT
-# by this prompt.
+# Spec 3.7/5.17: always-on discipline prompt (<=400 chars, English,
+# structured with | separators; four elements + placement/allowlist
+# extensions from skill file-creation rules: classify before write /
+# session-dir writes (deliverable->Outputs/ else .tmp/) / no root writes /
+# when blocked; user-specified path -> dir_whip_allow_path). The full C6
+# template is delivered by the block message, NOT by this prompt.
 DISCIPLINE_PROMPT = (
-    "[dir-whip] 写前分类：首写前必分类并创建会话目录，任何创建或写入前先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
-    "会话目录落盘：工作目录内写入必须落入会话目录 Outputs/ 或 .tmp/。"
-    "根目录禁写：工作目录根只允许白名单文件、会话目录和 .hermes/。"
-    "被拦截时：遵循拦截消息创建会话目录后重试，回复 [Reason]/[Next]，不要重试同一路径。"
+    "[dir-whip] Classify before write | session-dir / allowlist file(file:) / external. "
+    "If not in session dir, create: python scripts/create_session_dir.py <task> --workspace <root>. "
+    "WD writes -> session dir: deliverable->Outputs/ else .tmp/. "
+    "Root only: allowlist files, session dirs, .hermes/. "
+    "User path -> dir_whip_allow_path first. "
+    "Blocked -> follow Fix, reply [Reason]/[Next]."
 )
 
 

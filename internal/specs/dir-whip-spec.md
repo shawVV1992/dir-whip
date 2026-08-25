@@ -35,7 +35,7 @@ Two complementary layers, distributed as ONE artifact (the plugin package):
 
 | Layer | Role | Form |
 |-------|------|------|
-| Skill | Teach the agent what to do | Bundled SKILL.md registered via `ctx.register_skill()` (opt-in load) + always-on discipline prompt (≤200 chars) |
+| Skill | Teach the agent what to do | Bundled SKILL.md registered via `ctx.register_skill()` (opt-in load) + always-on discipline prompt (≤400 chars, English) |
 | Plugin | Prevent the agent from not doing it | Hermes plugin (pre_tool_call guard + observation hooks) |
 
 The skill ships inside the plugin package: installing the plugin installs the
@@ -322,16 +322,26 @@ block / allow outcomes correctly and state the classification truthfully:
 ### 3.7 Always-on Discipline Prompt (C2, Q10)
 
 Injected at `register()` via `register_system_prompt_section()`. Bounded at
-**≤200 字** (upstream cap 4000). The prompt is billed every round, so it must
-stay minimal. Content (four elements):
+**≤400 chars** (≤200 Chinese chars, ≤400 English chars; upstream cap 4000).
+The prompt is billed every round, so it must stay minimal. Unified to English
+(2026-08-25). Content (four elements + placement/allowlist extensions from
+skill file-creation rules):
 
-1. **写前分类** — state the target class before any create/write (session dir /
-   root whitelist / external)
-2. **会话目录落盘** — writes inside the Working Directory go to a Session
-   Directory (Outputs/ or .tmp/)
-3. **根目录禁写** — the root allows only whitelist files + session directories
+1. **Classify before write** — state the target class before any create/write
+   (session-dir / allowlist file(file:) / external)
+2. **Session-dir placement** — writes inside the Working Directory go to a
+   Session Directory (deliverable->Outputs/ else .tmp/); if not in a session
+   dir, create via `python scripts/create_session_dir.py <task> --workspace <root>`
+3. **Root forbid** — the root allows only allowlist files + session directories
    + `.hermes/`
-4. **被拦截时** — follow the response template in the guard's block message
+4. **When blocked** — follow the Fix in the guard's block message, reply
+   `[Reason]/[Next]`; user-specified path -> `dir_whip_allow_path` first
+
+Actual prompt (structured with `|` separators, E-C):
+
+```
+[dir-whip] Classify before write | session-dir / allowlist file(file:) / external. If not in session dir, create: python scripts/create_session_dir.py <task> --workspace <root>. WD writes -> session dir: deliverable->Outputs/ else .tmp/. Root only: allowlist files, session dirs, .hermes/. User path -> dir_whip_allow_path first. Blocked -> follow Fix, reply [Reason]/[Next].
+```
 
 The full C6 template (3.9) is delivered by the plugin's block message, not by
 the prompt.

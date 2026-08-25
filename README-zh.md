@@ -90,7 +90,7 @@ hermes plugins disable dir-whip
 
 | 层 | 职责 | 形态 |
 |----|------|------|
-| **Skill（教导）** | 纪律参考 | 捆绑的 `workspace-organization` 技能（可选加载）+ 常驻提示（≤200 字） |
+| **Skill（教导）** | 纪律参考 | 捆绑的 `workspace-organization` 技能（可选加载）+ 常驻提示（≤400 字符） |
 | **Plugin（强制）** | 拦截违规落地前 | 8 个钩子：`pre_tool_call` 拦截 + 写入审计 + 会话/子代理观察 |
 | **Scripts（工具）** | Agent 和 cron 的 CLI 辅助 | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | 唯一配置源 | `dir-whip-config.yaml` |
