@@ -21,8 +21,32 @@ always-on discipline prompt covers day-to-day behavior.
 session.
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
-(exempt_paths, allowed_root_files, working_dir_root override, terminal_guard,
-write_audit, write_audit_entry_cap).
+(allowlist with file:<name> | prefix:<abs-path>, working_dir_root override,
+terminal_guard, write_audit, write_audit_entry_cap).
+
+**Allowlist**: template ships with strict empty allowlist (allowlist: []).
+No workspace rules file is allowlisted by default; add entries via slash
+command without hand-editing YAML:
+    /dir-whip allow <file|prefix:PATH|PATH/>  # add one entry (file: or prefix:)
+    /dir-whip allow 1,3           # add by numbered candidates
+    /dir-whip list                # show current allowlist (Files: ... Prefixes: ...)
+    /dir-whip remove <file|prefix:PATH|PATH/> # remove entry
+See spec 5.7 for the full slash surface (config_writer does row-level edits
+preserving comments).
+
+**Profiles**: plugin is per-profile opt-in. After install, verify each
+profile's config (default: HERMES_HOME/config.yaml; named:
+HERMES_HOME/profiles/<name>/config.yaml) contains `dir-whip` in
+`plugins.enabled` — the native installer writes it via
+hermes_cli/plugins_cmd.py _save_enabled_set on `--enable`. If a profile
+lacks the entry, run `hermes plugins enable dir-whip` or reinstall with
+`hermes plugins install shawVV1992/dir-whip/dir-whip --enable` in that
+profile context. Manual copy of dir-whip/ into plugins/dir-whip/ without
+.install-metadata.json is unsupported (no metadata, no enabled row).
+
+**Install source**: native path is `shawVV1992/dir-whip/dir-whip` (SDIR
+install). The SCR-025 manifest gate is lifted on current Hermes — native
+install is the primary path.
 
 **Verify**: Start a new Hermes session. Try writing a file to the Working
 Directory root — it should be blocked with a helpful message. If the write

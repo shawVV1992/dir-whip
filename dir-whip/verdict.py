@@ -5,7 +5,7 @@ Pure decision layer: no host imports, no hook registration (the assembly
 layer in __init__.py owns hooks and fail-open). Depends on the lower
 layers paths/terminal/events/state/config + sessions/audit (sanctioned
 import-back of pre-existing dependencies). Extracted from dir_whip.py
-(task 31.13).
+(task 31.13). Spec v2.6 B2: unified allowlist .
 """
 
 import logging
@@ -33,7 +33,6 @@ except ImportError:
 try:
     from .config import (
         get_cached_config,
-        is_exempt,
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
@@ -42,7 +41,6 @@ try:
 except ImportError:
     from config import (
         get_cached_config,
-        is_exempt,
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
@@ -79,6 +77,21 @@ except ImportError:
         _tokenize_command,
     )
 
+# Unified allowlist helpers (spec v2.6 B2)
+try:
+    from .allowlist import is_allowlist_file, is_allowlist_prefix, parse_allowlist
+except ImportError:
+    try:
+        from allowlist import is_allowlist_file, is_allowlist_prefix, parse_allowlist  # type: ignore
+    except ImportError:
+        # Fallback stubs (should never happen in repo)
+        def parse_allowlist(raw):  # type: ignore
+            return {"files": set(), "prefixes": set()}
+        def is_allowlist_file(name, parsed):  # type: ignore
+            return False
+        def is_allowlist_prefix(path, parsed):  # type: ignore
+            return False
+
 logger = logging.getLogger("dir-whip")
 
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
@@ -112,8 +125,8 @@ _APPROVAL_GRANTED_CHOICES = frozenset(
 # blocked). The full C6 template is delivered by the block message, NOT
 # by this prompt.
 DISCIPLINE_PROMPT = (
-    "[dir-whip] 写前分类：任何创建或写入前，先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
-    "会话目录落盘：工作目录内的写入必须落入会话目录的 Outputs/ 或 .tmp/。"
+    "[dir-whip] 写前分类：首写前必分类并创建会话目录，任何创建或写入前先说明目标类别（会话目录 / 根白名单文件 / 外部路径）。"
+    "会话目录落盘：工作目录内写入必须落入会话目录 Outputs/ 或 .tmp/。"
     "根目录禁写：工作目录根只允许白名单文件、会话目录和 .hermes/。"
     "被拦截时：遵循拦截消息创建会话目录后重试，回复 [Reason]/[Next]，不要重试同一路径。"
 )
@@ -136,7 +149,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
     if not is_subagent and session_id and _is_child_session(session_id):
         is_subagent = True
     ctx = _get_ctx()
-    working_dir_root, exempt_paths = get_cached_config(ctx)
+    working_dir_root, allowlist = get_cached_config(ctx)
 
     # Guard-disabled shortcut (5.3 step 2): one-time warning + allow.
     if working_dir_root is None:
@@ -149,21 +162,21 @@ def guard(tool_name, args, task_id=None, **kwargs):
     # never snapshots (the command did not run). Fail-open: a gate-side
     # error allows the call (5.8), a failed re-scan keeps the latch.
     unresolved = _audit_gate_unresolved(session_id, working_dir_root,
-                                        exempt_paths)
+                                        allowlist)
     if unresolved:
         return _audit_gate_block(tool_name, session_id, is_subagent,
                                  working_dir_root, unresolved)
 
     if tool_name == "terminal":
         result = _guard_terminal(
-            args, task_id, working_dir_root, exempt_paths, is_subagent, session_id
+            args, task_id, working_dir_root, allowlist, is_subagent, session_id
         )
         # 5.18 audit pre-snapshot runs ONLY when the front layer decided
         # to allow -- this covers every command-will-execute path (heredoc
         # demotion, guard-disabled, device exemption, uncertain tier);
         # blocked calls never snapshot (nothing to pair at post).
         if result is None:
-            _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths)
+            _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist)
         return result
 
     target_paths = _extract_target_paths(tool_name, args)
@@ -173,7 +186,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
     for target in target_paths:
         abs_target = _resolve_target(target, task_id, working_dir_root)
         normalized = normalize_target(abs_target, working_dir_root)
-        verdict = classify_target(normalized, working_dir_root, exempt_paths, is_subagent)
+        verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
         if verdict["outcome"] == "block":
             emit(
                 "block", tool_name, verdict["rule_key"], normalized,
@@ -223,7 +236,7 @@ def _reset_fail_open_flag():
 # ---------------------------------------------------------------- Observation helpers
 
 def _resolved_config():
-    """Cached (working_dir_root, exempt_paths); (None, []) on failure."""
+    """Cached (working_dir_root, allowlist); (None, []) on failure."""
     try:
         return get_cached_config(_get_ctx())
     except Exception:
@@ -291,21 +304,49 @@ def _resolve_target(target, task_id, working_dir_root):
     return os.path.join(base, target)
 
 
-def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
-    """Classify a single normalized absolute target (spec 5.3 step 6).
+def _parsed_allowlist_raw(raw):
+    """Parse raw allowlist list into {files, prefixes} via allowlist module."""
+    try:
+        return parse_allowlist(raw)
+    except Exception:
+        return {"files": set(), "prefixes": set()}
+
+
+def _parsed_allowlist():
+    """Load and parse allowlist from dir-whip-config.yaml (fresh read)."""
+    try:
+        raw = load_guard_config().get("allowlist") or []
+        return _parsed_allowlist_raw(raw)
+    except Exception:
+        return {"files": set(), "prefixes": set()}
+
+
+def classify_target(target, working_dir_root, allowlist=None, is_subagent=False):
+    """Classify a single normalized absolute target (spec 5.3 step 6, v2.6 B2).
 
     Returns a verdict dict:
       {"outcome": "allow", "rule_key": ...}                      -> allow
       {"outcome": "external-write", "rule_key": "external-write"} -> allow + log
       {"outcome": "block", "rule_key": ..., "message": ...}      -> block
 
-    Order: Tier 0 (exempt_paths + runtime allowlist) first; under
-    working_dir_root -> allowed_root_files at root, then valid Session
+    Order: Tier 0 (allowlist prefix + runtime allowlist) first; under
+    working_dir_root -> allowlist file at root, then valid Session
     Directory, then BLOCK; outside working_dir_root (incl. sibling profile
-    dirs) -> external-write. There is NO approve tier.
+    dirs) -> external-write. There is NO approve tier. Casefold handling
+    delegated to allowlist module.
     """
-    if is_exempt(target, exempt_paths):
-        return {"outcome": "allow", "rule_key": "tier0-exempt"}
+    # Resolve parsed allowlist: prefer passed allowlist, else fresh load.
+    if isinstance(allowlist, dict) and "files" in allowlist and "prefixes" in allowlist:
+        parsed = allowlist
+    elif allowlist is not None:
+        # allowlist is expected to be list of discriminated strings (cached)
+        parsed = _parsed_allowlist_raw(allowlist)
+    else:
+        parsed = _parsed_allowlist()
+
+    # Tier 0: allowlist prefix OR runtime allowlist -> ALLOW
+    if is_allowlist_prefix(target, parsed):
+        return {"outcome": "allow", "rule_key": "tier0-allowlist"}
     if is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}
 
@@ -319,13 +360,10 @@ def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
         return {"outcome": "external-write", "rule_key": "external-write"}
     rel_fwd = rel.replace("\\", "/")
     if "/" not in rel_fwd:
-        # Root file: whitelist match (case-insensitive on Windows).
+        # Root file: allowlist file check (spec 5.6 B2)
         base = os.path.basename(target)
-        for allowed in _allowed_root_files():
-            if base == allowed or (
-                os.name == "nt" and base.casefold() == allowed.casefold()
-            ):
-                return {"outcome": "allow", "rule_key": "allowed-root-file"}
+        if is_allowlist_file(base, parsed):
+            return {"outcome": "allow", "rule_key": "allowed-file"}
 
     if is_inside_session_dir(target, working_dir_root):
         return {"outcome": "allow", "rule_key": "session-dir"}
@@ -338,21 +376,8 @@ def classify_target(target, working_dir_root, exempt_paths, is_subagent=False):
     }
 
 
-def _allowed_root_files():
-    """Root-file whitelist from dir-whip-config.yaml (spec 5.6).
-
-    Reads the SAME allowed_root_files key the audit reads, so guard and
-    audit never disagree about root files. STRICT fallback: config missing
-    / key absent -> empty list -> every root file blocks (fail-closed).
-    """
-    try:
-        return load_guard_config().get("allowed_root_files") or []
-    except Exception:
-        return []
-
-
 def _block_message(target, working_dir_root, is_subagent=False):
-    """Exact block message (spec 5.3; C6-aligned).
+    """Exact block message (spec 5.3; C6-aligned, v2.6 B2).
 
     Subagent variant: the fix line is replaced by the parent-target
     guidance -- subagents never create session directories.
@@ -385,8 +410,8 @@ def _block_message(target, working_dir_root, is_subagent=False):
         "Directory or an allowed root file.\n"
         "Target: %s\n"
         "%s\n"
-        "If this is a project directory, add it to exempt_paths in "
-        "HERMES_HOME/dir-whip/dir-whip-config.yaml\n"
+        "If this is a project directory, add it to allowlist as prefix:<abs-path> in "
+        "HERMES_HOME/dir-whip/dir-whip-config.yaml (e.g. prefix:E:/HermesWorkspace/learn/projects/foo)\n"
         "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line)
     )
 
@@ -412,9 +437,9 @@ def _resolve_terminal_target(target, base):
     return os.path.join(base, target)
 
 
-def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
+def _guard_terminal(args, task_id, working_dir_root, allowlist,
                     is_subagent=False, session_id=None):
-    """Terminal write interception (spec 5.10 coarse tiers).
+    """Terminal write interception (spec 5.10 coarse tiers, v2.6 B2).
 
     - terminal_guard disabled -> terminal never blocked (DEBUG log).
     - Heredoc (`<<`) blanket demotion (4.4): the WHOLE command is judged
@@ -458,7 +483,7 @@ def _guard_terminal(args, task_id, working_dir_root, exempt_paths,
                 continue
             abs_target = _resolve_terminal_target(target, base)
             normalized = normalize_target(abs_target, working_dir_root)
-            verdict = classify_target(normalized, working_dir_root, exempt_paths, is_subagent)
+            verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
             if verdict["outcome"] == "block":
                 emit(
                     "block", "terminal", rule_key, normalized,

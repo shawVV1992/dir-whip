@@ -7,7 +7,7 @@ the pre/post hook pairing. The classification chain is INJECTED via
 set_classifier (assembly layer, ADR-0007 inject-don't-import) to break the
 audit<->verdict cycle. Depends on paths/state/events/config/sessions +
 stdlib only. No host imports (SCR-035 core module discipline, ADR-0007).
-Extracted from dir_whip.py (task 31.12).
+Extracted from dir_whip.py (task 31.12). Spec v2.6 B2 unified allowlist.
 """
 
 import datetime
@@ -98,18 +98,18 @@ def diff_snapshots(before, after):
     }
 
 
-def audit_classify_diff(diff, before, after, working_dir_root, exempt_paths,
+def audit_classify_diff(diff, before, after, working_dir_root, allowlist,
                         is_subagent=False):
-    """Classify a snapshot diff into violations (spec 5.18).
+    """Classify a snapshot diff into violations (spec 5.18, v2.6 B2).
 
     Only FILE entries are judged (is_dir -> never a violation; directory
     mtimes -- session dirs, `.git/`, `.hermes/` -- are ignored). A
     violation is a NEW or MODIFIED root-level file that classifies as a
-    root-file block through the shared chain: not on the root allowlist,
-    not in exempt_paths, not inside any session directory (the same
-    allowed_root_files / exempt_paths keys the guard reads, so the layers
-    never disagree). Deletions are RECORD-ONLY (5.8 delete principle) --
-    surfaced in "recorded", never judged.
+    root-file block through the shared chain: not on the allowlist file
+    entries, not under an allowlist prefix, not inside any session directory
+    (the same allowlist key the guard reads, so the layers never disagree).
+    Deletions are RECORD-ONLY (5.8 delete principle) -- surfaced in
+    "recorded", never judged.
 
     Returns {"violations": [abs paths], "recorded": [deleted abs paths]}.
     """
@@ -123,7 +123,7 @@ def audit_classify_diff(diff, before, after, working_dir_root, exempt_paths,
         if _classify_fn is None:
             raise RuntimeError("audit classifier not wired")
         verdict = _classify_fn(
-            abs_path, working_dir_root, exempt_paths, is_subagent
+            abs_path, working_dir_root, allowlist, is_subagent
         )
         if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
             violations.append(abs_path)
@@ -211,12 +211,12 @@ def audit_mark_announced(session_id, path):
             entry["announced"] = True
 
 
-def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None):
+def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
     """Settlement judgment for the L3 gate (Lane 2b input): re-scan the
     root and return the pending paths that STILL violate (file present and
     still classifying as an unprotected root-level file). A pending path
     is settled when it is gone, moved outside the root, or legalized
-    (allowlist / exempt / session dir). Fail-open: a failed re-scan keeps
+    (allowlist file / prefix / session dir). Fail-open: a failed re-scan keeps
     the full pending set (the gate stays latched).
     """
     try:
@@ -224,7 +224,7 @@ def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None)
         if not pending:
             return []
         if working_dir_root is None:
-            working_dir_root, exempt_paths = get_cached_config(
+            working_dir_root, allowlist = get_cached_config(
                 state.session.registered_ctx
             )
         if working_dir_root is None:
@@ -241,7 +241,7 @@ def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None)
             if _classify_fn is None:
                 raise RuntimeError("audit classifier not wired")
             verdict = _classify_fn(
-                path, working_dir_root, exempt_paths or [], is_subagent=False
+                path, working_dir_root, allowlist or [], is_subagent=False
             )
             if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
                 unresolved.append(path)
@@ -252,7 +252,7 @@ def audit_unresolved_paths(session_id, working_dir_root=None, exempt_paths=None)
 
 
 def _audit_notice_message(paths):
-    """The single L1 notice text (5.18): the paths and the remediation.
+    """The single L1 notice text (5.18, v2.6 B2): the paths and the remediation.
     One notice per result listing every unannounced violation; only this
     notice ever enters the conversation (context hygiene)."""
     lines = [
@@ -264,7 +264,7 @@ def _audit_notice_message(paths):
     lines.append(
         "Remediation: move the file(s) into a Session Directory "
         "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
-        "allowed_root_files in dir-whip-config.yaml. Further writes to "
+        "allowlist in dir-whip-config.yaml as file:<basename> (e.g. file:notes.txt). Further writes to "
         "the Working Directory are blocked until then."
     )
     return "\n".join(lines)
@@ -327,7 +327,7 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
         return None
 
 
-def _audit_gate_unresolved(session_id, working_dir_root, exempt_paths):
+def _audit_gate_unresolved(session_id, working_dir_root, allowlist):
     """Unresolved pending paths for the L3 gate (empty -> gate open).
 
     Respects the write_audit switch (disabled -> open). A failed root
@@ -338,7 +338,7 @@ def _audit_gate_unresolved(session_id, working_dir_root, exempt_paths):
     try:
         if not write_audit_enabled():
             return []
-        return audit_unresolved_paths(session_id, working_dir_root, exempt_paths)
+        return audit_unresolved_paths(session_id, working_dir_root, allowlist)
     except Exception as exc:
         logger.debug("dir-whip: audit gate check error (fail-open): %s", exc)
         return []
@@ -360,7 +360,7 @@ def _audit_gate_block_message(display_paths, is_subagent):
         lines.append(
             "Fix: move the file(s) into a Session Directory "
             "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
-            "allowed_root_files in dir-whip-config.yaml."
+            "allowlist in dir-whip-config.yaml as file:<basename> (e.g. file:notes.txt)."
         )
     lines.append("Reply using the [Reason]/[Next] template.")
     return "\n".join(lines)
@@ -394,7 +394,7 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
     }
 
 
-def _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths):
+def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
     """Take the pre snapshot for an ALLOWED terminal call (5.18).
 
     Audit disabled (write_audit: false) -> nothing. Root entry count
@@ -419,14 +419,14 @@ def _audit_pre_snapshot(session_id, task_id, working_dir_root, exempt_paths):
             return
         with state.audit.lock:
             state.audit.pre_snapshots[(session_id, task_id)] = (
-                snap, working_dir_root, tuple(exempt_paths),
+                snap, working_dir_root, tuple(allowlist),
             )
     except Exception as exc:
         logger.debug("dir-whip: audit pre-snapshot error (fail-open): %s", exc)
 
 
 def _audit_post_check(session_id, task_id, is_subagent=False):
-    """Post terminal re-scan: diff the pre snapshot and classify (5.18).
+    """Post terminal re-scan: diff the pre snapshot and classify (5.18, v2.6 B2).
 
     Pops the (session_id, task_id) pairing; no pairing (blocked-at-pre,
     cap skip, disabled, scan failure) -> nothing. Each violation joins the
@@ -442,7 +442,7 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
             record = state.audit.pre_snapshots.pop((session_id, task_id), None)
         if record is None:
             return
-        before, working_dir_root, exempt_paths = record
+        before, working_dir_root, allowlist = record
         if not write_audit_enabled():
             return
         after = snapshot(working_dir_root)
@@ -450,7 +450,7 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
             return
         diff = diff_snapshots(before, after)
         classified = audit_classify_diff(
-            diff, before, after, working_dir_root, list(exempt_paths), is_subagent,
+            diff, before, after, working_dir_root, list(allowlist), is_subagent,
         )
         for path in classified["violations"]:
             audit_pending_add(session_id, path)

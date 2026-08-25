@@ -1,11 +1,15 @@
 """Configuration loading, working_dir_root resolution and statistics for
-dir-whip (v0.3.1).
+dir-whip (v0.4.0, spec v2.6 B2).
 
 Inverted resolution chain (spec 5.5): dir-whip-config.yaml working_dir_root
 override (authoritative) -> current profile's terminal.cwd -> fail-open
 (guard disabled). The v0.1.0 memo chain is removed (spec 1.3/B4); the sole
 surviving tool is dir_whip_allow_path (spec 5.7). hermes_home honors
 the HERMES_HOME env override before the platform default (D5).
+
+Spec v2.6 B2: single unified key allowlist: [] with discriminated
+file:<basename> | prefix:<abs-path> (old keys exempt_paths / allowed_root_files
+deleted, no backward compat, strict empty fallback).
 """
 
 import datetime
@@ -50,6 +54,22 @@ except ImportError:
         _profile_home,
         relativize_target,
     )
+
+# Unified allowlist core: parsing/validation/matching lives in allowlist.py.
+# Guarded import to keep core zero-host-import and survive test venv.
+try:
+    from .allowlist import (
+        parse_allowlist as _allowlist_parse,
+        format_allowlist as _allowlist_format,
+        is_allowlist_prefix as _is_allowlist_prefix,
+    )
+except ImportError:
+    try:
+        from allowlist import parse_allowlist as _allowlist_parse, format_allowlist as _allowlist_format, is_allowlist_prefix as _is_allowlist_prefix  # type: ignore
+    except ImportError:
+        _allowlist_parse = None
+        _allowlist_format = None
+        _is_allowlist_prefix = None
 
 _cache_lock = threading.Lock()
 _cached_result = None
@@ -156,34 +176,75 @@ def write_audit_entry_cap(config_path=None):
         return 2000
 
 
-def _parse_allowed_root_files(value):
-    """Parse the allowed_root_files config value (spec 5.6, D1).
+def _parse_allowlist(value):
+    """Parse the unified allowlist config value (spec 5.6 B2, D1).
 
-    Accepts a YAML list; only string elements are kept. STRICT fallback:
-    None / non-list / empty -> [] (every root file blocks, fail-closed).
+    Single key ``allowlist: []`` with discriminated ``file:<basename>`` |
+    ``prefix:<abs-path>`` entries. STRICT fallback: None / non-list -> []
+    (every root file blocks, fail-closed). When allowlist core is available,
+    invalid discriminated entries are silently ignored (strict filter) and
+    the result is normalized via format_allowlist for stable storage.
+    Otherwise, filter to string entries only.
     """
     if not isinstance(value, list):
         return []
+    if _allowlist_parse is not None and _allowlist_format is not None:
+        try:
+            parsed = _allowlist_parse(value)
+            return _allowlist_format(parsed)
+        except Exception:
+            pass
+    # Fallback: keep string entries only
     return [item for item in value if isinstance(item, str)]
+
+
+def _get_guard_config_path():
+    """Profile-aware dir-whip-config.yaml location (stats._stats_jsonl_path pattern).
+
+    HERMES_HOME may be a profile dir (parent == "profiles") -> use it directly;
+    otherwise when a session profile is set, resolve via _profile_home so
+    per-profile configs land in profiles/<name>/dir-whip/ (SCR-037 D3).
+    Falls back to HERMES_HOME/dir-whip/... for default tests.
+    """
+    home = _get_hermes_home()
+    profile = None
+    try:
+        if getattr(state.session, "session_profile", None):
+            profile = state.session.session_profile
+    except Exception:
+        pass
+    if not profile:
+        try:
+            ctx = getattr(state.session, "registered_ctx", None)
+            if ctx is not None and getattr(ctx, "profile_name", None):
+                profile = ctx.profile_name
+        except Exception:
+            pass
+    if profile:
+        try:
+            home = _profile_home(home, profile)
+        except Exception:
+            pass
+    return Path(home) / "dir-whip" / "dir-whip-config.yaml"
 
 
 def load_guard_config(config_path=None):
     """Load dir-whip-config.yaml exemptions and overrides.
 
-    Returns a dict with at least 'exempt_paths' (list), 'terminal_guard'
-    (bool, default True), 'allowed_root_files' (list; STRICT fallback []
-    when the key is absent), 'write_audit' (bool, default True),
+    Returns a dict with at least 'allowlist' (list of discriminated
+    strings; STRICT fallback [] when the key is absent or not a list),
+    'terminal_guard' (bool, default True), 'write_audit' (bool, default True),
     'write_audit_entry_cap' (int, default 2000) and optionally
-    'working_dir_root' (str).
+    'working_dir_root' (str). Old keys exempt_paths / allowed_root_files are
+    removed (B2 clean break, no backward compat).
     """
     if config_path is None:
-        config_path = _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
+        config_path = _get_guard_config_path()
     config_path = Path(config_path)
 
     result = {
-        "exempt_paths": [],
+        "allowlist": [],
         "terminal_guard": True,
-        "allowed_root_files": [],
         "write_audit": True,
         "write_audit_entry_cap": 2000,
     }
@@ -195,11 +256,10 @@ def load_guard_config(config_path=None):
         with open(config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if data and isinstance(data, dict):
-            result["exempt_paths"] = data.get("exempt_paths") or []
             if data.get("working_dir_root"):
                 result["working_dir_root"] = data["working_dir_root"]
             result["terminal_guard"] = _parse_terminal_guard_value(data.get("terminal_guard"))
-            result["allowed_root_files"] = _parse_allowed_root_files(data.get("allowed_root_files"))
+            result["allowlist"] = _parse_allowlist(data.get("allowlist"))
             result["write_audit"] = _parse_write_audit_value(data.get("write_audit"))
             result["write_audit_entry_cap"] = _parse_entry_cap_value(
                 data.get("write_audit_entry_cap", 2000)
@@ -349,24 +409,6 @@ def is_inside_session_dir(path, working_dir_root):
     return False
 
 
-def is_exempt(target_path, exempt_paths):
-    """Check if target_path matches any exempt path (spec 5.6).
-
-    Prefix match on forward-slash-normalized paths; case-insensitive on
-    Windows via casefold (SCR-006).
-    """
-    normalized = str(target_path).replace("\\", "/")
-    if os.name == "nt":
-        normalized = normalized.casefold()
-    for exempt in exempt_paths:
-        exempt_normalized = str(exempt).replace("\\", "/")
-        if os.name == "nt":
-            exempt_normalized = exempt_normalized.casefold()
-        if normalized.startswith(exempt_normalized):
-            return True
-    return False
-
-
 # ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
 
 def _normalize_allowlist_path(path):
@@ -434,11 +476,11 @@ def dir_whip_allow_path(args, **kwargs):
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
-    """Resolve working_dir_root + exempt_paths."""
+    """Resolve working_dir_root + allowlist (single-key B2)."""
     working_dir_root = resolve_working_dir_root(ctx, config_path)
     cfg = load_guard_config(config_path)
-    exempt_paths = cfg.get("exempt_paths", [])
-    return (working_dir_root, exempt_paths)
+    allowlist = cfg.get("allowlist", [])
+    return (working_dir_root, allowlist)
 
 
 def _resolve_registered_config():
@@ -457,7 +499,7 @@ else:
 def get_cached_config(ctx, config_path=None):
     """Get or create cached configuration (thread-safe singleton).
 
-    Returns (working_dir_root, exempt_paths) tuple. working_dir_root may
+    Returns (working_dir_root, allowlist) tuple. working_dir_root may
     be None (guard disabled). The root slot is SESSION-SCOPED (SCR-027):
     the first resolution (register-time) seeds the session root, and every
     top-level on_session_start refreshes it via refresh_resolution(ctx);
@@ -487,6 +529,31 @@ def get_cached_config(ctx, config_path=None):
     return (get_session_root(), result[1])
 
 
+def _refresh_allowlist_cache():
+    """Narrow cache refresh for unified allowlist (spec v2.6 B2).
+
+    Invalidates the cached allowlist so the next get_cached_config /
+    classify_target sees the updated file. Clears both the local lock-guarded
+    cache and the lazy_singleton accessor when present. Session root is
+    re-seeded from the refreshed result via get_cached_config's session logic.
+    """
+    global _cached_result, _cache_initialized
+    with _cache_lock:
+        _cached_result = None
+        _cache_initialized = False
+    if _registered_config_accessor is not None:
+        try:
+            _registered_config_accessor.reset()
+        except Exception:
+            pass
+    return
+
+
+def refresh_allowlist_cache():
+    """Public alias for narrow allowlist cache refresh."""
+    return _refresh_allowlist_cache()
+
+
 def reset_cache():
     """Reset config cache, stats and runtime allowlist (register/re-register)."""
     global _cached_result, _cache_initialized
@@ -505,3 +572,113 @@ def reset_cache():
     stats.reset()
 
 
+# ---------------------------------------------------------------- Backward-compat alias (spec v2.6 B2)
+# tests/test_config.py imports is_exempt from dirwhip.config but the
+# single-key allowlist B2 removed the old exempt_paths helper. This
+# compatibility wrapper keeps that import alive and bridges both tagged
+# (prefix:/file:) and untagged (bare prefix paths) allowlists. Zero
+# host import: only stdlib + local allowlist core when available.
+
+
+def _is_exempt_normalize(path):
+    """Forward-slash normalize for is_exempt prefix matching."""
+    if path is None:
+        return ""
+    s = str(path).replace("\\", "/")
+    s = re.sub(r"/{2,}", "/", s)
+    if s != "/" and not re.match(r"^[A-Za-z]:/$", s) and s.endswith("/"):
+        s = s.rstrip("/")
+    return s
+
+
+def is_exempt(target_path, allowlist=None):
+    """Backward-compatible prefix exemption check (B2 single-key bridge).
+
+    Args:
+        target_path: absolute path to test (forward or back slashes).
+        allowlist: list of strings — may be tagged ``prefix:<abs>`` /
+            ``file:<base>`` (new B2 form) or bare prefix paths like
+            ``E:/ws/projects/foo`` (old tests). Non-list returns False.
+
+    Delegates to ``allowlist.is_allowlist_prefix`` when the list looks
+    tagged and the allowlist core is available; otherwise falls back to
+    a local prefix match (slash-aware, backslash-normalized,
+    case-insensitive on Windows / drive-rooted on POSIX). Bare entries
+    without a slash/colon are treated as file basenames and ignored for
+    prefix exemption. Keeps ``tests/test_config.py`` collecting.
+    """
+    if not isinstance(allowlist, (list, tuple, set)):
+        return False
+    if not isinstance(target_path, str):
+        return False
+    # Fast path: delegate to allowlist core when list contains tagged entries
+    try:
+        has_tagged = any(
+            isinstance(e, str) and (e.strip().startswith("prefix:") or e.strip().startswith("file:"))
+            for e in allowlist
+        )
+        if has_tagged and _allowlist_parse is not None and _is_allowlist_prefix is not None:
+            try:
+                parsed = _allowlist_parse(list(allowlist))
+                if _is_allowlist_prefix(target_path, parsed):
+                    return True
+                # If tagged list contained only file: entries, prefix check
+                # correctly returns False — no fallback to bare handling needed
+                # but keep falling through for mixed lists with bare prefixes
+                # (e.g. ["prefix:E:/a", "E:/b"]). Only return False early when
+                # all entries were tagged.
+                all_tagged = all(
+                    isinstance(e, str) and (e.strip().startswith("prefix:") or e.strip().startswith("file:") or not e.strip())
+                    for e in allowlist
+                )
+                if all_tagged:
+                    return False
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Fallback: bare/untagged prefix match (old exempt_paths semantics)
+    try:
+        target_norm = _is_exempt_normalize(target_path)
+        if not target_norm:
+            return False
+        for entry in allowlist:
+            if not isinstance(entry, str):
+                continue
+            stripped = entry.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("prefix:"):
+                pref = stripped[7:].strip()
+            elif stripped.startswith("file:"):
+                # file: entries do not exempt directory prefixes
+                continue
+            else:
+                # Bare entry compat: no slash and no colon -> file basename, not a prefix
+                if "/" not in stripped and "\\" not in stripped and ":" not in stripped:
+                    continue
+                pref = stripped
+            pref_norm = _is_exempt_normalize(pref)
+            if not pref_norm:
+                continue
+            if os.name == "nt":
+                targ_cf = target_norm.casefold()
+                pref_cf = pref_norm.casefold()
+                if targ_cf == pref_cf:
+                    return True
+                if targ_cf.startswith(pref_cf.rstrip("/") + "/"):
+                    return True
+            else:
+                drive_re = re.compile(r"^[A-Za-z]:/")
+                if drive_re.match(target_norm) and drive_re.match(pref_norm):
+                    t_cf = target_norm.casefold()
+                    p_cf = pref_norm.casefold()
+                    if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
+                        return True
+                else:
+                    if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
+                        return True
+        return False
+    except Exception:
+        return False

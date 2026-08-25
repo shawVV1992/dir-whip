@@ -1,6 +1,6 @@
 ---
 name: workspace-organization
-description: "Use when creating, saving, writing, moving, or deleting files in a Hermes workspace, organizing deliverables, or auditing workspace compliance."
+description: "Use when creating session dirs - create session dirs in a Hermes workspace - Use when creating, saving, writing, moving, or deleting files in a Hermes workspace, organizing deliverables, or auditing workspace compliance."
 author: dir-whip
 license: MIT
 platforms: [linux, macos, windows]
@@ -17,6 +17,7 @@ File placement discipline for Hermes agent workspaces: session directory structu
 ## When to Use
 
 Use when:
+- Before first file write in a Hermes workspace - you MUST create session dir first
 - Creating, saving, writing, moving, or deleting files in a Hermes workspace
 - Organizing deliverables or designing workspace layout
 - Auditing workspace compliance ("tidy workspace", cron governance)
@@ -25,15 +26,17 @@ Do NOT use when:
 - Project mode is active (project_list tool available, active_id not null, CWD under project folders)
 - CWD is not under the current profile's Working Directory
 
-### Scope Check (Layer 0)
+### Scope Check (Layer 0) - MANDATORY
 
-Evaluate in order. First match wins. Do NOT evaluate subsequent conditions.
+You MUST evaluate this checklist in order. First match wins. Do NOT evaluate subsequent conditions.
 
 ```
 IF project_list tool available AND active_id not null AND CWD under project folders
   -> PROJECT MODE. Stop. This skill does not apply.
 IF CWD not under the current profile's Working Directory
   -> PROJECT MODE. Stop. This skill does not apply.
+IF no session dir exists for this task
+  -> DEFAULT MODE. Create session dir first: python scripts/create_session_dir.py <task> --workspace <root>, then proceed to Layer 1.
 OTHERWISE
   -> DEFAULT MODE. Proceed to Layer 1.
 ```
@@ -42,7 +45,7 @@ OTHERWISE
 
 | Scenario | Action |
 |----------|--------|
-| Writing any file | Classify target → session dir → `Outputs/` or `.tmp/` |
+| Writing any file | classify → create session dir → write: Classify target → create session dir if needed → `Outputs/` or `.tmp/` |
 | Root write blocked | Create session dir, re-target there |
 | Delete / overwrite / move | Confirmation Protocol (list files → wait for explicit yes) |
 | User specifies a path | Call `dir_whip_allow_path(path)` BEFORE writing |
@@ -63,9 +66,10 @@ Triggered by: any file write, create, save, delete, or move.
 
 ### 2. Session directory discipline
 
-- Session dirs are created LAZILY at first file write, not at conversation start
-- Not inside a session dir? Create one:
-  `python scripts/create_session_dir.py <task_name> --workspace <working_dir>`
+- Session dirs are created LAZILY at first file write, not at conversation start - you MUST create session dir before first write
+- Not inside a session dir? You MUST create one before first write:
+  `python scripts/create_session_dir.py <task> --workspace <root>`
+  Example: `python scripts/create_session_dir.py <task> --workspace <root>` - replace <task> and <root> with your values (legacy form `python scripts/create_session_dir.py <task_name> --workspace <working_dir>` also works)
 - Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
 - Root allows ONLY: whitelist files, session-format dirs, `.hermes/`
 - `Outputs/` blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
@@ -160,10 +164,12 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 | Session dir created at conversation start | Misunderstood lazy creation | Create at first file write only |
 | Deleted without confirmation | Instruction treated as confirmation | List files, wait for explicit yes |
 | Existing repos outside workspace | Relocation attempted | Point via rules file, don't relocate |
+| First write without session dir (漏触发) | Skill not triggered before first write | Before first file write, you MUST create session dir: `python scripts/create_session_dir.py <task> --workspace <root>` |
 
 ## Verification
 
 - Classified the target before every write?
+- Created session dir before first write?
 - File inside a session dir, in the correct `Outputs/`/`.tmp/`?
 - No non-whitelist files at the Working Directory root?
 - Confirmation obtained before delete/overwrite/move?

@@ -74,6 +74,185 @@ BLACKLIST_NAMES = {
 }
 
 
+# --- SCR-037 enablement precheck (spec 5.7, ADR-0008 D4) ---
+# Inline layout-aware helpers (do NOT import workspace_resolver for this;
+# stdlib only, per #55 boundary). Logic mirrors dir-whip/config.py:292-311
+# and workspace_resolver.py:220-242.
+
+def _precheck_hermes_home():
+    """Inline hermes_home() (env-aware, stdlib only)."""
+    env_home = (os.environ.get("HERMES_HOME") or "").strip()
+    if env_home:
+        return env_home
+    if os.name == "nt":
+        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
+    return os.path.join(os.path.expanduser("~"), ".hermes")
+
+
+def _precheck_current_profile(hh):
+    """Current profile: HERMES_SESSION_PROFILE wins, else infer from hh shape."""
+    profile = (os.environ.get("HERMES_SESSION_PROFILE") or "").strip()
+    if profile:
+        return profile
+    norm = os.path.normpath(str(hh))
+    if os.path.basename(os.path.dirname(norm)) == "profiles":
+        name = os.path.basename(norm)
+        if name:
+            return name
+    return "default"
+
+
+def _precheck_profile_config_path(hh, profile):
+    """Layout-aware config.yaml path (both home layouts, per R2)."""
+    if not profile or profile == "default":
+        norm = os.path.normpath(str(hh))
+        if os.path.basename(os.path.dirname(norm)) == "profiles":
+            return os.path.join(os.path.dirname(os.path.dirname(norm)), "config.yaml")
+        return os.path.join(hh, "config.yaml")
+    norm = os.path.normpath(str(hh))
+    if os.path.basename(norm) == profile and os.path.basename(os.path.dirname(norm)) == "profiles":
+        return os.path.join(hh, "config.yaml")
+    return os.path.join(hh, "profiles", profile, "config.yaml")
+
+
+def _precheck_parse_plugins_lists(path):
+    """Parse plugins.enabled / plugins.disabled from config.yaml.
+
+    Uses yaml.safe_load when available, else a minimal line scan that
+    handles both inline (enabled: [dir-whip]) and block
+    (enabled:\\n  - dir-whip) forms. Returns (enabled, disabled) lists.
+    """
+    # Try PyYAML first
+    try:
+        import yaml  # noqa: PLC0415
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            plugins = data.get("plugins")
+            if isinstance(plugins, dict):
+                en = plugins.get("enabled")
+                dis = plugins.get("disabled")
+                enabled = [str(x) for x in en if isinstance(x, str)] if isinstance(en, list) else []
+                disabled = [str(x) for x in dis if isinstance(x, str)] if isinstance(dis, list) else []
+                return enabled, disabled
+        return [], []
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # Fallback line scan (stdlib only)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except Exception:
+        return [], []
+    enabled = []
+    disabled = []
+    in_plugins = False
+    current_key = None
+    in_list = False
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if raw.startswith("plugins:"):
+            in_plugins = True
+            current_key = None
+            in_list = False
+            continue
+        if in_plugins:
+            if raw[0] not in (" ", "\t"):
+                if ":" in raw:
+                    in_plugins = False
+                    current_key = None
+                    in_list = False
+                    continue
+            if stripped.startswith("enabled:"):
+                rest = stripped[len("enabled:"):].strip()
+                if rest:
+                    inner = rest.strip("[]").strip()
+                    if inner:
+                        for part in inner.split(","):
+                            part = part.strip().strip("'\"")
+                            if part:
+                                enabled.append(part)
+                    current_key = None
+                    in_list = False
+                else:
+                    current_key = "enabled"
+                    in_list = True
+                continue
+            if stripped.startswith("disabled:"):
+                rest = stripped[len("disabled:"):].strip()
+                if rest:
+                    inner = rest.strip("[]").strip()
+                    if inner:
+                        for part in inner.split(","):
+                            part = part.strip().strip("'\"")
+                            if part:
+                                disabled.append(part)
+                    current_key = None
+                    in_list = False
+                else:
+                    current_key = "disabled"
+                    in_list = True
+                continue
+            if in_list and current_key and stripped.startswith("- "):
+                val = stripped[2:].strip().strip("'\"")
+                if val:
+                    if current_key == "enabled":
+                        enabled.append(val)
+                    else:
+                        disabled.append(val)
+                continue
+            if in_list and current_key and stripped and not stripped.startswith("- "):
+                # End of current block list on next key or non-list line
+                if ":" in stripped:
+                    in_list = False
+                    current_key = None
+                    continue
+                in_list = False
+                current_key = None
+    return enabled, disabled
+
+
+def _precheck_plugin_status(hh=None):
+    """Determine enablement: enabled / disabled / not-enabled (fail-safe)."""
+    try:
+        if hh is None:
+            hh = _precheck_hermes_home()
+        profile = _precheck_current_profile(hh)
+        cfg_path = _precheck_profile_config_path(hh, profile)
+        enabled, disabled = _precheck_parse_plugins_lists(cfg_path)
+        if "dir-whip" in enabled:
+            return "enabled"
+        if "dir-whip" in disabled:
+            return "disabled"
+        return "not-enabled"
+    except Exception:
+        return "not-enabled"
+
+
+def _run_enablement_precheck(hh=None):
+    """Emit WARN when dir-whip is not enabled/disabled; quiet when enabled.
+
+    Must NOT affect exit code. Output goes to stderr (preserves --json stdout)
+    and is visible in combined stdout+stderr. Message contains the required
+    substrings per spec 5.7 / testing-standards §7.8 row 8.
+    """
+    try:
+        status = _precheck_plugin_status(hh)
+        if status == "enabled":
+            return
+        if status == "disabled":
+            sys.stderr.write("[WARN] dir-whip plugin is disabled - run 'hermes plugins enable dir-whip' to enable\n")
+        else:
+            sys.stderr.write("[WARN] dir-whip plugin is not enabled - run 'hermes plugins enable dir-whip' to enable\n")
+    except Exception:
+        pass
+
+
 def to_fwd(path):
     """Convert a path to forward slashes for stable output."""
     return path.replace(os.sep, "/")
@@ -308,6 +487,9 @@ def main(argv=None):
         if not os.path.isdir(root):
             sys.stderr.write("error: resolved Working Directory does not exist: %s\n" % to_fwd(root))
             return 2
+
+    # SCR-037 enablement precheck (spec 5.7): quiet when enabled, WARN otherwise; no exit code change
+    _run_enablement_precheck(hh)
 
     violations = audit(root, hh)
 

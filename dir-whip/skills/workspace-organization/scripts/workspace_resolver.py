@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S0: Shared READ-ONLY workspace resolver (v0.3.1, spec 4.4).
+"""S0: Shared READ-ONLY workspace resolver (v0.4.0, spec 4.4, v2.6 B2).
 
 Shared Working Directory resolution module imported by the two session
 scripts (create_session_dir.py, audit_workspace.py) -- the ONLY
@@ -18,6 +18,12 @@ Self-contained: stdlib only, no PyYAML dependency -- config parsing is
 minimal line-based, mirroring the plugin's PyYAML-based parser
 (dir-whip/config.py parse_terminal_cwd).
 
+Spec v2.6 B2: single unified key allowlist: [] with discriminated
+file:<basename> | prefix:<abs-path> (old keys exempt_paths /
+allowed_root_files removed, no backward compat). This module duplicates
+allowlist parsing/validation (no import) to keep parity with
+dir-whip/allowlist.py per ADR-0006.
+
 Functions:
     hermes_home()            -- Hermes home (HERMES_HOME override first;
                                Windows LOCALAPPDATA/hermes, POSIX ~/.hermes)
@@ -25,8 +31,8 @@ Functions:
                                (MSYS mapping, drive inheritance, normpath;
                                POSIX normpath identity; UNC unaffected)
     parse_terminal_cwd(path) -- minimal terminal.cwd parser for config.yaml
-    allowed_root_files(hh)   -- dir-whip-config allowed_root_files whitelist
-                               (strict EMPTY list when absent; shared audit)
+    allowed_root_files(hh)   -- allowlist file: subset (strict EMPTY when
+                               absent; shared audit, v2.6 B2 parity)
     resolve_working_dir_root(workspace, hh, env) -- 4-step chain (spec 4.4)
     validate_workspace(path, hh, env) -- boundary validation (spec 4.4)
 """
@@ -54,6 +60,10 @@ WORKSPACE_MISMATCH_MESSAGE = (
 
 _MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
 _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
+_DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+MAX_FILENAME_LEN = 255
+MAX_PREFIX_LEN = 4096
 
 
 def hermes_home(env=None):
@@ -310,25 +320,201 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     return None
 
 
+# ---------------------------------------------------------------- Unified allowlist parity (spec v2.6 B2, duplicated from allowlist.py)
+
+def _ws_is_absolute_any(target):
+    """Rooted on local OS, Windows-drive-rooted, or backslash-rooted (parity)."""
+    if os.path.isabs(target):
+        return True
+    if _DRIVE_ROOTED_RE.match(target):
+        return True
+    return target.startswith("\\") and not target.startswith("\\\\")
+
+
+def _ws_validate_file(name):
+    if not isinstance(name, str):
+        return False, "filename must be a string"
+    stripped = name.strip()
+    if not stripped:
+        return False, "filename must not be empty"
+    if len(stripped) > MAX_FILENAME_LEN:
+        return False, "filename too long (max %d)" % MAX_FILENAME_LEN
+    if "/" in stripped or "\\" in stripped:
+        return False, "filename must not contain path separators"
+    if stripped in (".", ".."):
+        return False, "filename must not be '.' or '..'"
+    if ".." in stripped:
+        return False, "filename must not contain '..'"
+    if ":" in stripped:
+        return False, "filename must not contain ':'"
+    if os.path.basename(stripped) != stripped:
+        return False, "filename must be basename only"
+    return True, ""
+
+
+def _ws_validate_prefix(path):
+    if not isinstance(path, str):
+        return False, "prefix must be a string"
+    stripped = path.strip()
+    if not stripped:
+        return False, "prefix must not be empty"
+    if len(stripped) > MAX_PREFIX_LEN:
+        return False, "prefix too long (max %d)" % MAX_PREFIX_LEN
+    if not _ws_is_absolute_any(stripped):
+        return False, "prefix must be absolute"
+    normalized_slashes = stripped.replace("\\", "/")
+    parts = normalized_slashes.split("/")
+    if ".." in parts:
+        return False, "prefix must not contain '..'"
+    return True, ""
+
+
+def _ws_normalize_prefix(path):
+    if not isinstance(path, str):
+        return ""
+    s = path.strip().replace("\\", "/")
+    s = re.sub(r"/{2,}", "/", s)
+    if s == "/":
+        return s
+    if re.match(r"^[A-Za-z]:/$", s):
+        return s
+    if s.endswith("/") and len(s) > 1:
+        s = s.rstrip("/")
+        if not s:
+            s = "/"
+    return s
+
+
+def _ws_normalize_for_match(path):
+    if path is None:
+        return ""
+    s = str(path).replace("\\", "/")
+    s = re.sub(r"/{2,}", "/", s)
+    if s != "/" and not re.match(r"^[A-Za-z]:/$", s) and s.endswith("/"):
+        s = s.rstrip("/")
+    return s
+
+
+def _ws_parse_allowlist(raw):
+    """Parity duplicate of allowlist.parse_allowlist (no import, stdlib only)."""
+    empty = {"files": set(), "prefixes": set()}
+    if not isinstance(raw, list):
+        return {"files": set(), "prefixes": set()}
+    files = set()
+    prefixes = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("file:"):
+            part = stripped[5:].strip()
+            ok, _ = _ws_validate_file(part)
+            if ok:
+                files.add(part)
+            continue
+        if stripped.startswith("prefix:"):
+            part = stripped[7:].strip()
+            ok, _ = _ws_validate_prefix(part)
+            if ok:
+                prefixes.add(_ws_normalize_prefix(part))
+            continue
+        has_slash = "/" in stripped or "\\" in stripped
+        has_colon = ":" in stripped
+        is_prefix_bare = has_slash or has_colon
+        if is_prefix_bare:
+            ok, _ = _ws_validate_prefix(stripped)
+            if ok:
+                prefixes.add(_ws_normalize_prefix(stripped))
+            continue
+        else:
+            ok, _ = _ws_validate_file(stripped)
+            if ok:
+                files.add(stripped)
+            continue
+    return {"files": files, "prefixes": prefixes}
+
+
+def _ws_is_allowlist_file(name, parsed):
+    if not isinstance(name, str):
+        return False
+    base = os.path.basename(name.strip().replace("\\", "/"))
+    if not base:
+        base = name.strip()
+    files = (parsed or {}).get("files") or set()
+    if os.name == "nt":
+        base_cf = base.casefold()
+        for f in files:
+            if isinstance(f, str) and f.casefold() == base_cf:
+                return True
+        return False
+    else:
+        return base in files
+
+
+def _ws_is_allowlist_prefix(path, parsed):
+    if not isinstance(path, str):
+        return False
+    stripped = path.strip()
+    if not stripped:
+        return False
+    target_norm = _ws_normalize_for_match(stripped)
+    prefixes = (parsed or {}).get("prefixes") or set()
+    if os.name == "nt":
+        target_cf = target_norm.casefold()
+        for pref in prefixes:
+            if not isinstance(pref, str):
+                continue
+            pref_norm = _ws_normalize_for_match(pref).casefold()
+            if target_cf == pref_norm:
+                return True
+            if target_cf.startswith(pref_norm.rstrip("/") + "/"):
+                return True
+        return False
+    else:
+        for pref in prefixes:
+            if not isinstance(pref, str):
+                continue
+            pref_norm = _ws_normalize_for_match(pref)
+            drive_re = re.compile(r"^[A-Za-z]:/")
+            if drive_re.match(target_norm) and drive_re.match(pref_norm):
+                t_cf = target_norm.casefold()
+                p_cf = pref_norm.casefold()
+                if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
+                    return True
+            else:
+                if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
+                    return True
+        return False
+
+
 def _parse_allowed_root_files_yaml(data):
-    """Extract allowed_root_files from a parsed YAML dict."""
+    """Extract allowlist file subset from parsed YAML dict (v2.6 B2 parity).
+
+    Reads the single key ``allowlist``; strict empty fallback when absent or
+    not a list (fail-closed). Old keys exempt_paths / allowed_root_files are
+    ignored (B2 clean break, no backward compat).
+    """
     if not isinstance(data, dict):
         return []
-    raw = data.get("allowed_root_files")
-    if not isinstance(raw, list):
-        return []
-    return [str(item) for item in raw if isinstance(item, str) and item]
+    raw = data.get("allowlist")
+    parsed = _ws_parse_allowlist(raw)
+    return sorted(parsed.get("files") or [])
 
 
 def _parse_allowed_root_files_lines(path):
-    """Line-based allowed_root_files parser (PyYAML unavailable).
+    """Line-based allowlist parser (PyYAML unavailable, v2.6 B2).
 
-    Handles the template shape:
-        allowed_root_files:
-          - <name>
-    and the inline shape:  allowed_root_files: ["<name>"]
+    Handles:
+        allowlist:
+          - file:<name>
+          - prefix:<abs-path>
+          - <bare>
+        and inline:  allowlist: ["file:a", "prefix:E:/p"]
+    Returns file subset only (for audit check 1).
     """
-    result = []
+    result_raw = []
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -339,37 +525,38 @@ def _parse_allowed_root_files_lines(path):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        if stripped.startswith("allowed_root_files:"):
-            rest = stripped[len("allowed_root_files:"):].strip()
+        if stripped.startswith("allowlist:"):
+            rest = stripped[len("allowlist:"):].strip()
             in_list = True
             if rest:
-                # Inline list: ["<name>"] or single quoted/unquoted value
                 inner = rest.strip("[]").strip()
-                for part in inner.split(","):
-                    part = part.strip().strip("'\"")
-                    if part:
-                        result.append(part)
+                if inner:
+                    for part in inner.split(","):
+                        part = part.strip().strip("'\"")
+                        if part:
+                            result_raw.append(part)
                 in_list = False
             continue
         if in_list:
             if stripped.startswith("- "):
                 value = stripped[2:].strip().strip("'\"")
                 if value:
-                    result.append(value)
+                    result_raw.append(value)
             else:
                 in_list = False
-    return result
+    parsed = _ws_parse_allowlist(result_raw)
+    return sorted(parsed.get("files") or [])
 
 
 def allowed_root_files(hh=None):
-    """Root-file whitelist from dir-whip-config.yaml (audit side of D1).
+    """Root-file whitelist from dir-whip-config.yaml (audit side, v2.6 B2).
 
-    Reads the `allowed_root_files` key from
+    Reads the unified ``allowlist`` key's ``file:`` subset from
     <HERMES_HOME>/dir-whip/dir-whip-config.yaml. STRICT fallback: when
     the config file or the key is absent, returns an EMPTY list -> every
     root file is flagged (fail-closed, over-report), matching the plugin
-    guard's D1 semantics so guard and audit never disagree about root
-    files. No rules-file name is hardcoded here.
+    guard's B2 semantics so guard and audit never disagree. No rules-file
+    name is hardcoded here.
     """
     if hh is None:
         hh = hermes_home()

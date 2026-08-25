@@ -12,11 +12,12 @@
 # current profile's terminal.cwd). Remove the # to pin the Working Directory.
 # working_dir_root: E:/HermesWorkspace/default
 
-exempt_paths: []
-
-# Root files allowed at the Working Directory root (D1: guard and
-# audit read the same key; strict fallback = empty list when absent).
-allowed_root_files: ["AGENTS.md"]
+# Single unified allowlist (B2, v2.6): file:<basename> | prefix:<abs-path>
+# file:<basename>  -> root file allowed at Working Directory root
+# prefix:<abs-path> -> exempt prefix (project dir inside workspace, may end with /)
+# Use forward slashes for prefixes. Missing key -> strict empty allowlist (fail-closed).
+# Old keys exempt_paths / allowed_root_files are removed (no backward compat, B2).
+allowlist: []  # e.g. file:README.md , prefix:E:/HermesWorkspace/learn/projects/foo
 
 # Write audit (5.18): post-hoc snapshot diff catches root writes the front
 # guard lets through. Further writes frozen until remediation.
