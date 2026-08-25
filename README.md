@@ -18,7 +18,7 @@ directories are not subject to enforcement.
 [Installation & Quick Start](#installation--quick-start) ·
 [Architecture & Boundaries](#architecture--boundaries) · [Commands](#commands) ·
 [Advanced Usage](#advanced-usage) · [Security & Risk](#security--risk) ·
-[Contributing](#contributing) · [License](#license)
+[License](#license)
 
 ## Core Capabilities
 
@@ -308,18 +308,6 @@ is moved or removed. Misconfiguration fails open with a WARNING, never in
 silence. External writes are allowed but logged. Stats are privacy-trimmed.
 The audit gate refuses to wake agents when `--workspace` mismatches, and
 `/dir-whip`'s Health verifies config and stats health.
-
-## Contributing
-
-Bug reports, feature requests, and pull requests are welcome:
-[github.com/shawVV1992/dir-whip](https://github.com/shawVV1992/dir-whip).
-Development is spec-driven; the authoritative spec lives in the repository.
-
-Since v0.4.0 the plugin package is an 11-module Python package — `__init__`
-(assembly) plus `verdict` / `audit` / `sessions` / `events` / `state` /
-`stats` / `report` / `paths` / `terminal` / `config` — with one-way acyclic
-imports and a zero-host-import core (host capabilities enter only via
-injection in `__init__.py`). Keep new code inside this structure.
 
 ## License
 

@@ -16,7 +16,7 @@ dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作
 [核心能力](#核心能力) · [安装与快速上手](#安装与快速上手) ·
 [设计架构与能力边界](#设计架构与能力边界) · [命令](#命令) ·
 [高级用法](#高级用法) · [安全与风险](#安全与风险) ·
-[贡献](#贡献) · [License](#license)
+[License](#license)
 
 ## 核心能力
 
@@ -276,17 +276,6 @@ dir-whip 是纪律辅助工具，不是安全边界。
 fail-open 并发出 WARNING，绝不静默。外部写入放行但记入日志。统计经过隐私
 裁剪。`--workspace` 不匹配时审计门拒绝唤醒 agent，`/dir-whip` 的
 Health 可核验配置与统计健康。
-
-## 贡献
-
-欢迎提交缺陷报告、功能请求与拉取请求：
-[github.com/shawVV1992/dir-whip](https://github.com/shawVV1992/dir-whip)。
-本项目按规格驱动开发，权威规格位于仓库内。
-
-自 v0.4.0 起，插件包是一个 11 模块的 Python 包——`__init__`（装配）加
-`verdict` / `audit` / `sessions` / `events` / `state` / `stats` / `report`
-/ `paths` / `terminal` / `config`，导入关系单向无环，核心模块零宿主导入
-（宿主能力仅经 `__init__.py` 注入进入）。新增代码请保持该结构。
 
 ## License
 
