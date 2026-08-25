@@ -128,6 +128,13 @@ hermes plugins disable dir-whip
 任何文件。检测到违规时，L1 通告写明路径与处置（移入会话目录 / 加入根白名单）；
 L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移入合法位置。
 
+> **闸门须知（真机实测）。** 闩锁期间*所有*写入类调用都会被冻结——包括
+> `rm`，因此会话内删除无法解除闩锁。合规出路：把文件移入会话目录、登记进
+> `allowed_root_files`、经 `dir_whip_allow_path` 授权该路径，或在带外直接
+> 移除文件。闩锁本身仅限当前会话：文件一旦不在根目录，后续写入即恢复放行。
+> 另注意：对 `AGENTS.md` 的写入还会被 Hermes 自身的 agent 指令保护门额外
+> 拦截，需要交互式批准——与 dir-whip 的判定无关。
+
 ### 能力边界
 
 | 管 | 不管 |
@@ -274,6 +281,11 @@ Health 可核验配置与统计健康。
 欢迎提交缺陷报告、功能请求与拉取请求：
 [github.com/shawVV1992/dir-whip](https://github.com/shawVV1992/dir-whip)。
 本项目按规格驱动开发，权威规格位于仓库内。
+
+自 v0.4.0 起，插件包是一个 11 模块的 Python 包——`__init__`（装配）加
+`verdict` / `audit` / `sessions` / `events` / `state` / `stats` / `report`
+/ `paths` / `terminal` / `config`，导入关系单向无环，核心模块零宿主导入
+（宿主能力仅经 `__init__.py` 注入进入）。新增代码请保持该结构。
 
 ## License
 

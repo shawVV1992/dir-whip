@@ -142,6 +142,16 @@ detected, the L1 notice names the file and the remediation (move to a
 Session Directory or add to the root allowlist); the L3 gate freezes all
 further write-class tool calls until the file is moved or removed.
 
+> **Gate notes (verified on a live host).** While the gate is latched,
+> *every* write-class call is frozen — including `rm`, so in-session
+> deletion cannot clear it. Sanctioned ways out: move the file into a
+> Session Directory, register it in `allowed_root_files`, authorize the
+> path via `dir_whip_allow_path`, or remove it out-of-band. The latch
+> itself is session-scoped: once the file no longer sits at the root,
+> writes pass again. Note also that `AGENTS.md` writes are additionally
+> gated by Hermes itself (agent-instruction protection) and need
+> interactive approval regardless of dir-whip's verdict.
+
 ### Boundaries
 
 | Enforced | Not enforced |
@@ -300,6 +310,12 @@ The audit gate refuses to wake agents when `--workspace` mismatches, and
 Bug reports, feature requests, and pull requests are welcome:
 [github.com/shawVV1992/dir-whip](https://github.com/shawVV1992/dir-whip).
 Development is spec-driven; the authoritative spec lives in the repository.
+
+Since v0.4.0 the plugin package is an 11-module Python package — `__init__`
+(assembly) plus `verdict` / `audit` / `sessions` / `events` / `state` /
+`stats` / `report` / `paths` / `terminal` / `config` — with one-way acyclic
+imports and a zero-host-import core (host capabilities enter only via
+injection in `__init__.py`). Keep new code inside this structure.
 
 ## License
 
