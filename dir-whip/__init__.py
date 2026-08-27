@@ -78,8 +78,10 @@ def register(ctx):
 
     Hooks: pre_tool_call, on_session_start, post_tool_call,
     post_approval_response, pre_command, subagent_start, subagent_stop,
-    transform_tool_result (5.18 L1 notice). Tool: dir_whip_allow_path
-    (the plugin's ONLY tool). Event bus: capability detected via
+    transform_tool_result (5.18 L1 notice), pre_verify (5.18 R5
+    continuation fallback). Tool: dir_whip_allow_path (the plugin's ONLY
+    eager tool; dir_whip_settle registers lazily on the first L1 notice
+    fire, R4). Event bus: capability detected via
     hasattr(ctx, "emit"); absent -> silent degradation. Fail-open: any
     registration error logs a warning; the plugin is disabled but Hermes
     continues normally.
@@ -120,6 +122,9 @@ def register(ctx):
         ctx.register_hook("subagent_start", on_subagent_start)
         ctx.register_hook("subagent_stop", on_subagent_stop)
         ctx.register_hook("transform_tool_result", on_transform_tool_result)
+        # 5.18 R5: pre_verify continuation fallback (nudge budget is the
+        # host's max_verify_nudges; the hook adds none).
+        ctx.register_hook("pre_verify", on_pre_verify)
         if hasattr(ctx, "register_tool"):
             try:
                 ctx.register_tool(
@@ -353,6 +358,20 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
         )
     except Exception as exc:
         logger.debug("dir-whip: transform_tool_result hook error (fail-open): %s", exc)
+        return None
+
+
+def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
+    """pre_verify hook adapter (5.18 R5 continuation fallback): dispatch to
+    audit. Returns {"action": "continue", "message": ...} when this turn
+    mutated files AND unresolved pending violations remain; None otherwise
+    (turn finishes naturally). Fail-open: never raises."""
+    try:
+        return audit.pre_verify_nudge(
+            session_id, changed_paths, **kwargs,
+        )
+    except Exception as exc:
+        logger.debug("dir-whip: pre_verify hook error (fail-open): %s", exc)
         return None
 
 

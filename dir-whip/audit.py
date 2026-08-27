@@ -14,6 +14,7 @@ import datetime
 import json
 import logging
 import os
+import shutil
 
 try:
     from . import state
@@ -24,6 +25,11 @@ try:
     from .config import get_cached_config, write_audit_enabled, write_audit_entry_cap
 except ImportError:
     from config import get_cached_config, write_audit_enabled, write_audit_entry_cap
+
+try:
+    from .stats import record as _stats_record
+except ImportError:
+    from stats import record as _stats_record
 
 try:
     from .events import _bus_emit, emit
@@ -252,7 +258,8 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
 
 
 def _audit_notice_message(paths):
-    """The single L1 notice text (5.18, v2.6 B2): the paths and the remediation.
+    """The single L1 notice text (5.18, v2.7 R4): the paths and the
+    remediation, leading with the dir_whip_settle self-heal channel.
     One notice per result listing every unannounced violation; only this
     notice ever enters the conversation (context hygiene)."""
     lines = [
@@ -262,10 +269,15 @@ def _audit_notice_message(paths):
     for path in paths:
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
-        "Remediation: move the file(s) into a Session Directory "
-        "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
-        "allowlist in dir-whip-config.yaml as file:<basename> (e.g. file:notes.txt). Further writes to "
-        "the Working Directory are blocked until then."
+        "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
+        "file(s) into quarantine (<root>/.hermes/audit-quarantine/), or "
+        "move them manually into a Session Directory "
+        "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to "
+        "allowlist in dir-whip-config.yaml as file:<basename> (e.g. "
+        "file:notes.txt). Further writes to the Working Directory are "
+        "blocked until then." % ", ".join(
+            '"%s"' % str(path).replace("\\", "/") for path in paths
+        )
     )
     return "\n".join(lines)
 
@@ -321,6 +333,11 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
             return None
         for path in unannounced:
             audit_mark_announced(session_id, path)
+        # R4 lazy registration: the settle tool enters the registry on the
+        # FIRST notice fire (not at register() -- the eager tool surface is
+        # pinned to dir_whip_allow_path alone). Registration failure must
+        # never eat the notice (fail-open inside the helper).
+        _lazy_register_settle_tool()
         return result + "\n\n" + _audit_notice_message(unannounced)
     except Exception as exc:
         logger.debug("dir-whip: transform_tool_result error (fail-open): %s", exc)
@@ -361,6 +378,14 @@ def _audit_gate_block_message(display_paths, is_subagent):
             "Fix: move the file(s) into a Session Directory "
             "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
             "allowlist in dir-whip-config.yaml as file:<basename> (e.g. file:notes.txt)."
+        )
+        # v2.7 R4 ruling (2026-08-26): the gate blocks remediation mv/rm,
+        # so the message must name the tool channel or the loop never
+        # closes. Subagent variant stays report-to-parent only.
+        lines.append(
+            "Remediate now: call dir_whip_settle(paths=[%s])." % ", ".join(
+                '"%s"' % path for path in display_paths
+            )
         )
     lines.append("Reply using the [Reason]/[Next] template.")
     return "\n".join(lines)
@@ -473,6 +498,211 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
         logger.debug("dir-whip: audit post check error (fail-open): %s", exc)
 
 
+# ---------------------------------------------------------------- Same-turn self-heal (5.18 v2.7 R4/R5)
+
+# dir_whip_settle tool schema (OpenAI function-call format, same contract
+# as ALLOW_PATH_TOOL_SCHEMA). Defined HERE (not __init__.py) because the
+# lazy registration fires from transform_tool_result without register()
+# having run (test contract: first notice fire registers the tool).
+SETTLE_TOOL_SCHEMA = {
+    "name": "dir_whip_settle",
+    "description": (
+        "Move files that the dir-whip write audit flagged in the Working "
+        "Directory root into the audit quarantine (.hermes/audit-quarantine/), "
+        "settling the write block. Hard-constrained to paths currently "
+        "listed as unresolved by the write-audit notice/gate."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Paths to settle (absolute, forward slashes, as listed "
+                    "by the write-audit notice; relative to the Working "
+                    "Directory root tolerated)"
+                ),
+            }
+        },
+        "required": ["paths"],
+    },
+}
+
+
+def _settle_tool_handler(args, **kwargs):
+    """Registered dir_whip_settle handler: JSON-string tool result (R4)."""
+    try:
+        paths = args.get("paths") if isinstance(args, dict) else args
+        return json.dumps(
+            audit_settle_paths(kwargs.get("session_id"), paths)
+        )
+    except Exception as exc:
+        logger.debug("dir-whip: settle handler error (fail-open): %s", exc)
+        return json.dumps({"error": "settle failed"})
+
+
+def _lazy_register_settle_tool():
+    """Register dir_whip_settle on the FIRST L1 notice fire (R4).
+
+    The registry has no timing constraint (verified: the host rebuilds the
+    per-turn tool list), so a late registration is visible from the next
+    turn on. Idempotent by nature (re-register overwrites); attempted once
+    per notice fire (fire-once per violation batch keeps this rare).
+    Fail-open: any error is logged and never blocks the notice.
+    """
+    try:
+        ctx = state.session.registered_ctx
+        if ctx is not None and hasattr(ctx, "register_tool"):
+            ctx.register_tool(
+                "dir_whip_settle",
+                toolset="dir-whip",
+                schema=SETTLE_TOOL_SCHEMA,
+                handler=_settle_tool_handler,
+            )
+    except Exception as exc:
+        logger.debug("dir-whip: lazy settle registration failed: %s", exc)
+
+
+def _audit_pending_remove(session_id, key):
+    """Drop one settled path from the owner's pending set (R4)."""
+    owner = _audit_owner_session(session_id) or session_id
+    with state.audit.lock:
+        state.audit.pending.get(owner, {}).pop(key, None)
+
+
+def _record_settle_stats(working_dir_root):
+    """Record one settle action (plan R4): stats + log only, NO bus event
+    (the 5.14 emit surface stays at 7 events).
+
+    Two counter shapes are maintained: the standard nested verdict counter
+    via stats.record (which also appends the stats.jsonl line, 5.13 D3)
+    AND the flat ("allow", "settle", "write-audit-settle") tuple key that
+    the v0.5.0 acceptance test reads from stats_snapshot().
+    """
+    try:
+        _stats_record(
+            "allow", "settle", "write-audit-settle",
+            target=None, reason="same-turn self-heal settlement",
+            working_dir_root=working_dir_root,
+        )
+        with state.stats.lock:
+            flat_key = ("allow", "settle", "write-audit-settle")
+            state.stats.counters[flat_key] = (
+                state.stats.counters.get(flat_key, 0) + 1
+            )
+    except Exception as exc:
+        logger.debug("dir-whip: settle stats error (ignored): %s", exc)
+
+
+def audit_settle_paths(session_id, paths):
+    """dir_whip_settle core (5.18 R4): move pending root writes into the
+    audit quarantine, settling the L3 latch.
+
+    Hard constraints: subagent sessions rejected (remediation is the
+    parent's job); ONLY paths currently in this session's pending set are
+    accepted (zero arbitrary filesystem capability -- unknown paths are
+    rejected before any filesystem action, all-or-nothing); relative args
+    are resolved against working_dir_root then matched against the
+    normalized pending keys. Each accepted path is shutil.move'd into
+    <root>/.hermes/audit-quarantine/<YYYYMMDD_HHMMSS>/ (audit-safe: the
+    snapshot only judges root-top-level FILE entries) and dropped from the
+    pending set. A pending path that no longer exists is an idempotent
+    successful no-op settlement (2026-08-26 ruling; matches the latch's
+    lexists semantics). Returns {"settled": [<root-relative paths>]} on
+    success (relative for privacy) or {"error": "<reason>"} on rejection/
+    failure -- fail-open: a move error leaves the latch latched.
+    """
+    try:
+        if session_id and _is_child_session(session_id):
+            return {"error": "subagent sessions cannot settle; report the "
+                             "pending path(s) to the parent agent"}
+        if isinstance(paths, str):
+            paths = [paths]
+        if not isinstance(paths, (list, tuple)) or not paths:
+            return {"error": "paths must be a non-empty list"}
+        working_dir_root, _allowlist = get_cached_config(
+            state.session.registered_ctx
+        )
+        if not working_dir_root:
+            return {"error": "working_dir_root unresolved; cannot settle"}
+        pending = audit_pending_snapshot(session_id)
+        # Validate EVERY path against the pending set BEFORE touching the
+        # filesystem (all-or-nothing; zero arbitrary move capability).
+        keys = []
+        for path in paths:
+            if not isinstance(path, str) or not path.strip():
+                return {"error": "invalid path entry: %r" % (path,)}
+            candidate = path if os.path.isabs(path) else os.path.join(
+                working_dir_root, path
+            )
+            key = _audit_norm_path(candidate)
+            if key not in pending:
+                return {"error": "path is not in the pending violation "
+                                 "set: %s" % str(path).replace("\\", "/")}
+            keys.append(key)
+        quarantine_dir = os.path.join(
+            working_dir_root, ".hermes", "audit-quarantine",
+            datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+        )
+        settled = []
+        for key in keys:
+            if not os.path.lexists(key):
+                # Idempotent no-op: user already removed/moved it.
+                _audit_pending_remove(session_id, key)
+                settled.append(relativize_target(key, working_dir_root))
+                continue
+            os.makedirs(quarantine_dir, exist_ok=True)
+            dest = os.path.join(quarantine_dir, os.path.basename(key))
+            stem, ext = os.path.splitext(dest)
+            suffix = 1
+            while os.path.lexists(dest):
+                dest = "%s_%d%s" % (stem, suffix, ext)
+                suffix += 1
+            shutil.move(key, dest)
+            _audit_pending_remove(session_id, key)
+            settled.append(relativize_target(key, working_dir_root))
+        _record_settle_stats(working_dir_root)
+        return {"settled": settled}
+    except Exception as exc:
+        logger.debug("dir-whip: settle_paths error (fail-open): %s", exc)
+        return {"error": "settle failed: %s" % exc}
+
+
+def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
+    """pre_verify continuation fallback decision (5.18 R5).
+
+    Nudge ({"action": "continue", ...}) only when the host reports file
+    mutations this turn (changed_paths non-empty) AND this session still
+    has unresolved pending violations; any other case returns None so the
+    turn finishes naturally. Subagent sessions no-op (remediation is the
+    parent's job); throttling relies on the host's verify-nudge budget,
+    this hook adds none. Fail-open: any exception -> None.
+    """
+    try:
+        if not changed_paths:
+            return None
+        if session_id and _is_child_session(session_id):
+            return None
+        if not write_audit_enabled():
+            return None
+        unresolved = audit_unresolved_paths(session_id)
+        if not unresolved:
+            return None
+        display = [str(path).replace("\\", "/") for path in unresolved]
+        return {
+            "action": "continue",
+            "message": (
+                "[dir-whip] %d unresolved root writes: %s. Call "
+                "dir_whip_settle or move them into a Session Directory "
+                "before finishing." % (len(display), ", ".join(display))
+            ),
+        }
+    except Exception as exc:
+        logger.debug("dir-whip: pre_verify nudge error (fail-open): %s", exc)
+        return None
+
+
 # Public thin aliases (SCR-035 interface convergence point).
 classify_diff = audit_classify_diff
 unresolved_paths = audit_unresolved_paths
@@ -481,6 +711,8 @@ pending_snapshot = audit_pending_snapshot
 pending_add = audit_pending_add
 pending_clear = audit_pending_clear
 mark_announced = audit_mark_announced
+settle_paths = audit_settle_paths
+pre_verify_nudge = audit_pre_verify_nudge
 
 __all__ = [
     "set_classifier",
@@ -492,6 +724,8 @@ __all__ = [
     "pending_add",
     "pending_clear",
     "mark_announced",
+    "settle_paths",
+    "pre_verify_nudge",
 ]
 
 
