@@ -273,8 +273,8 @@ def _audit_notice_message(paths):
         "file(s) into quarantine (<root>/.hermes/audit-quarantine/), or "
         "move them manually into a Session Directory "
         "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to "
-        "allowlist in dir-whip-config.yaml as file:<basename> (e.g. "
-        "file:notes.txt). Further writes to the Working Directory are "
+        "the allowlist files entries in dir-whip-config.yaml "
+        "(files: [notes.txt]). Further writes to the Working Directory are "
         "blocked until then." % ", ".join(
             '"%s"' % str(path).replace("\\", "/") for path in paths
         )
@@ -377,7 +377,8 @@ def _audit_gate_block_message(display_paths, is_subagent):
         lines.append(
             "Fix: move the file(s) into a Session Directory "
             "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
-            "allowlist in dir-whip-config.yaml as file:<basename> (e.g. file:notes.txt)."
+            "the allowlist files entries in dir-whip-config.yaml "
+            "(files: [notes.txt])."
         )
         # v2.7 R4 ruling (2026-08-26): the gate blocks remediation mv/rm,
         # so the message must name the tool channel or the loop never
