@@ -7,7 +7,7 @@
 
 [English](./README.md) | [中文版](./README-zh.md)
 
-本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
+本文档与英文版 README 同步维护，两版结构镜像、内容一致。
 
 dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 9 个钩子拦截违规、审计层捕获漏网。
 
@@ -167,10 +167,13 @@ hermes plugins disable dir-whip
 
 子命令 `allow|remove|list` 通过 `config_writer` 管理白名单（行级编辑，保留注释）：
 `/dir-whip allow <编号|名称|路径>` / `/dir-whip allow 1,3` / `/dir-whip list` /
-`/dir-whip remove <编号|名称>`；路径参数接受相对或绝对输入——现存路径按磁盘
-状态判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议
-（`--create` 创建对应产物）；根外/根自身输入被引导拒绝。编号映射进两段式
-编号列表（Files 段后 Dirs 段，共用一段连续编号）。未知参数输出
+`/dir-whip remove <编号|名称>`。不带参数的 `allow` 枚举根目录候选、`remove`
+枚举当前条目（均为两段式编号列表）。allow 的路径参数接受相对或绝对输入——
+现存路径按磁盘状态判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建
+协议（`--create` 按输入形态创建：带末尾斜杠或嵌套路径→目录，裸文件名→根级
+文件）；根外/根自身输入被引导拒绝。remove 的名称参数同样接受相对或绝对输入，
+但按名称匹配、不做磁盘判别（双段同名条目一并移除）。编号映射进两段式编号
+列表（Files 段后 Dirs 段，共用一段连续编号）。未知参数输出
 `Usage: /dir-whip [allow|remove|list]`；不带参数的 `/dir-whip` 仍输出合并报告。
 
 `dir_whip_allow_path(path)` 是插件的常驻工具：当用户在对话中明确指定

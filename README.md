@@ -187,14 +187,19 @@ further write-class tool calls until the file is moved or removed.
 
 Subcommands `allow|remove|list` manage the allowlist via `config_writer`
 (row-level edit, comments preserved): `/dir-whip allow <number|name|path>`
-/ `/dir-whip allow 1,3` / `/dir-whip list` / `/dir-whip remove <number|name>`;
-path arguments accept relative or absolute input — existing paths are
-classified disk-aware (directory → `dirs`, file → `files`), non-existent
-paths follow a confirm-create protocol (`--create` builds the artifact);
-outside-root/root-itself inputs are rejected with guidance. Numbers map into
-the two-section numbered listing (Files then Dirs, one continuous sequence).
-Unknown args print `Usage: /dir-whip [allow|remove|list]`; bare `/dir-whip`
-without args still renders the merged report.
+/ `/dir-whip allow 1,3` / `/dir-whip list` / `/dir-whip remove <number|name>`.
+Bare `allow` enumerates root candidates; bare `remove` enumerates current
+entries (both render the two-section numbered listing). allow path arguments
+accept relative or absolute input — existing paths are classified disk-aware
+(directory → `dirs`, file → `files`); non-existent paths follow a
+confirm-create protocol (`--create` decides the artifact by form: trailing
+slash or nested path → directory, bare name → root-level file);
+outside-root/root-itself inputs are rejected with guidance. remove name
+arguments also accept relative or absolute input but match by name with no
+disk discrimination (a hand-edited double entry is removed from both sets).
+Numbers map into the two-section numbered listing (Files then Dirs, one
+continuous sequence). Unknown args print `Usage: /dir-whip [allow|remove|list]`;
+bare `/dir-whip` without args still renders the merged report.
 
 `dir_whip_allow_path(path)` is the plugin's eager tool: call it before writing
 when the user explicitly names a target path in the conversation. The entry
