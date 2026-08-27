@@ -183,7 +183,7 @@ test_report_reminder / test_allowlist_commands）及 scr-039-plan 五节一一�
 | # | Task | Depends on | Key results (KPI) | Status |
 |---|------|-----------|-------------------|--------|
 | 39.9 | **回归 + bump**：pytest 全量基线对比、plugin.yaml 0.5.0 + provides_hooks +pre_verify、README EN/ZH（提示通道/allowlist 结构/命令面）、after-install.md、SKILL.md allowlist 表述核对 | 39.R1.2/39.R2.2/39.R3.1/39.R4.1/39.R5.3 | 基线全绿 | Done (2026-08-27) |
-| 39.10 | **发布 + 真机**：tag `v0.5.0` + GitHub Release；八场景验证（工作区开场提醒含 CWD 时序 / 非工作区零注入 / heredoc 根写->L1->settle->开闸同轮闭环 / 混合轮次 pre_verify 续轮 / 报告 Reminder 四态 / resolve_agent_cwd 导入路径+懒注册可见性 / allowlist 结构化全链路 / 三命令交互流 R1-R8 逐条） | 39.9 | Release Done | Pending |
+| 39.10 | **发布 + 真机**：tag `v0.5.0` + GitHub Release；八场景验证（工作区开场提醒含 CWD 时序 / 非工作区零注入 / heredoc 根写->L1->settle->开闸同轮闭环 / 混合轮次 pre_verify 续轮 / 报告 Reminder 四态 / resolve_agent_cwd 导入路径+懒注册可见性 / allowlist 结构化全链路 / 三命令交互流 R1-R8 逐条） | 39.9 | Release Done（tag+Release 已推送）；真机整体 PASS 无 FAIL（报告=realhost-verification-report.md；场景①⑧ SKIP-with-reason=CLI oneshot 通道限制，判序经进程级探针实证） | Done (2026-08-27) |
 | 39.x | **R8 upstream 登记项（外部依赖，非代码）**：建议 hermes 将 terminal 落地写入计入 `_turn_file_mutation_paths`（使 verify-on-stop/pre_verify 覆盖纯终端违规轮）；tasks 挂账跟踪直至 upstream 采纳或否决 | - | 登记于 spec 9 / feedback/10 #6 | Open |
 
 ---
