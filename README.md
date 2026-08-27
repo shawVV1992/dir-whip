@@ -3,12 +3,12 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.4.1](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.5.0](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
 dir-whip provides three-layer Working Directory (Initial Project Directory)
-file discipline for [Hermes-agent](https://github.com/NousResearch/hermes-agent): the skill teaches rules, the plugin blocks violations with 8 hooks, and the audit layer catches what slips through. 
+file discipline for [Hermes-agent](https://github.com/NousResearch/hermes-agent): the skill teaches rules, the plugin blocks violations with 9 hooks, and the audit layer catches what slips through. 
 
 **Note:** dir-whip only applies to the Working Directory (Initial Project
 Directory). Writes outside the Working Directory and newly created project
@@ -26,7 +26,8 @@ directories are not subject to enforcement.
    enforces it — reliable workspace management, no more file chaos.
 2. **Plugin dual-layer detection.** The front layer intercepts root-level
    violations with a fix-it message; the audit layer catches what slips
-   past via snapshot diff.
+   past via snapshot diff — with same-turn self-heal (`dir_whip_settle`)
+   and a `pre_verify` continuation fallback.
 3. **Observable.** 7 `dir-whip:*` events recorded to stats.jsonl
    (5 MB rollover) for audit and diagnostics.
 4. **Scheduled governance.** wakeAgent / [SILENT] pattern for cron tasks
@@ -34,6 +35,9 @@ directories are not subject to enforcement.
    governance.
 5. **Subagent discipline.** Children write to parent-designated
    directories; they never self-create Session Directories.
+6. **Project-mode aware.** When an active Hermes project contains the
+   agent CWD, the session-start reminder is skipped entirely
+   (`skipped-project`).
 
 ## Installation & Quick Start
 
@@ -96,8 +100,8 @@ hermes plugins disable dir-whip
 
 | Layer | Role | Form |
 |-------|------|------|
-| **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + always-on prompt (≤400 chars) |
-| **Plugin (enforces)** | Blocks violations before they land | 8 hooks: `pre_tool_call` interception + write audit + session/subagent observation |
+| **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it) |
+| **Plugin (enforces)** | Blocks violations before they land | 9 hooks: `pre_tool_call` interception + write audit + session/subagent observation + `pre_verify` continuation fallback |
 | **Scripts (tools)** | CLI helpers for agents and cron | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | Sole configuration source | `dir-whip-config.yaml` |
 | **Observability** | Records and reports | stats.jsonl + `dir-whip:*` events + `/dir-whip` |
@@ -118,7 +122,7 @@ the Working Directory root:
   validates it).
 - Created lazily at the first file write — conversations that produce no
   files create no directory.
-- The root allows exactly three things: allowlist `file:` entries,
+- The root allows exactly three things: allowlist `files` entries,
   session-format directories, and `.hermes/`.
 
 ### Enforcement
@@ -138,15 +142,17 @@ parsing the body. This layer is designed to never block legitimate commands.
 
 **Audit layer** (reliable backbone) — a pre/post snapshot diff of root
 entries catches any file the front layer let through. When a violation is
-detected, the L1 notice names the file and the remediation (move to a
-Session Directory or add to the root allowlist); the L3 gate freezes all
+detected, the L1 notice names the file and the remediation — including the
+`dir_whip_settle` self-heal tool, which moves flagged files into the audit
+quarantine and re-opens the gate within the same turn; the L3 gate freezes all
 further write-class tool calls until the file is moved or removed.
 
 > **Gate notes (verified on a live host).** While the gate is latched,
 > *every* write-class call is frozen — including `rm`, so in-session
-> deletion cannot clear it. Sanctioned ways out: move the file into a
-> Session Directory, register it in `allowlist` (`file:<name>` or
-> `prefix:<abs-path>`), authorize the path via `dir_whip_allow_path`, or
+> deletion cannot clear it. Sanctioned ways out: call `dir_whip_settle`
+> (moves the file into `.hermes/audit-quarantine/`), move the file into a
+> Session Directory, register it in `allowlist` (`files` / `dirs`
+> entries), authorize the path via `dir_whip_allow_path`, or
 > remove it out-of-band. The latch itself is session-scoped: once the file
 > no longer sits at the root, writes pass again. Note also that `AGENTS.md`
 > writes are additionally gated by Hermes itself (agent-instruction
@@ -157,8 +163,8 @@ further write-class tool calls until the file is moved or removed.
 | Enforced | Not enforced |
 |----------|--------------|
 | Root-level non-allowlist writes (`write_file` / `patch` / `terminal`) | Writes inside a Session Directory |
-| Post-hoc root write audit + settlement gate | Root allowlist files (`allowlist` `file:` entries) |
-| Session Directory structure compliance (audit script) | Prefix allowlist (`allowlist` `prefix:` entries + runtime allowlist) |
+| Post-hoc root write audit + settlement gate | Root allowlist files (`allowlist` `files` entries) |
+| Session Directory structure compliance (audit script) | Dirs allowlist (`allowlist` `dirs` entries + runtime allowlist) |
 | | Everything outside the Working Directory (allowed + logged) |
 | | Read-only tools and commands |
 | | Deletions (report-only, never violations) |
@@ -174,20 +180,28 @@ further write-class tool calls until the file is moved or removed.
 | `Working Directory` | Value + resolving source (see next row) |
 | source | `guard-config` (dir-whip-config.yaml) · `profile-config` (profile `terminal.cwd`) · `fail-open` |
 | `Terminal Guard` | `enabled` / `disabled` (`terminal_guard`) |
-| `Allowlist` | `Files: (none)` or comma-joined `file:` basenames + `Prefixes: (none)` or comma-joined `prefix:` paths, or `(strict empty allowlist)` if missing (`allowlist`) |
+| `Allowlist` | `Files: (none)` or comma-joined root file basenames + `Dirs: (none)` or comma-joined relative dir paths, or `(strict empty allowlist)` if missing (`allowlist`); an ignored legacy flat value appends the count |
+| `Reminder` | Session-start discipline-block outcome: `injected` / `skipped-outside` / `skipped-child` / `skipped-project` / `unavailable` (`(not recorded)` before the first session start) |
 | `Health` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
 | `Stats File` | Absolute path to stats.jsonl |
 
 Subcommands `allow|remove|list` manage the allowlist via `config_writer`
-(row-level edit, comments preserved): `/dir-whip allow <file|prefix:PATH|PATH/>`
-/ `/dir-whip allow 1,3` / `/dir-whip list` / `/dir-whip remove <file|prefix:PATH|PATH/>`;
-unknown args print `Usage: /dir-whip [allow|remove|list]`; bare `/dir-whip`
+(row-level edit, comments preserved): `/dir-whip allow <number|name|path>`
+/ `/dir-whip allow 1,3` / `/dir-whip list` / `/dir-whip remove <number|name>`;
+path arguments accept relative or absolute input — existing paths are
+classified disk-aware (directory → `dirs`, file → `files`), non-existent
+paths follow a confirm-create protocol (`--create` builds the artifact);
+outside-root/root-itself inputs are rejected with guidance. Numbers map into
+the two-section numbered listing (Files then Dirs, one continuous sequence).
+Unknown args print `Usage: /dir-whip [allow|remove|list]`; bare `/dir-whip`
 without args still renders the merged report.
 
-`dir_whip_allow_path(path)` is the plugin's only tool: call it before writing
+`dir_whip_allow_path(path)` is the plugin's eager tool: call it before writing
 when the user explicitly names a target path in the conversation. The entry
-lasts for the current session only and merges with `allowlist` `prefix:` entries
-at Tier 0.
+lasts for the current session only and merges with `allowlist` `dirs`
+entries at Tier 0. A second tool, `dir_whip_settle(paths)`, is registered
+lazily on the first write-audit notice and moves flagged root files into the
+audit quarantine (same-turn self-heal).
 
 ## Advanced Usage
 
@@ -199,14 +213,16 @@ Optional and user-managed, at `HERMES_HOME/dir-whip/dir-whip-config.yaml`
 
 | Key | Meaning |
 | --- | ------- |
-| `allowlist` | Allowlist entries discriminated `file:<basename>` (root files) or `prefix:<abs-path>` (prefix allowlist, absolute, forward slashes); strict empty-list fallback |
+| `allowlist` | Structured mapping: `files` = root-level file basenames, `dirs` = Working-Directory-relative dir paths (recursive subtree exemption; multi-level allowed); strict empty fallback when the key is missing; legacy flat values are ignored fail-closed |
 | `working_dir_root` | Explicit Working Directory override; fallback = profile `terminal.cwd` |
 | `terminal_guard` | Enable/disable terminal write interception (default: enabled) |
 | `write_audit` | Enable/disable the post-hoc root write audit (default: enabled) |
 | `write_audit_entry_cap` | Maximum root entries before the audit skips the round (default: 2000) |
 
 ```yaml
-allowlist: []  # file:<name> | prefix:<abs-path>  e.g. ["file:notes.txt", "prefix:E:/ws/projects"]
+allowlist:
+  files: []   # root-level file basenames, e.g. ["README.md", "notes.txt"]
+  dirs: []    # relative dir paths, recursive subtree, e.g. ["projects/foo"]
 # working_dir_root: E:/HermesWorkspace/default   # optional override
 # terminal_guard: enabled                        # default when absent
 # write_audit: enabled                           # default when absent
@@ -214,7 +230,7 @@ allowlist: []  # file:<name> | prefix:<abs-path>  e.g. ["file:notes.txt", "prefi
 ```
 
 > Configuration lives in `dir-whip-config.yaml` — edit by hand or via
-> `/dir-whip allow <file|prefix:PATH|PATH/>|remove|list` (row-level edit via
+> `/dir-whip allow <number|name|path>|remove|list` (row-level edit via
 > config_writer, comments preserved). Bare `/dir-whip` without args is still a
 > read-only report.
 
@@ -298,7 +314,7 @@ dir-whip is a discipline aid, not a security boundary.
 
 **What can go wrong.** An agent may be prompted to write anywhere; a prompt
 injection can push writes to unexpected locations. Widening `allowlist`
-(`prefix:` entries) or disabling the plugin leaves the workspace unmanaged.
+(`dirs` entries) or disabling the plugin leaves the workspace unmanaged.
 Misconfiguration is not always visible without a check.
 
 **Built-in protections.** Enforcement happens in the `pre_tool_call` hook

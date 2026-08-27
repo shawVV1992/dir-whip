@@ -2,7 +2,7 @@
 
 - 版本：2.7
 - 日期：2026-08-26（SCR-039 修正 v2.7——提示通道重排 + 同轮自愈 + 结构化 allowlist；上次冻结 v2.6 2026-08-25）
-- 状态：激活（ACTIVE，v2.7，2026-08-26 激活）——SCR-039 修正 v2.7（feedback/10，用户 2026-08-26 决策）：(1) 提示通道重排——常驻纪律提示（register_system_prompt_section，每轮计费）移除，改为条件化会话开始纪律块（5.4，≤280 chars 锁定）；(2) 同轮自愈——`dir_whip_settle` 工具（懒注册）+ L1 通告升级使违规闭环在用户一轮对话内完成；新增 pre_verify 续轮兜底；(3) 结构化 allowlist（BREAKING v2.7）——`allowlist` 改为映射 `{files: [...], dirs: [...]}`，条目为相对 working_dir_root 的路径（dirs 递归豁免子树；根自身与根外条目拒绝）；v2.6 平铺标签列表（`file:` / `prefix:` 字符串）彻底删除不兼容，遗留格式 fail-closed 忽略；`/dir-whip allow|remove|list` 统一为 Files/Dirs 两段式编号呈现。历史：v0.3.0 权威基线（SCR-024
+- 状态：冻结（FROZEN，v2.7，2026-08-27 实施完毕状态 re-freeze；2026-08-26 激活）——SCR-039 修正 v2.7（feedback/10，用户 2026-08-26 决策）：(1) 提示通道重排——常驻纪律提示（register_system_prompt_section，每轮计费）移除，改为条件化会话开始纪律块（5.4，≤280 chars 锁定）；(2) 同轮自愈——`dir_whip_settle` 工具（懒注册）+ L1 通告升级使违规闭环在用户一轮对话内完成；新增 pre_verify 续轮兜底；(3) 结构化 allowlist（BREAKING v2.7）——`allowlist` 改为映射 `{files: [...], dirs: [...]}`，条目为相对 working_dir_root 的路径（dirs 递归豁免子树；根自身与根外条目拒绝）；v2.6 平铺标签列表（`file:` / `prefix:` 字符串）彻底删除不兼容，遗留格式 fail-closed 忽略；`/dir-whip allow|remove|list` 统一为 Files/Dirs 两段式编号呈现。R7 项目模式注入豁免（`skipped-project`，5.4/5.7）随实施落地（39.R4.1，2026-08-27）。历史：v0.3.0 权威基线（SCR-024
   根基），取代 v1.4 基线。v0.2.0 已于 2026-08-14 实施并验证完毕（验收矩阵
   全部 Done，testing-standards.md；真机阶段 27.1-27.6 含 WSL POSIX 覆盖；
   SCR-025 已登记——原生安装待上游 hermes update；SCR-032 验证范围决策已
@@ -672,8 +672,15 @@ def on_start(session_id: str, model: str, platform: str, **kwargs):
   cwd 取不到或谓词异常 -> 照注（fail-open=现状）；working_dir_root 未解析
   -> 照注（首写时的一次性 fail-open 警告路径不变，5.12）；inject_message
   不可用 -> debug 跳过（CLI/TUI，不变）。
+- **项目模式豁免（v2.7 R7）。** 在上述谓词之前，活跃宿主项目整体豁免本会话：
+  插件经 `project_active_fn` 注入槽探测宿主 projects.db（装配层 try-import
+  `hermes_cli.projects_db`；`connect_closing()` -> `get_active_id(conn)` ->
+  `project_folders` 路径集；任何失败 -> None = 不豁免，fail-open）。当存在
+  活跃项目且 agent CWD 落在其任一 folder 之下（包含语义与
+  `discipline_applies` 一致）时，提醒跳过并记状态 `skipped-project`——优先级
+  高于 `skipped-outside`（项目模式有自己的布局；skill 侧对应 3.2 Layer 0）。
 - 结果记入 `state.session.reminder_status`（`injected` | `skipped-outside` |
-  `skipped-child` | `unavailable`），由 `/dir-whip` 报告呈现（5.7）。
+  `skipped-child` | `skipped-project` | `unavailable`），由 `/dir-whip` 报告呈现（5.7）。
   语义（2026-08-26 裁决）：单进程共享字段、**顶层会话最后写入者**为准——
   报告显示最近一次顶层会话的注入结果（CLI 单会话天然正确；桌面多会话进程
   下为文档化限制；不引入 per-session 字典）。
@@ -889,7 +896,7 @@ State: ACTIVE
 Working Directory: <value>  (source: <source>)
 Terminal Guard: enabled|disabled
 Allowlist: Files: (none)|<comma-joined file basenames>  Dirs: (none)|<comma-joined relative dir paths>  | (strict empty allowlist) [| ignored legacy entries: N]
-Reminder: injected|skipped-outside|skipped-child|unavailable
+Reminder: injected|skipped-outside|skipped-child|skipped-project|unavailable
 Health: OK|PROBLEM
 - resolution: FAIL-OPEN              # 仅 PROBLEM 时逐行列出问题
 - stats.jsonl: NOT WRITABLE (<err>)
@@ -917,7 +924,7 @@ Stats File: <absolute stats.jsonl path>
   （fail-closed 提示），键存在但为空时显示 `Files: (none)  Dirs: (none)`；
   遗留平铺值被忽略时追加 `ignored legacy entries: N`。
   `Reminder`（= 会话开始纪律块注入结果，5.4：`injected` | `skipped-outside` |
-  `skipped-child` | `unavailable`）。
+  `skipped-child` | `skipped-project` | `unavailable`）。
 - 第 6 行 `Health`：`OK`，或 `PROBLEM` 并逐行列出问题：
   `- resolution: FAIL-OPEN` 和/或 `- stats.jsonl: NOT WRITABLE (<err>)`。
   dir-whip-config.yaml 缺失属设计内默认值，**不算问题**。

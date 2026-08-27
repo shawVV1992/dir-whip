@@ -3,13 +3,13 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.4.1](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.5.0](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
 本文档为英文 README 的中文翻译版本，如有歧义以英文版为准。
 
-dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 8 个钩子拦截违规、审计层捕获漏网。
+dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 9 个钩子拦截违规、审计层捕获漏网。
 
 注意：dir-whip 权限范围仅限于工作目录（Initial Project Directory），工作目录之外的写入不受管控，新建的项目目录不受管控。
 
@@ -21,10 +21,11 @@ dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作
 ## 核心能力
 
 1. **教罚结合：** skill 教纪律、plugin 强制执行，默认工作区管理纪律有效稳定，文件管理不再混乱。
-2. **插件的双层检测：** 在插件中，前置层拦截根级违规写入并附修正指引；审计层以快照 diff 事后兜底。
+2. **插件的双层检测：** 在插件中，前置层拦截根级违规写入并附修正指引；审计层以快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 `pre_verify` 续轮兜底。
 3. **可观测：** 定义 7 类 `dir-whip:*` 事件保存至 stats.jsonl（5 MB 滚动），可观测溯源。
 4. **定时治理：** 针对 cron 任务采用 wakeAgent / [SILENT] 模式，不打断 agent 执行。下次 cron tick 继续治理。
 5. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
+6. **项目模式感知：** 当活跃 Hermes 项目包含 agent CWD 时，会话开始提醒整体跳过（`skipped-project`）。
 
 ## 安装与快速上手
 
@@ -90,8 +91,8 @@ hermes plugins disable dir-whip
 
 | 层 | 职责 | 形态 |
 |----|------|------|
-| **Skill（教导）** | 纪律参考 | 捆绑的 `workspace-organization` 技能（可选加载）+ 常驻提示（≤400 字符） |
-| **Plugin（强制）** | 拦截违规落地前 | 8 个钩子：`pre_tool_call` 拦截 + 写入审计 + 会话/子代理观察 |
+| **Skill（教导）** | 纪律参考 | 捆绑的 `workspace-organization` 技能（可选加载）+ 一条条件化会话开始提醒（≤280 字符，仅当 agent CWD 位于工作目录内且无活跃项目覆盖时注入） |
+| **Plugin（强制）** | 拦截违规落地前 | 9 个钩子：`pre_tool_call` 拦截 + 写入审计 + 会话/子代理观察 + `pre_verify` 续轮兜底 |
 | **Scripts（工具）** | Agent 和 cron 的 CLI 辅助 | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | 唯一配置源 | `dir-whip-config.yaml` |
 | **Observability** | 记录与报告 | stats.jsonl + `dir-whip:*` 事件 + `/dir-whip` |
@@ -109,7 +110,7 @@ hermes plugins disable dir-whip
 
 - 命名 `YYYYMMDD_HHMMSS_TaskName/`，时间戳必须真实（插件校验）。
 - 懒创建：首次文件写入时才建，不产出文件的对话不建目录。
-- 根目录只允许三样东西：白名单 `file:` 条目、会话格式目录、`.hermes/`。
+- 根目录只允许三样东西：白名单 `files` 条目、会话格式目录、`.hermes/`。
 
 ### 执行策略
 
@@ -125,12 +126,14 @@ hermes plugins disable dir-whip
 **允许误放、绝不误拦**。
 
 **审计层（可靠主干）** —— 对根目录文件条目做前后快照 diff，捕获前置层漏过的
-任何文件。检测到违规时，L1 通告写明路径与处置（移入会话目录 / 加入根白名单）；
-L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移入合法位置。
+任何文件。检测到违规时，L1 通告写明路径与处置——包括 `dir_whip_settle`
+自愈工具，可将违规文件移入审计隔离区并在同轮重新开闸；L3 闸门冻结后续所有
+写入类工具调用，直至文件被移除或移入合法位置。
 
 > **闸门须知（真机实测）。** 闩锁期间*所有*写入类调用都会被冻结——包括
-> `rm`，因此会话内删除无法解除闩锁。合规出路：把文件移入会话目录、登记进
-> `allowlist`（`file:<name>` 或 `prefix:<abs-path>`）、经 `dir_whip_allow_path`
+> `rm`，因此会话内删除无法解除闩锁。合规出路：调用 `dir_whip_settle`
+> （把文件移入 `.hermes/audit-quarantine/`）、把文件移入会话目录、登记进
+> `allowlist`（`files` / `dirs` 条目）、经 `dir_whip_allow_path`
 > 授权该路径，或在带外直接移除文件。闩锁本身仅限当前会话：文件一旦不在
 > 根目录，后续写入即恢复放行。另注意：对 `AGENTS.md` 的写入还会被 Hermes 自身
 > 的 agent 指令保护门额外拦截，需要交互式批准——与 dir-whip 的判定无关。
@@ -140,8 +143,8 @@ L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移�
 | 管 | 不管 |
 |----|------|
 | 根目录非白名单写入（`write_file` / `patch` / `terminal`） | 会话目录内的写入 |
-| 根写入事后审计 + 清偿闸门 | 根白名单文件（`allowlist` `file:` 条目） |
-| 会话目录结构合规（audit 脚本） | 前缀白名单（`allowlist` `prefix:` 条目 + 运行时白名单） |
+| 根写入事后审计 + 清偿闸门 | 根白名单文件（`allowlist` `files` 条目） |
+| 会话目录结构合规（audit 脚本） | 目录白名单（`allowlist` `dirs` 条目 + 运行时白名单） |
 | | Working Directory 之外的一切（放行 + 日志） |
 | | 只读工具与只读命令 |
 | | 删除操作（仅记账，永不判违规） |
@@ -157,18 +160,23 @@ L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移�
 | `Working Directory` | 生效值 + 解析来源（见下一行） |
 | source | `guard-config`（dir-whip-config.yaml）· `profile-config`（档案 `terminal.cwd`）· `fail-open` |
 | `Terminal Guard` | `enabled` / `disabled`（`terminal_guard`） |
-| `Allowlist` | `Files: (none)` 或逗号分隔的 `file:` 文件名 + `Prefixes: (none)` 或逗号分隔的 `prefix:` 路径，或键缺失时 `(strict empty allowlist)`（`allowlist`） |
+| `Allowlist` | `Files: (none)` 或逗号分隔的根文件 basename + `Dirs: (none)` 或逗号分隔的相对目录路径，或键缺失时 `(strict empty allowlist)`（`allowlist`）；被忽略的遗留平铺值会追加计数 |
+| `Reminder` | 会话开始纪律块注入结果：`injected` / `skipped-outside` / `skipped-child` / `skipped-project` / `unavailable`（首次会话开始前为 `(not recorded)`） |
 | `Health` | `OK`，或 `PROBLEM` 并逐行列问题（解析、stats.jsonl 可写性） |
 | `Stats File` | stats.jsonl 的绝对路径 |
 
 子命令 `allow|remove|list` 通过 `config_writer` 管理白名单（行级编辑，保留注释）：
-`/dir-whip allow <file|prefix:PATH|PATH/>` / `/dir-whip allow 1,3` / `/dir-whip list` /
-`/dir-whip remove <file|prefix:PATH|PATH/>`；未知参数输出 `Usage: /dir-whip [allow|remove|list]`；
-不带参数的 `/dir-whip` 仍输出合并报告。
+`/dir-whip allow <编号|名称|路径>` / `/dir-whip allow 1,3` / `/dir-whip list` /
+`/dir-whip remove <编号|名称>`；路径参数接受相对或绝对输入——现存路径按磁盘
+状态判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议
+（`--create` 创建对应产物）；根外/根自身输入被引导拒绝。编号映射进两段式
+编号列表（Files 段后 Dirs 段，共用一段连续编号）。未知参数输出
+`Usage: /dir-whip [allow|remove|list]`；不带参数的 `/dir-whip` 仍输出合并报告。
 
-`dir_whip_allow_path(path)` 是插件唯一的工具：当用户在对话中明确指定
+`dir_whip_allow_path(path)` 是插件的常驻工具：当用户在对话中明确指定
 目标路径时，写入前调用它以注册该路径。该记录仅对当前会话有效，并与
-`allowlist` `prefix:` 条目在 Tier 0 合并。
+`allowlist` `dirs` 条目在 Tier 0 合并。第二个工具 `dir_whip_settle(paths)`
+在首次写入审计通告时懒注册，把违规的根文件移入审计隔离区（同轮自愈）。
 
 ## 高级用法
 
@@ -180,14 +188,16 @@ L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移�
 
 | 键 | 含义 |
 | --- | ---- |
-| `allowlist` | 白名单条目区分为 `file:<basename>`（根文件）或 `prefix:<abs-path>`（前缀白名单，绝对路径，正斜杠）；缺省严格空列表 |
+| `allowlist` | 结构化映射：`files` = 根级文件 basename，`dirs` = 相对工作目录的目录路径（递归子树豁免；允许多级）；键缺失时严格空回退；遗留平铺值 fail-closed 忽略 |
 | `working_dir_root` | 显式工作目录覆盖；缺省回退 = 当前档案 `terminal.cwd` |
 | `terminal_guard` | 开关终端写入拦截（默认：enabled） |
 | `write_audit` | 开关根写入事后审计（默认：enabled） |
 | `write_audit_entry_cap` | 根目录条目数超过此值时跳过审计轮（默认：2000） |
 
 ```yaml
-allowlist: []  # file:<name> | prefix:<abs-path>  e.g. ["file:notes.txt", "prefix:E:/ws/projects"]
+allowlist:
+  files: []   # 根级文件 basename，如 ["README.md", "notes.txt"]
+  dirs: []    # 相对目录路径，递归子树豁免，如 ["projects/foo"]
 # working_dir_root: E:/HermesWorkspace/default   # 可选覆盖
 # terminal_guard: enabled                        # 缺省即此值
 # write_audit: enabled                           # 缺省即此值
@@ -195,7 +205,7 @@ allowlist: []  # file:<name> | prefix:<abs-path>  e.g. ["file:notes.txt", "prefi
 ```
 
 > 配置位于 `dir-whip-config.yaml` —— 可手改，也可通过
-> `/dir-whip allow <file|prefix:PATH|PATH/>|remove|list` 快捷修改（config_writer 行级编辑，保留注释）。
+> `/dir-whip allow <编号|名称|路径>|remove|list` 快捷修改（config_writer 行级编辑，保留注释）。
 > 不带参数的 `/dir-whip` 仍为只读报告。
 
 **工作目录解析。** 解析分三步：dir-whip-config.yaml 中显式 `working_dir_root`
@@ -268,7 +278,7 @@ flowchart TD
 dir-whip 是纪律辅助工具，不是安全边界。
 
 **可能出什么问题。** Agent 可能被提示词引导写入任意位置；提示注入可能把写入
-推送到意料之外的位置。扩大 `allowlist`（`prefix:` 条目）或关闭插件都会让工作区失去管理。
+推送到意料之外的位置。扩大 `allowlist`（`dirs` 条目）或关闭插件都会让工作区失去管理。
 配置错误并非总能一眼可见。
 
 **内置防护。** 强制发生在 `pre_tool_call` 钩子中，先于写入落地。前置层漏过的

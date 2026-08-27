@@ -60,7 +60,7 @@ Triggered by: any file write, create, save, delete, or move.
 | Target | Guard behavior |
 |--------|----------------|
 | Inside a Session Directory (`YYYYMMDD_HHMMSS_TaskName/...`) | Allow |
-| Root whitelist file (`allowed_root_files`) | Allow |
+| Root whitelist file (`allowlist` `files` entry) | Allow |
 | Outside the Working Directory | Allow + logged (external) |
 | Working Directory root, non-whitelist | Block |
 
@@ -71,7 +71,9 @@ Triggered by: any file write, create, save, delete, or move.
   `python scripts/create_session_dir.py <task> --workspace <root>`
   Example: `python scripts/create_session_dir.py <task> --workspace <root>` - replace <task> and <root> with your values (legacy form `python scripts/create_session_dir.py <task_name> --workspace <working_dir>` also works)
 - Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
-- Root allows ONLY: whitelist files, session-format dirs, `.hermes/`
+- Root allows ONLY: `allowlist` `files` entries, session-format dirs, `.hermes/`
+- Project directories inside the workspace can be exempted wholesale via an
+  `allowlist` `dirs` entry (recursive subtree) — add via `/dir-whip allow <path>`
 - `Outputs/` blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
 
 ### 3. File placement decision (Outputs vs .tmp)
@@ -171,7 +173,9 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 - Classified the target before every write?
 - Created session dir before first write?
 - File inside a session dir, in the correct `Outputs/`/`.tmp/`?
-- No non-whitelist files at the Working Directory root?
+- No non-whitelist files at the Working Directory root? (root allows only
+  `allowlist` `files` entries, session-format dirs, `.hermes/`, and
+  `allowlist` `dirs` subtrees)
 - Confirmation obtained before delete/overwrite/move?
 
 ## Remember

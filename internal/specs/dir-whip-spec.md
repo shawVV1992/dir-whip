@@ -2,7 +2,7 @@
 
 - Version: 2.7
 - Date: 2026-08-26 (SCR-039 amendment v2.7 — prompt-channel rework + same-turn self-heal + structured allowlist; previous freeze v2.6 2026-08-25)
-- Status: ACTIVE (v2.7, activated 2026-08-26) — SCR-039 amendment v2.7 (feedback/10, user decisions 2026-08-26): (1) prompt-channel rework — the Always-on Discipline Prompt (register_system_prompt_section, per-round billing) is REMOVED and replaced by a conditional session-start discipline block (5.4, <=280 chars lock); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered) + L1 notice upgrade close the violation loop within the user turn; pre_verify continuation fallback added; (3) structured allowlist (BREAKING v2.7) — `allowlist` becomes a mapping `{files: [...], dirs: [...]}` of paths RELATIVE to working_dir_root (dirs recursive, root itself and outside-root entries rejected); flat tagged list (`file:` / `prefix:` strings) removed clean-break, legacy ignored fail-closed; `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation. Historical:
+- Status: FROZEN (v2.7, re-frozen 2026-08-27 at implementation-complete state; activated 2026-08-26) — SCR-039 amendment v2.7 (feedback/10, user decisions 2026-08-26): (1) prompt-channel rework — the Always-on Discipline Prompt (register_system_prompt_section, per-round billing) is REMOVED and replaced by a conditional session-start discipline block (5.4, <=280 chars lock); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered) + L1 notice upgrade close the violation loop within the user turn; pre_verify continuation fallback added; (3) structured allowlist (BREAKING v2.7) — `allowlist` becomes a mapping `{files: [...], dirs: [...]}` of paths RELATIVE to working_dir_root (dirs recursive, root itself and outside-root entries rejected); flat tagged list (`file:` / `prefix:` strings) removed clean-break, legacy ignored fail-closed; `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation. R7 project-mode injection exemption (`skipped-project`, 5.4/5.7) landed with implementation (39.R4.1, 2026-08-27). Historical:
   authoritative v0.3.0 baseline
   (SCR-024 root), superseding the v1.4 baseline. v0.2.0 implemented and
   verified 2026-08-14 (acceptance matrix all Done, testing-standards.md;
@@ -748,8 +748,19 @@ lives inside the Working Directory:
   (fail-open = current behavior); working_dir_root unresolved -> inject (the
   one-time fail-open warning path at first guarded write is unchanged, 5.12);
   inject_message unavailable -> debug log skip (CLI/TUI, unchanged).
+- **Project-mode exemption (v2.7 R7).** BEFORE the predicate above, an ACTIVE
+  host project exempts the session entirely: the plugin probes the host's
+  projects.db via the `project_active_fn` injection slot (assembly-layer
+  try-import of `hermes_cli.projects_db`; `connect_closing()` ->
+  `get_active_id(conn)` -> `project_folders` paths; any failure -> None =
+  no exemption, fail-open). When an active project exists AND the agent CWD
+  falls under any of its folders (same containment semantics as
+  `discipline_applies`), the reminder is skipped with status
+  `skipped-project` — this takes precedence over `skipped-outside` (project
+  mode has its own layout; spec 3.2 Layer 0 mirrors it on the skill side).
 - Outcome recorded in `state.session.reminder_status` (`injected` |
-  `skipped-outside` | `skipped-child` | `unavailable`) and surfaced by the
+  `skipped-outside` | `skipped-child` | `skipped-project` | `unavailable`)
+  and surfaced by the
   `/dir-whip` report (5.7). Semantics (2026-08-26 ruling): single
   process-shared field, LAST-TOP-LEVEL-WRITER wins — the report shows the
   most recent top-level session's outcome (correct by construction in
@@ -1013,7 +1024,7 @@ State: ACTIVE
 Working Directory: <value>  (source: <source>)
 Terminal Guard: enabled|disabled
 Allowlist: Files: (none)|<comma-joined file basenames>  Dirs: (none)|<comma-joined relative dir paths>  | (strict empty allowlist) [| ignored legacy entries: N]
-Reminder: injected|skipped-outside|skipped-child|unavailable
+Reminder: injected|skipped-outside|skipped-child|skipped-project|unavailable
 Health: OK|PROBLEM
 - resolution: FAIL-OPEN              # one line per problem, only when PROBLEM
 - stats.jsonl: NOT WRITABLE (<err>)
@@ -1043,7 +1054,8 @@ Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2; v2.7):
   flat value appends `ignored legacy entries: N`. Old keys
   `exempt_paths` / `allowed_root_files` are not displayed (removed, B2).
   `Reminder` (= session-start discipline-block outcome, 5.4:
-  `injected` | `skipped-outside` | `skipped-child` | `unavailable`).
+  `injected` | `skipped-outside` | `skipped-child` | `skipped-project` |
+  `unavailable`).
 - Line 6 `Health`: `OK`, or `PROBLEM` with one line per problem:
   `- resolution: FAIL-OPEN` and/or `- stats.jsonl: NOT WRITABLE (<err>)`.
   A missing dir-whip-config.yaml is the design default, NOT a problem.
