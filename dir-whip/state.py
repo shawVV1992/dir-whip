@@ -27,6 +27,7 @@ class _SessionState:
         self.emit_enabled = False
         self.session_cwd_fn = None       # 宿主 API 注入槽（ADR-0007；register 时装填）
         self.agent_cwd_fn = None         # 宿主 API 注入槽（ADR-0007；R2 条件注入 agent CWD）
+        self.project_active_fn = None    # 宿主 API 注入槽（ADR-0007；R7 项目豁免探针，on_start 时调用）
         self.reminder_status = None      # R2/R6: injected|skipped-outside|skipped-child|unavailable
         self.child_session_ids = set()   # 受 self.lock 保护
         # P6 precomputed plugin paths/version (31.13): filled once at

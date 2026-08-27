@@ -23,6 +23,20 @@ try:
 except ImportError:
     _resolve_agent_cwd = None
 
+# R7 project-mode exemption (spike 39.R4.0, host v2026.8.13-3440-g79b8703d0):
+# hermes_cli.projects_db exposes connect_closing() (per-profile projects.db,
+# WAL + idempotent schema) and get_active_id(conn) (project_meta KV). The
+# import happens ONLY in this assembly layer (ADR-0007 core zero-host-import
+# red line); absence -> None -> no exemption (= pre-R7 behavior).
+try:
+    from hermes_cli.projects_db import (
+        connect_closing as _projects_connect_closing,
+        get_active_id as _projects_get_active_id,
+    )
+except ImportError:
+    _projects_connect_closing = None
+    _projects_get_active_id = None
+
 try:
     from . import audit, config, events, report, sessions, state, stats, verdict
 except ImportError:
@@ -73,6 +87,34 @@ SKILL_DESCRIPTION = (
 )
 
 
+def _project_active_probe():
+    """Host projects.db probe (R7): (active_id, [folder paths]) or None.
+
+    Reads the ACTIVE project via get_active_id, then its folder paths from
+    project_folders (primary_path + folders; the folder set is what the
+    exemption containment matches against). Called at on_start (the active
+    pointer is per-profile global and varies across sessions), never cached
+    at register. Fail-open: ANY error (import absent, db locked, schema
+    drift) -> None -> no exemption.
+    """
+    try:
+        if _projects_connect_closing is None or _projects_get_active_id is None:
+            return None
+        with _projects_connect_closing() as conn:
+            active_id = _projects_get_active_id(conn)
+            if not active_id:
+                return None
+            rows = conn.execute(
+                "SELECT path FROM project_folders WHERE project_id = ?",
+                (active_id,),
+            ).fetchall()
+            folders = [str(row[0]) for row in rows if row and row[0]]
+            return (str(active_id), folders)
+    except Exception as exc:
+        logger.debug("dir-whip: project probe failed (fail-open): %s", exc)
+        return None
+
+
 def register(ctx):
     """Register dir-whip hooks, tool and event bus (5.7/5.8/5.14).
 
@@ -108,6 +150,18 @@ def register(ctx):
         # time; absent host API -> None -> on_start always injects.
         state.session.session_cwd_fn = _get_session_cwd
         state.session.agent_cwd_fn = _resolve_agent_cwd
+        # R7 project probe slot (ADR-0007): filled at register ONLY when the
+        # host module is importable (same shape as session_cwd_fn/agent_cwd_fn:
+        # absent host API -> None -> no exemption); the probe itself runs per
+        # session start (active pointer varies).
+        state.session.project_active_fn = (
+            _project_active_probe
+            if (
+                _projects_connect_closing is not None
+                and _projects_get_active_id is not None
+            )
+            else None
+        )
         try:
             state.session.emit_enabled = bool(getattr(ctx, "emit", None))
         except Exception:
@@ -207,6 +261,34 @@ def on_start(session_id, model=None, platform=None, **kwargs):
             except Exception as exc:
                 logger.debug("dir-whip: resolve_agent_cwd failed: %s", exc)
                 cwd = None
+        # R7 project-mode exemption: an ACTIVE host project whose folders
+        # contain the agent CWD skips the reminder entirely (project mode
+        # has its own layout). Evaluated HERE at session start (the active
+        # pointer varies across sessions), BEFORE the discipline predicate;
+        # any probe failure fails open to the normal flow.
+        if cwd:
+            project_fn = getattr(state.session, "project_active_fn", None)
+            if callable(project_fn):
+                project_info = None
+                try:
+                    project_info = project_fn()
+                except Exception as exc:
+                    logger.debug(
+                        "dir-whip: project_active_fn failed: %s", exc
+                    )
+                    project_info = None
+                if project_info:
+                    active_id, folders = project_info
+                    if active_id and verdict.project_exemption_applies(
+                        cwd, folders
+                    ):
+                        state.session.reminder_status = "skipped-project"
+                        logger.debug(
+                            "dir-whip: session-start reminder skipped "
+                            "(active project %s contains the agent CWD)",
+                            active_id,
+                        )
+                        return
         working_dir_root, _ = verdict._resolved_config()
         if not verdict.discipline_applies(cwd, working_dir_root):
             state.session.reminder_status = "skipped-outside"

@@ -132,6 +132,28 @@ def discipline_applies(cwd, working_dir_root):
     except Exception:
         return True
 
+
+def project_exemption_applies(cwd, folders):
+    """Project-mode injection exemption predicate (R7, spec 3.2 Layer 0).
+
+    Pure decision: True = the agent CWD falls under an ACTIVE host
+    project folder -> skip the session-start reminder entirely (project
+    mode has its own layout; the Working Directory discipline does not
+    apply). Containment per folder reuses paths.within_working_dir
+    (prefix-inclusive, equality counts as inside; Windows casefold rules
+    on any host, SCR-006). Fail-open: missing cwd / folders / any error
+    -> False (no exemption = current behavior).
+    """
+    try:
+        if not cwd or not folders:
+            return False
+        for folder in folders:
+            if folder and within_working_dir(cwd, folder):
+                return True
+        return False
+    except Exception:
+        return False
+
 # Spec 5.13 D2: host approval choices that count as granted (verified
 # against the local hermes-agent approval.py choice vocabulary).
 _APPROVAL_GRANTED_CHOICES = frozenset(
