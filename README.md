@@ -171,6 +171,22 @@ further write-class tool calls until the file is moved or removed.
 
 ## Commands
 
+### Command List
+
+| Command | Action | Example |
+| ------- | ------ | ------- |
+| `/dir-whip` | Print the merged report (fields under "Report Fields") | `/dir-whip` |
+| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` |
+| `/dir-whip allow` | Enumerate root candidates (two-section numbered listing + Add hint) | `/dir-whip allow` |
+| `/dir-whip allow <number\|name\|path>` | Register entries, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` |
+| `/dir-whip remove` | Enumerate current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` |
+| `/dir-whip remove <number\|name>` | Remove entries; matched by name with no disk discrimination (a hand-edited double entry is removed from both sets) | `/dir-whip remove 2` · `/dir-whip remove notes.txt` |
+
+Subcommands `allow|remove|list` manage the allowlist via `config_writer`
+(row-level edit, comments preserved).
+
+### Report Fields
+
 `/dir-whip` prints one merged report:
 
 | Field | Meaning |
@@ -185,25 +201,17 @@ further write-class tool calls until the file is moved or removed.
 | `Health` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
 | `Stats File` | Absolute path to stats.jsonl |
 
-Subcommands `allow|remove|list` manage the allowlist via `config_writer`
-(row-level edit, comments preserved):
+### Shared Semantics
 
-| Subcommand | Action | Example |
-| ---------- | ------ | ------- |
-| `/dir-whip` | Print the merged report (version / State / Allowlist / Reminder / Health) | `/dir-whip` |
-| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` |
-| `/dir-whip allow` | Enumerate root candidates (two-section numbered listing + Add hint) | `/dir-whip allow` |
-| `/dir-whip allow <number\|name\|path>` | Register entries, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` |
-| `/dir-whip remove` | Enumerate current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` |
-| `/dir-whip remove <number\|name>` | Remove entries; matched by name with no disk discrimination (a hand-edited double entry is removed from both sets) | `/dir-whip remove 2` · `/dir-whip remove notes.txt` |
+- Numbers map into the two-section numbered listing: Files then Dirs, one
+  continuous sequence.
+- Path arguments accept relative or absolute input; outside-root/root-itself
+  inputs are rejected with guidance.
+- `--create` decides the created artifact by form: trailing slash or nested
+  path → directory, bare name → root-level file.
+- Unknown args print `Usage: /dir-whip [allow|remove|list]`.
 
-Additional semantics: numbers map into the two-section numbered listing (Files
-then Dirs, one continuous sequence); path arguments accept relative or absolute
-input — `--create` decides the created artifact by form (trailing slash or
-nested path → directory, bare name → root-level file); outside-root/root-itself
-inputs are rejected with guidance. Unknown args print
-`Usage: /dir-whip [allow|remove|list]`; bare `/dir-whip` without args still
-renders the merged report.
+### Agent Tools
 
 `dir_whip_allow_path(path)` is the plugin's eager tool: call it before writing
 when the user explicitly names a target path in the conversation. The entry
