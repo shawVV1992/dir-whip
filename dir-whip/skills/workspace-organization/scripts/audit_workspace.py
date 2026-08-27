@@ -11,10 +11,13 @@ unresolvable (fail-open). A missing directory or a mismatch is a
 parameter error.
 
 Checks:
-  1. Root level may only contain files on the dir-whip allowed_root_files whitelist.
+  1. Root level may only contain files on the dir-whip allowlist files
+     whitelist (structured mapping v2.7; legacy flat values ignored with
+     a stderr hint).
   2. No Outputs/ directory directly at workspace root.
-  3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName])
-     or the whitelisted .hermes/ directory.
+  3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName]),
+     the whitelisted .hermes/ directory, or a directory covered by an
+     allowlist dirs entry (recursive subtree exemption).
   4. Each valid session dir must contain both Outputs/ and .tmp/.
   5. Outputs/ must not contain build artifacts (__pycache__, *.pyc,
      node_modules, .DS_Store, Thumbs.db) at its immediate level.
@@ -280,6 +283,20 @@ def check_root_files(root, allowed, violations):
             })
 
 
+def _dir_exempt(name, dirs_entries):
+    """True when a root-level directory is covered by an allowlist dirs
+    entry (v2.7 R9: first path segment match, casefolded on Windows)."""
+    if not dirs_entries:
+        return False
+    cf = name.casefold() if os.name == "nt" else name
+    for d in dirs_entries:
+        first = str(d).replace("\\", "/").split("/")[0]
+        first_cmp = first.casefold() if os.name == "nt" else first
+        if cf == first_cmp:
+            return True
+    return False
+
+
 def check_root_outputs(root, violations):
     path = os.path.join(root, OUTPUTS_DIR)
     if os.path.isdir(path):
@@ -291,10 +308,12 @@ def check_root_outputs(root, violations):
         })
 
 
-def check_root_session_format(root, violations):
+def check_root_session_format(root, violations, dirs_entries=None):
     for entry in os.scandir(root):
         if not entry.is_dir() or entry.name in WHITELISTED_ROOT_DIRS:
             continue
+        if _dir_exempt(entry.name, dirs_entries):
+            continue  # allowlist dirs subtree (v2.7 R9)
         if not is_session_name(entry.name):
             violations.append({
                 "check": 3,
@@ -345,11 +364,19 @@ def check_session_scripts(session, violations):
 
 def audit(root, hh):
     """Run all checks; return a list of violation dicts."""
-    allowed = workspace_resolver.allowed_root_files(hh)
+    # v2.7 R9: structured allowlist {files, dirs}; legacy flat values are
+    # ignored fail-closed with ONE stderr hint (clean-break visibility).
+    al_state = workspace_resolver.allowlist_state(hh)
+    if al_state.get("legacy"):
+        sys.stderr.write(
+            "[WARN] dir-whip-config allowlist uses the removed flat format; "
+            "%d legacy entry(ies) ignored -- re-add via /dir-whip allow\n"
+            % al_state["legacy"]
+        )
     violations = []
-    check_root_files(root, allowed, violations)
+    check_root_files(root, al_state["files"], violations)
     check_root_outputs(root, violations)
-    check_root_session_format(root, violations)
+    check_root_session_format(root, violations, dirs_entries=al_state["dirs"])
 
     for entry in os.scandir(root):
         if not entry.is_dir() or not is_session_name(entry.name):

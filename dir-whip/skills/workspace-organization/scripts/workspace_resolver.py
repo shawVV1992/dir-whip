@@ -18,21 +18,23 @@ Self-contained: stdlib only, no PyYAML dependency -- config parsing is
 minimal line-based, mirroring the plugin's PyYAML-based parser
 (dir-whip/config.py parse_terminal_cwd).
 
-Spec v2.6 B2: single unified key allowlist: [] with discriminated
-file:<basename> | prefix:<abs-path> (old keys exempt_paths /
-allowed_root_files removed, no backward compat). This module duplicates
-allowlist parsing/validation (no import) to keep parity with
-dir-whip/allowlist.py per ADR-0006.
+Spec v2.7 R9: structured allowlist mapping ``{files: [...], dirs: [...]}``
+with root-relative entries (the v2.6 flat tagged list is REMOVED clean
+break; legacy values are ignored fail-closed and surfaced as a legacy
+count). This module duplicates allowlist parsing/validation (no import)
+to keep parity with dir-whip/allowlist.py per ADR-0006.
 
 Functions:
     hermes_home()            -- Hermes home (HERMES_HOME override first;
-                               Windows LOCALAPPDATA/hermes, POSIX ~/.hermes)
+                                Windows LOCALAPPDATA/hermes, POSIX ~/.hermes)
     normalize_path(path)     -- SCR-006 normalization for exact matching
-                               (MSYS mapping, drive inheritance, normpath;
-                               POSIX normpath identity; UNC unaffected)
+                                (MSYS mapping, drive inheritance, normpath;
+                                POSIX normpath identity; UNC unaffected)
     parse_terminal_cwd(path) -- minimal terminal.cwd parser for config.yaml
-    allowed_root_files(hh)   -- allowlist file: subset (strict EMPTY when
-                               absent; shared audit, v2.6 B2 parity)
+    allowlist_state(hh)      -- structured allowlist {files, dirs, legacy}
+                                (strict empty when absent; v2.7 R9 parity)
+    allowed_root_files(hh)   -- allowlist files subset (strict EMPTY when
+                                absent; shared audit, v2.7 R9 parity)
     resolve_working_dir_root(workspace, hh, env) -- 4-step chain (spec 4.4)
     validate_workspace(path, hh, env) -- boundary validation (spec 4.4)
 """
@@ -63,7 +65,7 @@ _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 _DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 MAX_FILENAME_LEN = 255
-MAX_PREFIX_LEN = 4096
+MAX_DIR_LEN = 4096
 
 
 def hermes_home(env=None):
@@ -320,7 +322,7 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     return None
 
 
-# ---------------------------------------------------------------- Unified allowlist parity (spec v2.6 B2, duplicated from allowlist.py)
+# ---------------------------------------------------------------- Structured allowlist parity (spec v2.7 R9, duplicated from allowlist.py)
 
 def _ws_is_absolute_any(target):
     """Rooted on local OS, Windows-drive-rooted, or backslash-rooted (parity)."""
@@ -352,88 +354,70 @@ def _ws_validate_file(name):
     return True, ""
 
 
-def _ws_validate_prefix(path):
+def _ws_validate_dir_rel(path):
+    """Relative-dir validation (parity duplicate of allowlist._validate_dir_rel).
+
+    Valid dir entry: non-empty string RELATIVE to working_dir_root (no
+    drive/absolute forms, no ':'), no '.'/'..'/empty segments,
+    length <= MAX_DIR_LEN. Multi-level allowed.
+    """
     if not isinstance(path, str):
-        return False, "prefix must be a string"
+        return False, "dir entry must be a string"
     stripped = path.strip()
     if not stripped:
-        return False, "prefix must not be empty"
-    if len(stripped) > MAX_PREFIX_LEN:
-        return False, "prefix too long (max %d)" % MAX_PREFIX_LEN
-    if not _ws_is_absolute_any(stripped):
-        return False, "prefix must be absolute"
-    normalized_slashes = stripped.replace("\\", "/")
-    parts = normalized_slashes.split("/")
-    if ".." in parts:
-        return False, "prefix must not contain '..'"
+        return False, "dir entry must not be empty"
+    if len(stripped) > MAX_DIR_LEN:
+        return False, "dir entry too long (max %d)" % MAX_DIR_LEN
+    if stripped in (".", ".."):
+        return False, "dir entry must not be '.' or '..'"
+    if _ws_is_absolute_any(stripped):
+        return False, "dir entry must be relative to the Working Directory root"
+    if ":" in stripped:
+        return False, "dir entry must not contain ':'"
+    normalized = stripped.replace("\\", "/")
+    if normalized.startswith("/"):
+        return False, "dir entry must be relative to the Working Directory root"
+    for part in normalized.split("/"):
+        if part in ("", ".", ".."):
+            return False, "dir entry must not contain '.', '..' or empty segments"
     return True, ""
 
 
-def _ws_normalize_prefix(path):
+def _ws_normalize_dir_rel(path):
+    """Normalize a validated dir entry: forward slashes, trailing slash
+    stripped, duplicate slashes collapsed (R7 storage normalization)."""
     if not isinstance(path, str):
         return ""
     s = path.strip().replace("\\", "/")
     s = re.sub(r"/{2,}", "/", s)
-    if s == "/":
-        return s
-    if re.match(r"^[A-Za-z]:/$", s):
-        return s
-    if s.endswith("/") and len(s) > 1:
-        s = s.rstrip("/")
-        if not s:
-            s = "/"
-    return s
-
-
-def _ws_normalize_for_match(path):
-    if path is None:
-        return ""
-    s = str(path).replace("\\", "/")
-    s = re.sub(r"/{2,}", "/", s)
-    if s != "/" and not re.match(r"^[A-Za-z]:/$", s) and s.endswith("/"):
-        s = s.rstrip("/")
-    return s
+    return s.rstrip("/")
 
 
 def _ws_parse_allowlist(raw):
-    """Parity duplicate of allowlist.parse_allowlist (no import, stdlib only)."""
-    empty = {"files": set(), "prefixes": set()}
-    if not isinstance(raw, list):
-        return {"files": set(), "prefixes": set()}
+    """Parity duplicate of allowlist.parse_allowlist (v2.7 R9, stdlib only).
+
+    Expected MAPPING ``{"files": [...], "dirs": [...]}`` with root-relative
+    entries. A legacy FLAT value (the v2.6 list of ``file:``/``prefix:``
+    tagged strings) or any non-dict input is IGNORED fail-closed -> empty
+    sets (clean break); the caller surfaces the legacy count as a hint.
+    """
+    if not isinstance(raw, dict):
+        return {"files": set(), "dirs": set()}
     files = set()
-    prefixes = set()
-    for item in raw:
-        if not isinstance(item, str):
-            continue
-        stripped = item.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("file:"):
-            part = stripped[5:].strip()
-            ok, _ = _ws_validate_file(part)
+    raw_files = raw.get("files")
+    if isinstance(raw_files, (list, tuple, set)):
+        for item in raw_files:
+            ok, _ = _ws_validate_file(item)
             if ok:
-                files.add(part)
-            continue
-        if stripped.startswith("prefix:"):
-            part = stripped[7:].strip()
-            ok, _ = _ws_validate_prefix(part)
+                files.add(item.strip())
+    dirs = set()
+    raw_dirs = raw.get("dirs")
+    if isinstance(raw_dirs, (list, tuple, set)):
+        for item in raw_dirs:
+            ok, _ = _ws_validate_dir_rel(item)
             if ok:
-                prefixes.add(_ws_normalize_prefix(part))
-            continue
-        has_slash = "/" in stripped or "\\" in stripped
-        has_colon = ":" in stripped
-        is_prefix_bare = has_slash or has_colon
-        if is_prefix_bare:
-            ok, _ = _ws_validate_prefix(stripped)
-            if ok:
-                prefixes.add(_ws_normalize_prefix(stripped))
-            continue
-        else:
-            ok, _ = _ws_validate_file(stripped)
-            if ok:
-                files.add(stripped)
-            continue
-    return {"files": files, "prefixes": prefixes}
+                dirs.add(_ws_normalize_dir_rel(item))
+    return {"files": files, "dirs": dirs}
 
 
 def _ws_is_allowlist_file(name, parsed):
@@ -453,110 +437,182 @@ def _ws_is_allowlist_file(name, parsed):
         return base in files
 
 
-def _ws_is_allowlist_prefix(path, parsed):
-    if not isinstance(path, str):
-        return False
-    stripped = path.strip()
-    if not stripped:
-        return False
-    target_norm = _ws_normalize_for_match(stripped)
-    prefixes = (parsed or {}).get("prefixes") or set()
-    if os.name == "nt":
-        target_cf = target_norm.casefold()
-        for pref in prefixes:
-            if not isinstance(pref, str):
-                continue
-            pref_norm = _ws_normalize_for_match(pref).casefold()
-            if target_cf == pref_norm:
-                return True
-            if target_cf.startswith(pref_norm.rstrip("/") + "/"):
-                return True
-        return False
-    else:
-        for pref in prefixes:
-            if not isinstance(pref, str):
-                continue
-            pref_norm = _ws_normalize_for_match(pref)
-            drive_re = re.compile(r"^[A-Za-z]:/")
-            if drive_re.match(target_norm) and drive_re.match(pref_norm):
-                t_cf = target_norm.casefold()
-                p_cf = pref_norm.casefold()
-                if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
-                    return True
-            else:
-                if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
-                    return True
-        return False
+def _ws_is_allowlist_dir(path, working_dir_root, parsed):
+    """Parity duplicate of allowlist.is_allowlist_dir (v2.7 R9).
 
-
-def _parse_allowed_root_files_yaml(data):
-    """Extract allowlist file subset from parsed YAML dict (v2.6 B2 parity).
-
-    Reads the single key ``allowlist``; strict empty fallback when absent or
-    not a list (fail-closed). Old keys exempt_paths / allowed_root_files are
-    ignored (B2 clean break, no backward compat).
+    True when ``path`` equals or is under ``<root>/<entry>`` for any dirs
+    entry (recursive subtree, forward-slash normalized, casefolded on
+    Windows). The root itself and anything outside it are never exempt.
     """
+    if not isinstance(path, str) or not path.strip():
+        return False
+    if not working_dir_root:
+        return False
+
+    def _norm(p):
+        s = str(p).replace("\\", "/")
+        s = re.sub(r"/{2,}", "/", s)
+        if s != "/" and s.endswith("/"):
+            s = s.rstrip("/")
+        return s
+
+    t = _norm(path)
+    r = _norm(working_dir_root)
+    if not t or not r:
+        return False
+    cf = os.name == "nt"
+    t_cmp = t.casefold() if cf else t
+    r_cmp = r.casefold() if cf else r
+    r_cmp = r_cmp.rstrip("/")
+    if t_cmp == r_cmp:
+        return False
+    prefix = r_cmp + "/"
+    if not t_cmp.startswith(prefix):
+        return False
+    rel = t[len(r.rstrip("/")) + 1:]
+    rel_cmp = rel.casefold() if cf else rel
+    for d in (parsed or {}).get("dirs") or set():
+        if not isinstance(d, str):
+            continue
+        d_norm = _norm(d)
+        d_cmp = d_norm.casefold() if cf else d_norm
+        if rel_cmp == d_cmp or rel_cmp.startswith(d_cmp + "/"):
+            return True
+    return False
+
+
+def _split_flow_list(rest):
+    """Parse a YAML flow list body ``[a, b]`` / ``a, b`` into string parts."""
+    inner = rest.strip().strip("[]").strip()
+    parts = []
+    if inner:
+        for part in inner.split(","):
+            part = part.strip().strip("'\"")
+            if part:
+                parts.append(part)
+    return parts
+
+
+def _parse_allowlist_yaml(data):
+    """Extract the structured allowlist from parsed YAML (v2.7 R9 parity).
+
+    Reads the single key ``allowlist`` (mapping form). Legacy flat values /
+    old keys are ignored fail-closed; the legacy entry count is returned
+    alongside for the clean-break hint.
+    """
+    empty = {"files": [], "dirs": [], "legacy": 0}
     if not isinstance(data, dict):
-        return []
+        return dict(empty)
     raw = data.get("allowlist")
     parsed = _ws_parse_allowlist(raw)
-    return sorted(parsed.get("files") or [])
+    legacy = 0
+    if isinstance(raw, list):
+        legacy = sum(1 for x in raw if isinstance(x, str) and x.strip())
+    return {
+        "files": sorted(parsed.get("files") or []),
+        "dirs": sorted(parsed.get("dirs") or []),
+        "legacy": legacy,
+    }
 
 
-def _parse_allowed_root_files_lines(path):
-    """Line-based allowlist parser (PyYAML unavailable, v2.6 B2).
+def _parse_allowlist_lines(path):
+    """Line-based structured allowlist parser (PyYAML unavailable, v2.7 R9).
 
-    Handles:
+    Handles the mapping block form::
+
         allowlist:
-          - file:<name>
-          - prefix:<abs-path>
-          - <bare>
-        and inline:  allowlist: ["file:a", "prefix:E:/p"]
-    Returns file subset only (for audit check 1).
+          files: ["a.txt", "b.txt"]
+          dirs: ["proj/sub"]
+
+    and the inline mapping ``allowlist: {files: [...], dirs: [...]}``.
+    A legacy FLAT value (inline ``["file:a", ...]`` or a ``- item`` block)
+    is IGNORED fail-closed and counted for the clean-break hint.
+    Returns {"files": [...], "dirs": [...], "legacy": N}.
     """
-    result_raw = []
+    result = {"files": [], "dirs": [], "legacy": 0}
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
     except Exception:
-        return []
-    in_list = False
+        return result
+    in_map = False       # inside an allowlist: block
+    in_sub = None        # "files" | "dirs" while reading its flow/block list
+    raw_map = {"files": [], "dirs": []}
+    legacy_items = []
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        indented = line[:1] in (" ", "\t")
         if stripped.startswith("allowlist:"):
             rest = stripped[len("allowlist:"):].strip()
-            in_list = True
+            in_map = True
+            in_sub = None
             if rest:
-                inner = rest.strip("[]").strip()
-                if inner:
-                    for part in inner.split(","):
-                        part = part.strip().strip("'\"")
-                        if part:
-                            result_raw.append(part)
-                in_list = False
+                # Inline form: mapping {...} -> parse sub-keys; list [...] ->
+                # legacy flat (counted, ignored).
+                if rest.startswith("{"):
+                    body = rest.strip("{}")
+                    # minimal inline-mapping scan: files:[...], dirs:[...]
+                    m_files = re.search(r"files\s*:\s*\[([^\]]*)\]", body)
+                    m_dirs = re.search(r"dirs\s*:\s*\[([^\]]*)\]", body)
+                    if m_files:
+                        raw_map["files"].extend(_split_flow_list(m_files.group(1)))
+                    if m_dirs:
+                        raw_map["dirs"].extend(_split_flow_list(m_dirs.group(1)))
+                elif rest.startswith("["):
+                    inner = rest.strip("[]").strip()
+                    if inner:
+                        legacy_items.extend(_split_flow_list(inner))
+                in_map = False
             continue
-        if in_list:
-            if stripped.startswith("- "):
-                value = stripped[2:].strip().strip("'\"")
-                if value:
-                    result_raw.append(value)
+        if in_map:
+            if not indented:
+                in_map = False
+                in_sub = None
+            elif stripped.startswith("files:"):
+                rest = stripped[len("files:"):].strip()
+                if rest.startswith("["):
+                    raw_map["files"].extend(_split_flow_list(rest))
+                    in_sub = None
+                else:
+                    in_sub = "files"
+            elif stripped.startswith("dirs:"):
+                rest = stripped[len("dirs:"):].strip()
+                if rest.startswith("["):
+                    raw_map["dirs"].extend(_split_flow_list(rest))
+                    in_sub = None
+                else:
+                    in_sub = "dirs"
+            elif in_sub and stripped.startswith("- "):
+                raw_map[in_sub].append(stripped[2:].strip().strip("'\""))
             else:
-                in_list = False
-    parsed = _ws_parse_allowlist(result_raw)
-    return sorted(parsed.get("files") or [])
+                in_sub = None
+    parsed = _ws_parse_allowlist({
+        "files": raw_map["files"],
+        "dirs": raw_map["dirs"],
+    })
+    legacy = len(legacy_items)
+    if not raw_map["files"] and not raw_map["dirs"]:
+        # No mapping content found: treat any collected strings under a
+        # legacy "- item" block as flat entries for the hint count.
+        pass
+    return {
+        "files": sorted(parsed.get("files") or []),
+        "dirs": sorted(parsed.get("dirs") or []),
+        "legacy": legacy,
+    }
 
 
-def allowed_root_files(hh=None):
-    """Root-file whitelist from dir-whip-config.yaml (audit side, v2.6 B2).
+def allowlist_state(hh=None):
+    """Structured allowlist state from dir-whip-config.yaml (v2.7 R9).
 
-    Reads the unified ``allowlist`` key's ``file:`` subset from
-    <HERMES_HOME>/dir-whip/dir-whip-config.yaml. STRICT fallback: when
-    the config file or the key is absent, returns an EMPTY list -> every
-    root file is flagged (fail-closed, over-report), matching the plugin
-    guard's B2 semantics so guard and audit never disagree. No rules-file
-    name is hardcoded here.
+    Reads the ``allowlist`` mapping from <HERMES_HOME>/dir-whip/
+    dir-whip-config.yaml. Returns {"files": [sorted basenames],
+    "dirs": [sorted relative paths], "legacy": N} where N counts ignored
+    legacy flat entries (clean-break hint). STRICT fallback: missing
+    config/key -> empty state (fail-closed, matching the plugin guard so
+    guard and audit never disagree).
     """
     if hh is None:
         hh = hermes_home()
@@ -566,11 +622,23 @@ def allowed_root_files(hh=None):
 
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
-        return _parse_allowed_root_files_yaml(data)
+        return _parse_allowlist_yaml(data)
     except ImportError:
-        return _parse_allowed_root_files_lines(path)
+        return _parse_allowlist_lines(path)
     except Exception:
-        return []
+        return {"files": [], "dirs": [], "legacy": 0}
+
+
+def allowed_root_files(hh=None):
+    """Root-file whitelist from dir-whip-config.yaml (audit side, v2.7 R9).
+
+    The ``files`` subset of the structured ``allowlist`` mapping (root-level
+    basenames). STRICT fallback: when the config file or the key is absent,
+    returns an EMPTY list -> every root file is flagged (fail-closed,
+    over-report), matching the plugin guard's semantics so guard and audit
+    never disagree. Legacy flat values are ignored (empty subset).
+    """
+    return allowlist_state(hh)["files"]
 
 
 def validate_workspace(path, hh=None, env=None):
