@@ -107,34 +107,36 @@ FAIL_OPEN_WARNING_MESSAGE = (
     "(terminal.cwd) and restart the session."
 )
 
-# Spec 5.4: session-start discipline reminder (top-level sessions only).
+# Spec 5.4 (v2.7 R1): session-start discipline reminder (top-level
+# sessions only). Candidate A merged discipline block; verbatim-locked
+# + len<=280 chars cap (tokenizer-independent).
 REMINDER_MESSAGE = (
-    "[dir-whip] Active. File writes in the Working Directory must be "
-    "inside a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). "
-    "Use create_session_dir.py to create one before writing files."
+    "[dir-whip] Active. WD writes need a session dir first: python "
+    "scripts/create_session_dir.py <task> --workspace <root> "
+    "(deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. "
+    "User path -> dir_whip_allow_path first."
 )
+
+def discipline_applies(cwd, working_dir_root):
+    """Conditional-injection predicate (spec 5.4, v2.7 R2).
+
+    Pure decision: True = inject the session-start reminder. None-safe
+    fail-open (missing cwd OR unresolved root -> True = current
+    behavior); containment reuses paths.within_working_dir (equality
+    counts as inside; Windows casefold rules on any host, SCR-006).
+    """
+    try:
+        if not cwd or not working_dir_root:
+            return True
+        return within_working_dir(cwd, working_dir_root)
+    except Exception:
+        return True
 
 # Spec 5.13 D2: host approval choices that count as granted (verified
 # against the local hermes-agent approval.py choice vocabulary).
 _APPROVAL_GRANTED_CHOICES = frozenset(
     ("approve", "always", "session", "granted", "allow", "smart_approve")
 )
-
-# Spec 3.7/5.17: always-on discipline prompt (<=400 chars, English,
-# structured with | separators; four elements + placement/allowlist
-# extensions from skill file-creation rules: classify before write /
-# session-dir writes (deliverable->Outputs/ else .tmp/) / no root writes /
-# when blocked; user-specified path -> dir_whip_allow_path). The full C6
-# template is delivered by the block message, NOT by this prompt.
-DISCIPLINE_PROMPT = (
-    "[dir-whip] Classify before write | session-dir / allowlist file(file:) / external. "
-    "If not in session dir, create: python scripts/create_session_dir.py <task> --workspace <root>. "
-    "WD writes -> session dir: deliverable->Outputs/ else .tmp/. "
-    "Root only: allowlist files, session dirs, .hermes/. "
-    "User path -> dir_whip_allow_path first. "
-    "Blocked -> follow Fix, reply [Reason]/[Next]."
-)
-
 
 def guard(tool_name, args, task_id=None, **kwargs):
     """Pre-tool-call decision chain (spec 5.3).
@@ -406,7 +408,8 @@ def _block_message(target, working_dir_root, is_subagent=False):
         fix_line = (
             "Fix: Create a session directory first:\n"
             "  python %s/create_session_dir.py <task_name> --workspace %s\n"
-            "Then write to its Outputs/ or .tmp/ subdirectory."
+            "Then write there: deliverable -> Outputs/, scratch -> .tmp/.\n"
+            "User-specified path -> dir_whip_allow_path first."
             % (scripts_path, wdr_fwd)
         )
     return (
@@ -414,8 +417,9 @@ def _block_message(target, working_dir_root, is_subagent=False):
         "Directory or an allowed root file.\n"
         "Target: %s\n"
         "%s\n"
-        "If this is a project directory, add it to allowlist as prefix:<abs-path> in "
-        "HERMES_HOME/dir-whip/dir-whip-config.yaml (e.g. prefix:E:/HermesWorkspace/learn/projects/foo)\n"
+        "If this is a project directory, add it to the allowlist dirs in "
+        "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
+        "Directory root, e.g. projects/foo)\n"
         "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line)
     )
 

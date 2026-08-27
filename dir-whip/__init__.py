@@ -19,6 +19,11 @@ except ImportError:
     _get_session_cwd = None
 
 try:
+    from agent.runtime_cwd import resolve_agent_cwd as _resolve_agent_cwd
+except ImportError:
+    _resolve_agent_cwd = None
+
+try:
     from . import audit, config, events, report, sessions, state, stats, verdict
 except ImportError:
     import audit
@@ -96,9 +101,11 @@ def register(ctx):
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
         audit.set_classifier(verdict.classify_target)
-        # Host API injection slot (ADR-0007): session CWD accessor filled
-        # at register time.
+        # Host API injection slots (ADR-0007): session CWD accessor +
+        # agent CWD accessor (R2 conditional injection) filled at register
+        # time; absent host API -> None -> on_start always injects.
         state.session.session_cwd_fn = _get_session_cwd
+        state.session.agent_cwd_fn = _resolve_agent_cwd
         try:
             state.session.emit_enabled = bool(getattr(ctx, "emit", None))
         except Exception:
@@ -140,15 +147,6 @@ def register(ctx):
                 )
         except Exception as exc:
             logger.warning("dir-whip: register_skill failed: %s", exc)
-        try:
-            if hasattr(ctx, "register_system_prompt_section"):
-                ctx.register_system_prompt_section(
-                    "dir-whip-discipline", verdict.DISCIPLINE_PROMPT
-                )
-        except Exception as exc:
-            logger.warning(
-                "dir-whip: register_system_prompt_section failed: %s", exc
-            )
         logger.debug("dir-whip: registered successfully")
     except Exception as exc:
         logger.warning("dir-whip: registration failed: %s", exc)
@@ -175,6 +173,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
     """
     try:
         if sessions._is_child_session(session_id):
+            state.session.reminder_status = "skipped-child"
             return
         # 5.18: top-level session start clears the audit state (pending
         # violations, leftover pre snapshots, cap warning); child sessions
@@ -194,14 +193,35 @@ def on_start(session_id, model=None, platform=None, **kwargs):
             is_subagent=False,
             started_at=datetime.datetime.now().isoformat(timespec="seconds"),
         )
+        # R2 conditional injection three steps: cwd -> predicate -> inject.
+        cwd = None
+        cwd_fn = getattr(state.session, "agent_cwd_fn", None)
+        if callable(cwd_fn):
+            try:
+                cwd = cwd_fn()
+            except Exception as exc:
+                logger.debug("dir-whip: resolve_agent_cwd failed: %s", exc)
+                cwd = None
+        working_dir_root, _ = verdict._resolved_config()
+        if not verdict.discipline_applies(cwd, working_dir_root):
+            state.session.reminder_status = "skipped-outside"
+            logger.debug(
+                "dir-whip: session-start reminder skipped "
+                "(agent CWD outside the Working Directory)"
+            )
+            return
         if ctx and hasattr(ctx, "inject_message"):
             injected = ctx.inject_message(verdict.REMINDER_MESSAGE)
-            if not injected:
+            if injected:
+                state.session.reminder_status = "injected"
+            else:
+                state.session.reminder_status = "unavailable"
                 logger.debug(
                     "dir-whip: session-start reminder skipped "
                     "(inject_message unavailable)"
                 )
         else:
+            state.session.reminder_status = "unavailable"
             logger.debug(
                 "dir-whip: session-start reminder skipped "
                 "(inject_message unavailable)"
