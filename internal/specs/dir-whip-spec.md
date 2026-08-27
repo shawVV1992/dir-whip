@@ -1150,9 +1150,11 @@ rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 ### 5.11 Runtime Allowlist (retained, Q2)
 
 The plugin registers the tool `dir_whip_allow_path(path)` at
-`register()` (via `ctx.register_tool`). Its handler adds `path` to a
-session-scoped in-memory allowlist, merged with allowlist `dirs` entries at Tier 0
-(step 6 of 5.3). The allowlist is cleared at every session start
+`register()` (via `ctx.register_tool`) -- this is the plugin's eager,
+resident tool; the `dir_whip_settle` self-heal tool (5.18) is lazily
+registered on the first L1 audit notice instead. Its handler adds `path`
+to a session-scoped in-memory allowlist, merged with allowlist `dirs`
+entries at Tier 0 (step 6 of 5.3). The allowlist is cleared at every session start
 (`on_session_start`, 5.4); `reset_cache()` (invoked at plugin
 register/re-register) also clears it, so entries never leak into the next
 session. The tool's description tells the agent the entry is "exempt for this

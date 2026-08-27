@@ -1008,8 +1008,9 @@ def is_inside_session_dir(path, working_dir_root):
 ### 5.11 运行时豁免表（保留，Q2）
 
 plugin 在 `register()` 时注册工具 `dir_whip_allow_path(path)`
-（通过 `ctx.register_tool`）。其 handler 将 `path` 加入**会话级**的内存豁免表，
-在 Tier 0（5.3 步骤 6）与 allowlist `dirs` 条目合并。豁免表在每个会话起始清空
+（通过 `ctx.register_tool`）——这是插件的常驻急切注册工具；`dir_whip_settle`
+自愈工具（5.18）改为在首条 L1 审计通告时懒注册。其 handler 将 `path`
+加入**会话级**的内存豁免表，在 Tier 0（5.3 步骤 6）与 allowlist `dirs` 条目合并。豁免表在每个会话起始清空
 （`on_session_start`，5.4）；`reset_cache()`（插件注册/重注册时调用）也会清空
 ——条目不会泄漏到下一会话。工具描述向 agent 说明该条目"本会话豁免"。
 

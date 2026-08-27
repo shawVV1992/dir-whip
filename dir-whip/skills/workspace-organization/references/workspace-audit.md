@@ -18,17 +18,18 @@ Before auditing, confirm the target is a legitimate Working Directory:
   fail-open). An explicit `--workspace` must equal the resolved root (exit 2
   on mismatch); when resolution fails, the audit fails open to CWD with one
   concise stderr warning and proceeds.
-- **Whitelist** -- the root rules file must be listed in the
-  `allowed_root_files` whitelist (config-driven,
+- **Whitelist** -- the root rules file must be covered by an `allowlist`
+  `files` entry (config-driven,
   `HERMES_HOME/dir-whip/dir-whip-config.yaml`). The guard and the audit
   read the same key, so they never disagree about which root files are
-  permitted. Missing key -> strict empty whitelist (fail-closed).
+  permitted. Missing key -> strict empty whitelist (fail-closed); legacy
+  flat-format entries are ignored with a warning.
 
 ## Audit Checklist
 
 | # | Check | Violation Example |
 |:-:|-------|-----------------|
-| 1 | **Root-level entries** -- only `allowed_root_files` whitelist files, session-format dirs (`YYYYMMDD_HHMMSS_TaskName/`), and optional .hermes/ should exist at the workspace root | Scripts, images, notes dumped in root |
+| 1 | **Root-level entries** -- only allowlist `files` entries, allowlist `dirs` subtrees, session-format dirs (`YYYYMMDD_HHMMSS_TaskName/`), and optional .hermes/ should exist at the workspace root | Scripts, images, notes dumped in root |
 | 2 | **Root-level Outputs/** -- deliverables must live inside a session dir's Outputs/ | `Outputs/script.sh` at top level |
 | 3 | **Session dir format** -- must be `YYYYMMDD_HHMMSS_TaskName` | Plain-named folders, missing timestamp |
 | 4 | **Session subdirs** -- each session dir must have both `Outputs/` and `.tmp/` | Missing `.tmp/` or missing `Outputs/` |
@@ -40,7 +41,7 @@ Before auditing, confirm the target is a legitimate Working Directory:
 
 ### Step 1: Read the Workspace Rules File
 
-The rules file is the root file named in the `allowed_root_files` whitelist
+The rules file is the root file covered by an `allowlist` `files` entry
 (config-driven, shared with the guard). Read it by its actual name (the
 placeholder below stands for the whitelisted name):
 
