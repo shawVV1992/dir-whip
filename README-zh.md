@@ -166,14 +166,19 @@ hermes plugins disable dir-whip
 | `Stats File` | stats.jsonl 的绝对路径 |
 
 子命令 `allow|remove|list` 通过 `config_writer` 管理白名单（行级编辑，保留注释）：
-`/dir-whip allow <编号|名称|路径>` / `/dir-whip allow 1,3` / `/dir-whip list` /
-`/dir-whip remove <编号|名称>`。不带参数的 `allow` 枚举根目录候选、`remove`
-枚举当前条目（均为两段式编号列表）。allow 的路径参数接受相对或绝对输入——
-现存路径按磁盘状态判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建
-协议（`--create` 按输入形态创建：带末尾斜杠或嵌套路径→目录，裸文件名→根级
-文件）；根外/根自身输入被引导拒绝。remove 的名称参数同样接受相对或绝对输入，
-但按名称匹配、不做磁盘判别（双段同名条目一并移除）。编号映射进两段式编号
-列表（Files 段后 Dirs 段，共用一段连续编号）。未知参数输出
+
+| 子命令 | 作用 | 示例 |
+| ------ | ---- | ---- |
+| `/dir-whip` | 输出合并报告（版本 / State / 白名单 / Reminder / Health） | `/dir-whip` |
+| `/dir-whip list` | 查看当前白名单（两段式编号列表） | `/dir-whip list` |
+| `/dir-whip allow` | 枚举根目录候选（两段式编号列表 + Add 提示） | `/dir-whip allow` |
+| `/dir-whip allow <编号\|名称\|路径>` | 登记条目，逗号批量；现存路径按磁盘判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议 | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` |
+| `/dir-whip remove` | 枚举当前条目（两段式编号列表 + Remove 提示） | `/dir-whip remove` |
+| `/dir-whip remove <编号\|名称>` | 移除条目；按名称匹配、不做磁盘判别（双段同名一并移除） | `/dir-whip remove 2` · `/dir-whip remove notes.txt` |
+
+补充语义：编号映射进两段式编号列表（Files 段后 Dirs 段，共用一段连续编号）；
+路径参数接受相对或绝对输入——`--create` 按输入形态创建产物（带末尾斜杠或
+嵌套路径→目录，裸文件名→根级文件）；根外/根自身输入被引导拒绝。未知参数输出
 `Usage: /dir-whip [allow|remove|list]`；不带参数的 `/dir-whip` 仍输出合并报告。
 
 `dir_whip_allow_path(path)` 是插件的常驻工具：当用户在对话中明确指定
