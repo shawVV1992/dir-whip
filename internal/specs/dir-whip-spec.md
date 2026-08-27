@@ -1,8 +1,8 @@
 # dir-whip — Complete Specification
 
-- Version: 2.6
-- Date: 2026-08-25 (SCR-037 amendment v2.6 single-key allowlist B2; previous freeze v2.5 2026-08-25)
-- Status: FROZEN (v2.6, frozen 2026-08-25) — SCR-037 amendment v2.6: single unified key `allowlist: []` with discriminated entries `file:<basename>` | `prefix:<abs-path>` (B2 clean break — `exempt_paths` + `allowed_root_files` removed as config keys, no backward compat, user 2026-08-25 B2 decision, feedback/09). BREAKING: old keys deleted. 5.6/5.3/5.7/5.18 and report/audit aligned to single key. Behavior vs v2.5: dual keys collapsed to one; exempt concept retained only as parsed `prefix:` subset of `allowlist`. Historical:
+- Version: 2.7
+- Date: 2026-08-26 (SCR-039 amendment v2.7 — prompt-channel rework + same-turn self-heal + structured allowlist; previous freeze v2.6 2026-08-25)
+- Status: ACTIVE (v2.7, activated 2026-08-26) — SCR-039 amendment v2.7 (feedback/10, user decisions 2026-08-26): (1) prompt-channel rework — the Always-on Discipline Prompt (register_system_prompt_section, per-round billing) is REMOVED and replaced by a conditional session-start discipline block (5.4, <=280 chars lock); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered) + L1 notice upgrade close the violation loop within the user turn; pre_verify continuation fallback added; (3) structured allowlist (BREAKING v2.7) — `allowlist` becomes a mapping `{files: [...], dirs: [...]}` of paths RELATIVE to working_dir_root (dirs recursive, root itself and outside-root entries rejected); flat tagged list (`file:` / `prefix:` strings) removed clean-break, legacy ignored fail-closed; `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation. Historical:
   authoritative v0.3.0 baseline
   (SCR-024 root), superseding the v1.4 baseline. v0.2.0 implemented and
   verified 2026-08-14 (acceptance matrix all Done, testing-standards.md;
@@ -115,10 +115,10 @@ coupling (the guard never calls the skill; the skill never calls the guard).
 | Confirmation Protocol | Two-step rule: instruction is not confirmation. Destructive operations (delete, overwrite, move) require explicit user confirmation after the agent reports what it will do. |
 | Governance Mode | Workflow triggered by user request ("tidy workspace") or cron job. Audits, classifies, proposes corrective actions, and executes with user confirmation (cron mode auto-cleans .tmp). Automated by `audit_workspace.py --gate`. |
 | File Operation Guard | The plugin's pre_tool_call hook that classifies write targets (write_file / patch / terminal) and blocks operations targeting non-whitelist paths at the Working Directory root outside valid Session Directories. External paths are allowed and logged. |
-| Exempt Paths | Parsed prefix subset of `allowlist` (`prefix:<abs-path>` entries) — project directories inside the Working Directory that are not subject to guard enforcement. Not a config key (the single key is `allowlist`). |
-| Runtime Allowlist | Session-scoped in-memory set of user-specified paths (injected via the `dir_whip_allow_path` tool), cleared at every session start; merged with allowlist `prefix:` entries at Tier 0 of the guard. Entries are exempt for the current session only. |
+| Allowlisted Dirs | Parsed `dirs` subset of `allowlist` (relative paths under working_dir_root) — directory subtrees inside the Working Directory that are not subject to guard enforcement; recursive. Not a separate config key (the single key is `allowlist`). Legacy v2.6 `prefix:` entries are ignored (clean break). |
+| Runtime Allowlist | Session-scoped in-memory set of user-specified paths (injected via the `dir_whip_allow_path` tool), cleared at every session start; merged with allowlist `dirs` entries at Tier 0 of the guard. Entries are exempt for the current session only. |
 | Subagent | A child AIAgent spawned by the parent agent (delegate_task). Runs in the same process and inherits the parent's toolset, so pre_tool_call covers its writes. By discipline its files land in the parent session's Session Directory `.tmp/`. |
-| Discipline Prompt | The always-on system prompt section injected by the plugin via `register_system_prompt_section()` (≤200 chars). Carries the core discipline; the full interception response template is delivered by the guard's block message. |
+| Discipline Block | The session-start discipline message injected once per top-level Working-Directory session via `ctx.inject_message()` (v2.7; replaces the removed always-on Discipline Prompt). Carries the core discipline; the full interception response template is delivered by the guard's block message. |
 
 ### 2.2 Hermes Terminology Mapping
 
@@ -198,7 +198,7 @@ it enforces by path location):
 | Target classification | Guard behavior |
 |---|---|
 | Inside a Session Directory (`working_dir_root/YYYYMMDD_HHMMSS.../...`) | Allow |
-| Root allowlist file (`allowlist` `file:` entry) | Allow |
+| Root allowlisted file (`allowlist` `files` entry) | Allow |
 | External path (outside the Working Directory, incl. sibling profile dirs) | Allow + logged (fail-open) |
 | Working Directory root, non-allowlist (anything else at root) | Block |
 
@@ -221,7 +221,8 @@ Key rule: Session Directory is created lazily at first file write, NOT at
 conversation start. Conversations that produce no files create no directories.
 
 **Step 3 — root forbid (C4).** The Working Directory root allows EXACTLY:
-`allowlist` `file:` entries (root files), session-format directories
+`allowlist` `files` entries (root files), allowlisted `dirs` subtrees,
+session-format directories
 (`YYYYMMDD_HHMMSS_TaskName/`) and their contents, and `.hermes/`. Every other
 creation at the root is strongly forbidden — use a Session Directory instead.
 
@@ -310,7 +311,7 @@ approval gate). The agent must:
 The agent should understand the plugin's classification so it can respond to
 block / allow outcomes correctly and state the classification truthfully:
 
-- Paths inside a Session Directory or matching allowlist `prefix:` / runtime-allowlisted
+- Paths inside a Session Directory or matching allowlist `dirs` / runtime-allowlisted
   paths: allowed.
 - Root allowlist files (`allowlist` `file:` entries): allowed.
 - Paths at the Working Directory root that are not allowlist file entries: blocked —
@@ -319,32 +320,35 @@ block / allow outcomes correctly and state the classification truthfully:
   directories): allowed + logged (external; no cross-profile interception).
 - Uncertain terminal write intent: allowed + logged.
 
-### 3.7 Always-on Discipline Prompt (C2, Q10)
+### 3.7 Session-start Discipline Block (v2.7 — replaces the Always-on Discipline Prompt)
 
-Injected at `register()` via `register_system_prompt_section()`. Bounded at
-**≤400 chars** (≤200 Chinese chars, ≤400 English chars; upstream cap 4000).
-The prompt is billed every round, so it must stay minimal. Unified to English
-(2026-08-25). Content (four elements + placement/allowlist extensions from
-skill file-creation rules):
+The Always-on Discipline Prompt (`register_system_prompt_section`, billed every
+round) is REMOVED in v2.7. Teaching is carried by two channels instead:
 
-1. **Classify before write** — state the target class before any create/write
-   (session-dir / allowlist file(file:) / external)
-2. **Session-dir placement** — writes inside the Working Directory go to a
-   Session Directory (deliverable->Outputs/ else .tmp/); if not in a session
-   dir, create via `python scripts/create_session_dir.py <task> --workspace <root>`
-3. **Root forbid** — the root allows only allowlist files + session directories
-   + `.hermes/`
-4. **When blocked** — follow the Fix in the guard's block message, reply
-   `[Reason]/[Next]`; user-specified path -> `dir_whip_allow_path` first
-
-Actual prompt (structured with `|` separators, E-C):
+1. **Session-start discipline block** — injected ONCE per top-level session via
+   `ctx.inject_message()`, CONDITIONALLY (only when the session lives inside
+   the Working Directory; mechanics and fail-open matrix in 5.4). Locked text
+   (verbatim; `len <= 280` chars, ~70 tokens, test-locked by character count):
 
 ```
-[dir-whip] Classify before write | session-dir / allowlist file(file:) / external. If not in session dir, create: python scripts/create_session_dir.py <task> --workspace <root>. WD writes -> session dir: deliverable->Outputs/ else .tmp/. Root only: allowlist files, session dirs, .hermes/. User path -> dir_whip_allow_path first. Blocked -> follow Fix, reply [Reason]/[Next].
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
 ```
+
+   Elements dropped vs the old prompt, each with a deterministic downstream
+   teacher: classify-before-write framing (SKILL.md on load + block messages),
+   external classification (guard auto allow+log), `.hermes/` root exception
+   (block message), `[Reason]/[Next]` template pointer (block message carries
+   the full template), timestamp format (create_session_dir.py enforces it).
+2. **Block-message completion** — the guard's block message now carries the
+   placement-intent rule (deliverable -> Outputs/ else .tmp/) and the
+   `dir_whip_allow_path` hint (5.3), so every interception is a complete
+   teaching point.
+
+No always-on pointer micro-prompt is used (user decision 2026-08-26): the
+guard's block message is the deterministic re-teaching point.
 
 The full C6 template (3.9) is delivered by the plugin's block message, not by
-the prompt.
+the block.
 
 ### 3.8 Creation Workflow Examples (C5)
 
@@ -423,10 +427,10 @@ Exit codes:
 
 Boundary validation: same equality/containment semantics vs the resolved
 Working Directory (4.4); mismatch -> exit 2. Root-file allowlist stays
-config-driven: `allowlist` `file:` entries read from dir-whip-config.yaml (default
-`[]` strict empty, shipped in the config template v2.6; missing key -> same
-strict empty allowlist, over-reporting, fail-closed; `allowed_root_files` and
-`exempt_paths` removed as keys in v2.6 B2, no backward compat).
+config-driven: `allowlist` `files` entries read from dir-whip-config.yaml
+(default empty lists, shipped in the config template v2.7; missing key ->
+same strict empty allowlist, over-reporting, fail-closed; the v2.6 flat
+tagged format and the pre-v2.6 keys are removed, no backward compat).
 
 `--gate` retained (Q4) for cron wakeAgent integration:
 - Last stdout line is JSON: `{"wakeAgent": false}` (no violations) or
@@ -663,16 +667,16 @@ Unified judgment chain (shared by all intercepted tools):
 
 6. For each target, classify via classify_target():
 
-   - matches allowlist prefix entries OR runtime allowlist (Tier 0)   -> ALLOW
+   - matches allowlist `dirs` entries OR runtime allowlist (Tier 0)    -> ALLOW
 
-     target under working_dir_root:
-       - matches allowlist file entries at root               -> ALLOW
-       - is inside a valid Session Directory              -> ALLOW
-       - otherwise (root non-allowlist / non-session dir) -> BLOCK
+      target under working_dir_root:
+        - matches allowlist `files` entries at root             -> ALLOW
+        - is inside a valid Session Directory              -> ALLOW
+        - otherwise (root non-allowlist / non-session dir) -> BLOCK
 
-     target outside working_dir_root
-       (incl. sibling profile directories)                -> ALLOW + LOG
-                                                           (external-write event)
+      target outside working_dir_root
+        (incl. sibling profile directories)                -> ALLOW + LOG
+                                                            (external-write event)
 
 7. Aggregate multi-target result (strictest wins):
    - any BLOCK            -> return block
@@ -683,7 +687,8 @@ There is NO approve tier anymore (Q1: cross-profile interception removed;
 A2: uncertain terminal intent is allowed + logged). Every verdict emits a
 structured single-line log event (5.13) and updates the statistics counters.
 
-Block result (term-updated, C6-aligned):
+Block result (v2.7: placement-intent rule + allow_path hint added, R3;
+project-dir hint switched to relative `dirs` syntax):
 ```python
 {
   "action": "block",
@@ -694,9 +699,11 @@ Block result (term-updated, C6-aligned):
     "Fix: Create a session directory first:\n"
     "  python <scripts_path>/create_session_dir.py <task_name> "
     "--workspace <working_dir_root>\n"
-    "Then write to its Outputs/ or .tmp/ subdirectory.\n"
-    "If this is a project directory, add it to allowlist as prefix:<abs-path> in "
-    "HERMES_HOME/dir-whip/dir-whip-config.yaml (e.g. prefix:E:/HermesWorkspace/learn/projects/foo)\n"
+    "Then write there: deliverable -> Outputs/, scratch -> .tmp/.\n"
+    "User-specified path -> dir_whip_allow_path first.\n"
+    "If this is a project directory, add it to the allowlist dirs in "
+    "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
+    "Directory root, e.g. projects/foo)\n"
     "Reply using the [Reason]/[Next] template."
   )
 }
@@ -706,6 +713,8 @@ Subagent variant (Q1): when the call originates from a child session
 (session_id in the `child_session_ids` set, 5.4), the fix instruction is
 replaced by "write to the target directory passed by the parent agent" — no
 create_session_dir guidance (subagents never create session directories).
+The subagent variant does NOT gain the placement-intent / allow_path lines
+(subagents make no placement decisions; protocol is write-where-parent-says).
 
 ### 5.4 on_session_start Hook
 
@@ -715,14 +724,37 @@ def on_start(session_id: str, model: str, platform: str, **kwargs):
 ```
 
 Behavior: clear the runtime allowlist (session-scoped, SCR-010 behavior
-retained), reset the fail-open warning flag, and inject a short reminder via
-`ctx.inject_message()`:
+retained), reset the fail-open warning flag, re-resolve working_dir_root from
+this session's profile (SCR-027), then CONDITIONALLY inject the discipline
+block via `ctx.inject_message()`:
 
 ```
-[dir-whip] Active. File writes in the Working Directory must be inside
-a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). Use
-create_session_dir.py to create one before writing files.
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
 ```
+
+**Conditional injection (v2.7).** The block is injected only when the session
+lives inside the Working Directory:
+
+- Session CWD source: the host's agent-CWD accessor, wired at register()
+  through the `agent_cwd_fn` injection slot (ADR-0007 pattern; host source =
+  `agent.runtime_cwd.resolve_agent_cwd()`: session contextvar override ->
+  TERMINAL_CWD bridge -> process CWD).
+- Predicate: `verdict.discipline_applies(cwd, working_dir_root)` — a pure,
+  None-safe function returning True unless positively known otherwise; inside
+  it reuses `paths.within_working_dir` (equality = inside; Windows drive-rooted
+  casefold rules on any host, SCR-006; different drive = outside).
+- Injection matrix: cwd inside root -> inject; cwd outside root / different
+  drive -> skip (debug log); cwd unavailable or predicate error -> inject
+  (fail-open = current behavior); working_dir_root unresolved -> inject (the
+  one-time fail-open warning path at first guarded write is unchanged, 5.12);
+  inject_message unavailable -> debug log skip (CLI/TUI, unchanged).
+- Outcome recorded in `state.session.reminder_status` (`injected` |
+  `skipped-outside` | `skipped-child` | `unavailable`) and surfaced by the
+  `/dir-whip` report (5.7). Semantics (2026-08-26 ruling): single
+  process-shared field, LAST-TOP-LEVEL-WRITER wins — the report shows the
+  most recent top-level session's outcome (correct by construction in
+  single-session CLI; documented limitation in desktop multi-session
+  processes; no per-session map).
 
 The allowlist clear applies to TOP-LEVEL sessions only — VERIFIED against the
 installed hermes-agent source: child sessions DO fire on_session_start (the
@@ -730,7 +762,7 @@ child runs the same conversation loop, which fires the hook unconditionally on
 the child's first turn; subagent_start is fired BEFORE the child's loop
 starts). Defense: the plugin keeps a `child_session_ids` set (populated by the
 subagent_start hook, removed by subagent_stop); the on_session_start callback
-skips the allowlist clear, the fail-open flag reset, AND the reminder
+skips the allowlist clear, the fail-open flag reset, AND the discipline-block
 injection when session_id is in the set — all three are top-level-session
 only (the runtime allowlist is process-shared with the parent).
 
@@ -790,14 +822,15 @@ v1.4, SCR-013: outside the plugin dir so forced reinstalls do not wipe it)
 
 ```yaml
 # dir-whip configuration (user-managed, lives outside the plugin dir)
-# Single unified allowlist (B2, BREAKING v2.6): no exempt_paths /
-# allowed_root_files — use discriminated entries below.
+# Structured allowlist (v2.7, BREAKING): entries are RELATIVE to
+# working_dir_root; nothing outside the root (or the root itself) can be
+# allowlisted.
 
-allowlist: []  # file:<name> | prefix:<abs-path>   e.g. file:README.md , prefix:E:/HermesWorkspace/learn/projects/foo
-#   file:<basename>  -> root file allowed at Working Directory root
-#   prefix:<abs-path> -> exempt prefix (project dir inside workspace, may end with /)
-#   Use forward slashes for prefixes. Missing key -> strict empty allowlist (fail-closed).
-#   Old keys exempt_paths / allowed_root_files are removed (no backward compat, B2).
+allowlist:
+  files: []   # root-level file basenames, e.g. ["README.md", "notes.txt"]
+  dirs: []    # relative dir paths under the root, recursive subtree
+              # exemption, e.g. ["projects/foo"] -- multi-level allowed;
+              # no "..", no absolute/drive forms, not "." (the root itself)
 
 # Optional override: working_dir_root (authoritative when set; fallback =
 # current profile's terminal.cwd)
@@ -812,37 +845,165 @@ allowlist: []  # file:<name> | prefix:<abs-path>   e.g. file:README.md , prefix:
 # write_audit_entry_cap: 2000
 ```
 
-Matching: discriminated — entries with `file:` denote a root-file allowlist entry
-(basename only); entries with `prefix:` denote an exempt prefix (absolute path,
-prefix match, normalized to forward slashes; case-insensitive on Windows via
-casefold, SCR-006). A `prefix:` entry may be written as `prefix:E:/path` or
-`prefix:E:/path/` (trailing slash is normalized). Bare entries without a tag
-are treated as `file:` when they contain no slash and as `prefix:` when they
-contain a slash (generator compat, not a config key). The runtime allowlist
-(5.11) is merged with the parsed `prefix:` subset at Tier 0. Missing `allowlist`
-key -> strict empty allowlist (fail-closed, guard and audit agree; B2).
+Matching (v2.7 structured mapping): `files` entries are basenames allowed at
+the Working Directory root (exact basename match, case-insensitive on Windows).
+`dirs` entries are paths RELATIVE to working_dir_root; a target is exempt when
+it equals or is under `<working_dir_root>/<dirs entry>` — a recursive subtree
+exemption (forward-slash normalized; case-insensitive on Windows via casefold,
+SCR-006). Multi-level relative paths are allowed (`projects/foo`). Storage is
+ALWAYS root-relative; absolute input is input-layer tolerance only.
 
-### 5.7 Commands and Tools (Q12) — SCR-029 / SCR-037 v2.6
+**Input normalization and add-time layering (2026-08-26 ruling — allow input
+layer v2.1).** `/dir-whip allow` accepts index numbers, relative paths, or
+absolute paths (backslash -> forward slash, MSYS/Cygwin forms mapped via the
+shared normalizer, SCR-006; comparisons casefolded on Windows):
+
+1. Absolute input is relativized against working_dir_root; a result that
+   resolves OUTSIDE the root (rel starts with `..`, equals `.` — root itself
+   or an ancestor) is rejected with the guided message
+   `[dir-whip] Invalid path: choose a file or folder inside the Working
+   Directory (<root>).` plus a reason clause (`'<input>' resolves outside
+   it`).
+2. Existing paths (casefold-aware) classify by disk state: directory ->
+   `dirs` entry, file -> `files` entry (disk-aware; a bare name naming an
+   existing directory still goes to `dirs`).
+3. NON-EXISTENT paths follow the symmetric confirm-create protocol (same rule
+   for bare names and dirs, 2026-08-26):
+   - without `--create`: guided message with the exact follow-up command —
+     `'<input>' does not exist -- run: /dir-whip allow <input> --create`;
+   - with `--create`, the created artifact is decided by form: trailing
+     slash -> `os.makedirs(<root>/<rel>, parents=True)` + `dirs` entry; bare
+     name -> empty file created at the root + `files` entry (unlocks
+     agent root-file writes the user deems root-appropriate); nested path
+     without trailing slash -> directory tree (nested files cannot be `files`
+     entries — basename-only storage — so nested implies directory intent).
+     `--create` on an existing path is a no-op (existence decides first).
+4. Validation at load time: `..` segments, absolute/drive forms, empty
+   values, and `.` (root itself) in stored entries are ignored (hand-edited
+   configs fail-closed, guard and audit agree); an entry resolving outside
+   the root is ignored at load time.
+
+Total entries across both keys <= 100 — the cap is
+enforced at ADD time only (hand-edited configs beyond the cap are trusted
+at load; 2026-08-26 ruling). config_writer edits each key as a single
+flow-style line (`files: ["a", "b"]`, whole-line replacement, key comments
+preserved) — block-style `- item` lists are not produced. Edge case
+(documentation only): a `files` entry naming an existing DIRECTORY on disk is
+harmless (basename match applies to files only; no extra validation).
+Symlinks/junctions are matched literally (no realpath resolution) — consistent
+with the guard's classify behavior.
+
+**Clean break (v2.7)**: the flat tagged-list format of v2.6 (`file:<name>` /
+`prefix:<abs-path>` strings) is REMOVED with no backward compat (user decision
+2026-08-26, following the B2 precedent). A legacy flat value under `allowlist`
+is ignored fail-closed (guard and audit agree) and `/dir-whip list` reports it
+as ignored legacy entries so the migration is visible. Missing `allowlist`
+key -> strict empty allowlist (fail-closed, guard and audit agree).
+
+The runtime allowlist (5.11) is merged with the parsed `dirs` subset at
+Tier 0.
+
+### 5.7 Commands and Tools (Q12) — SCR-029 / SCR-037 v2.6 / SCR-039 v2.7
 
 Registered at `register()`:
 
 - `/dir-whip` — merged report + allowlist management. SCR-029 removed the
   `status`/`stats`/`doctor` subcommands (statistics backend 5.13 unchanged);
-  SCR-037 v2.5 added `allow`/`remove`/`list` for persistent `allowed_root_files`
-  (replaced in v2.6 by unified `allowlist`, B2 clean break, no compat);
-  v2.6 `allow`/`remove`/`list` manage the single `allowlist` (config_writer,
-  row-level YAML edit preserving comments, B2): bare `/dir-whip` renders the
-  report below; ` /dir-whip allow` lists numbered root-file candidates;
-  `/dir-whip allow <file|prefix:PATH|PATH/>` intelligently discriminates —
-  no slash (e.g. `README.md`) -> `file:` entry, slash or `prefix:` prefix
-  (e.g. `prefix:E:/ws/p` or `E:/ws/p/`) -> `prefix:` entry — and
-  `/dir-whip allow <name|1,3>` batch is supported; `/dir-whip remove
-  <file|prefix:PATH|PATH/>` and `/dir-whip list` show the current allowlist.
-  Any other argument renders `Usage: /dir-whip [allow|remove|list]`.
+  v2.7 unifies `allow`/`remove`/`list` on ONE presentation: a Files/Ddirs
+  two-section numbered listing (config_writer, row-level YAML edit preserving
+  comments). Bare `/dir-whip` renders the report below.
+  - `/dir-whip allow` lists numbered candidates from the Working Directory
+    root — `Files:` section (top-level files, excluding already-allowlisted
+    files / prefix-covered subtrees / session dirs) then `Dirs:` section
+    (top-level directories, excluding session-format dirs and subtrees already
+    covered by a `dirs` entry) — one continuous numbering across both
+    sections.
+  - `/dir-whip allow <args>` adds entries; comma/whitespace batch (`1,3`)
+    supported; numbers map into the candidate list (file number -> `files`
+    entry, dir number -> `dirs` entry). Name arguments accept relative or
+    ABSOLUTE paths (input-layer tolerance; normalized + relativized, 5.6):
+    existing path -> disk-aware (`dirs` for a directory, `files` for a
+    file); non-existent path -> confirm-create protocol (R3 below).
+  - `/dir-whip remove` lists numbered CURRENT entries in the same two-section
+    format (`Files:` then `Dirs:`); numbers map to removal. Name arguments
+    accept relative or absolute paths (normalized; matched against both
+    sets, 5.6 rules).
+  - `/dir-whip list` renders the current allowlist in the same two-section
+    numbered format (numbers align with `remove`), plus an ignored-legacy
+    hint line when a legacy flat value was ignored (v2.6 format, clean break).
+  - Any other argument renders `Usage: /dir-whip [allow|remove|list]`.
+
+**Interaction flow (v2.7, 2026-08-26 ruling — R1-R8):**
+
+- **R1 Numbering**: `Files:` and `Dirs:` sections share ONE continuous integer
+  sequence (section headers are visual grouping only; digit tokens never need
+  section context).
+- **R2 Bare `allow` (candidate enumeration)**:
+  ```
+  Candidates in <root>:
+  Files:
+    1: notes.txt
+  Dirs:
+    2: projects
+  Add: /dir-whip allow <number|name>
+  ```
+  Files section = top-level files minus already-listed `files` entries; Dirs
+  section = top-level directories minus session-format directories
+  (`YYYYMMDD_HHMMSS.../`), minus `.hermes/`, minus subtrees already covered by
+  a `dirs` entry; empty sections render `(none)`.
+- **R3 `allow <args>`**: digit tokens map into the candidate list (file
+  number -> `files`, dir number -> `dirs`); comma/whitespace batch with
+  all-or-nothing semantics (first invalid token rejects the whole call).
+  Path tokens (relative or absolute, 5.6 input layering):
+  - existing path -> disk-aware classification (`dirs` / `files`);
+  - NON-EXISTENT path -> the symmetric confirm-create protocol (same rule
+    for bare names and dirs, 2026-08-26): without `--create` the call
+    returns the guided message `'<input>' does not exist -- run: /dir-whip
+    allow <input> --create` (nothing added); with `--create` the artifact is
+    decided by form — trailing slash -> `makedirs` + `dirs` entry, bare name
+    -> empty root file + `files` entry, nested no-slash -> directory tree +
+    `dirs` entry; `--create` on an existing path is a no-op;
+  - outside-root / root-itself / ancestor -> guided rejection
+    `[dir-whip] Invalid path: choose a file or folder inside the Working
+    Directory (<root>).` + reason clause.
+  Feedback names the target set per entry
+  (`Added to files: X` / `Added to dirs: X`); duplicates idempotent
+  (`Already in files: X`); a final two-section current-state line follows.
+- **R4 Bare `remove`** (upgraded from the v0.4.1 Usage hint): enumerates the
+  CURRENT entries in the same two-section numbered format plus
+  `Remove: /dir-whip remove <number|name>`; `(strict empty allowlist)` kept
+  when the key is missing.
+- **R5 `remove <args>` name matching**: accepts relative or absolute input
+  (normalized, 5.6); matches by NAME against BOTH sets
+  (casefold on Windows); a hit removes from whichever set holds it — a
+  hand-edited entry present in both is removed from both. Disk-aware
+  discrimination is an ALLOW-time concern only (remove deletes an entry, not
+  a path).
+- **R6 `list` rendering**: same multi-line format as R4 (numbers align with
+  `remove` so a listed number can be copied directly); empty state
+  `Files: (none)  Dirs: (none)`; ignored legacy flat values append
+  `[!] ignored legacy entries: N -- re-add via /dir-whip allow`.
+- **R7 Storage normalization**: `dirs` entries stored and displayed WITHOUT a
+  trailing slash; nested relative paths (`proj/sub`) go to `dirs` whether or
+  not they exist on disk yet.
+- **R8 Unchanged**: no confirmation step (user-authoritative direct
+  mutation); narrow cache refresh takes effect immediately; runtime
+  allowlist tool unaffected; digit-only filenames (e.g. `123`) are always
+  parsed as indices (documented).
+
 - Tool `dir_whip_allow_path(path)` — runtime allowlist (Tier 0);
-  session-scoped, cleared at session start (5.4). This remains the
-  plugin's ONLY tool (agent-channel allowlist management is intentionally
-  not added — user-authoritative slash command only, security posture).
+  session-scoped, cleared at session start (5.4).
+- Tool `dir_whip_settle(paths)` (NEW v2.7, LAZILY REGISTERED) — same-turn
+  self-heal for write-audit violations (5.18): hard-constrained to paths
+  currently in this session's unresolved pending set (zero arbitrary
+  filesystem capability); moves each accepted path via shutil.move into
+  `<working_dir_root>/.hermes/audit-quarantine/<timestamp>/` (audit-safe:
+  snapshot scans top-level entries only and directory entries never violate);
+  returns the moved list; subagents rejected (remediation is the parent's
+  job); fail-open on error (error dict, latch stays). Registered on first L1
+  notice fire so sessions with no violations pay zero standing schema cost;
+  fallback if mid-session registration proves unavailable on a surface:
+  constant registration.
 
 **Report layout (exact field order, one field per line):**
 
@@ -851,7 +1012,8 @@ Registered at `register()`:
 State: ACTIVE
 Working Directory: <value>  (source: <source>)
 Terminal Guard: enabled|disabled
-Allowlist: Files: (none)|<comma-joined file basenames>  Prefixes: (none)|<comma-joined prefix paths>  | (strict empty allowlist)
+Allowlist: Files: (none)|<comma-joined file basenames>  Dirs: (none)|<comma-joined relative dir paths>  | (strict empty allowlist) [| ignored legacy entries: N]
+Reminder: injected|skipped-outside|skipped-child|unavailable
 Health: OK|PROBLEM
 - resolution: FAIL-OPEN              # one line per problem, only when PROBLEM
 - stats.jsonl: NOT WRITABLE (<err>)
@@ -859,7 +1021,7 @@ WARNING: ...                         # only when override != terminal.cwd
 Stats File: <absolute stats.jsonl path>
 ```
 
-Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2):
+Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2; v2.7):
 - Line 1 `[dir-whip] v<version>`: version read from the package-root
   plugin.yaml (the single version source; simple text parse, no PyYAML).
   Any failure (missing/unreadable file, no match) -> `unknown`; never
@@ -871,14 +1033,17 @@ Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2):
   `profile-config` (profile terminal.cwd) / `fail-open`, matching the 5.5
   chain steps; no value -> `Working Directory: (unresolved)`. Display term
   is "Working Directory" (G1); code identifier working_dir_root unchanged.
-- Lines 4-5 (display labels; single-key B2):
+- Lines 4-5 (display labels):
   `Terminal Guard` (= terminal_guard, default enabled);
-  `Allowlist` (= allowlist, discriminated): `Files: (none)` or comma-joined
-  `file:` basenames, `Prefixes: (none)` or comma-joined `prefix:` absolute
-  paths; legacy display also shows `Allowlist: (strict empty allowlist)` when
-  the `allowlist` key is MISSING from dir-whip-config.yaml (fail-closed hint),
-  or `Files: (none)  Prefixes: (none)` when present but empty. Old keys
+  `Allowlist` (= allowlist, structured mapping v2.7): `Files: (none)` or
+  comma-joined file basenames, `Dirs: (none)` or comma-joined relative dir
+  paths; `Allowlist: (strict empty allowlist)` when the `allowlist` key is
+  MISSING from dir-whip-config.yaml (fail-closed hint), or
+  `Files: (none)  Dirs: (none)` when present but empty; an ignored legacy
+  flat value appends `ignored legacy entries: N`. Old keys
   `exempt_paths` / `allowed_root_files` are not displayed (removed, B2).
+  `Reminder` (= session-start discipline-block outcome, 5.4:
+  `injected` | `skipped-outside` | `skipped-child` | `unavailable`).
 - Line 6 `Health`: `OK`, or `PROBLEM` with one line per problem:
   `- resolution: FAIL-OPEN` and/or `- stats.jsonl: NOT WRITABLE (<err>)`.
   A missing dir-whip-config.yaml is the design default, NOT a problem.
@@ -974,16 +1139,17 @@ rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 
 The plugin registers the tool `dir_whip_allow_path(path)` at
 `register()` (via `ctx.register_tool`). Its handler adds `path` to a
-session-scoped in-memory allowlist, merged with allowlist `prefix:` entries at Tier 0
+session-scoped in-memory allowlist, merged with allowlist `dirs` entries at Tier 0
 (step 6 of 5.3). The allowlist is cleared at every session start
 (`on_session_start`, 5.4); `reset_cache()` (invoked at plugin
 register/re-register) also clears it, so entries never leak into the next
 session. The tool's description tells the agent the entry is "exempt for this
 session".
 
-Matching semantics: entries prefix-match like allowlist `prefix:` entries — forward-slash
+Matching semantics: entries prefix-match like allowlist `dirs` entries — forward-slash
 normalized and casefolded on Windows; a directory entry exempts its entire
-subtree.
+subtree. (Runtime entries stay absolute-path based — they are user-specified
+per session, unlike the persistent relative `allowlist`.)
 
 Tool registration: the schema follows the OpenAI function format
 (name/description/parameters); the handler signature is `(args, **kwargs)`
@@ -1066,7 +1232,7 @@ fail-closed):
 - `dir-whip:approval-requested` / `dir-whip:approval-resolved` —
   observed host approval flow (post_approval_response)
 - `dir-whip:write-audit-violation` — root write audit (5.18): a new or
-  modified root-level file outside the allowlist (file:/prefix:) / session scope
+  modified root-level file outside the allowlist (files/dirs) / session scope
   (path, session scope flag, first-seen)
 - `dir-whip:write-audit-gate-block` — the L3 pending-violation latch
   blocked a write-class tool until remediation (path, latch status)
@@ -1117,16 +1283,16 @@ it lands, the hook only observes.
   missing or a write is blocked, the subagent reports back to the parent
   instead of creating a session directory itself.
 
-### 5.17 Skill Registration and Discipline Prompt (C1/C2)
+### 5.17 Skill Registration and Teaching Channels (C1/C2)
 
 - `register_skill()`: registers the bundled skill from
   `dir-whip/skills/workspace-organization/` (SKILL.md + references +
   scripts). Opt-in loading per upstream semantics (3.1).
-- `register_system_prompt_section()`: injects the Discipline Prompt (3.7,
-  ≤200 字). The per-round billing cost of the prompt is a known, accepted
-  trade-off (Q10).
+- `register_system_prompt_section()`: REMOVED in v2.7 (the Always-on
+  Discipline Prompt channel is gone; teaching = session-start discipline
+  block (5.4) + block-message completion (5.3) + SKILL.md opt-in load).
 
-### 5.18 Root Write Audit (SCR-034, new feature)
+### 5.18 Root Write Audit (SCR-034; v2.7 same-turn self-heal)
 
 The ROOT WRITE AUDIT is the second detection backbone for terminal
 discipline: it OBSERVES what the filesystem actually changed instead of
@@ -1143,9 +1309,9 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
 - Only FILE entries are judged (`is_dir == False`). Directory mtime changes
   (session directories, `.git/`, `.hermes/` content) are ignored.
 - The delta set is classified through the shared chain
-  (`normalize_target` + `classify_target` with allowlist `prefix:` entries,
+  (`normalize_target` + `classify_target` with allowlist `dirs` entries,
   `is_subagent`). A VIOLATION is: a new or modified root-level file that is
-  NOT in `allowlist` `file:` entries (5.6), NOT under an `allowlist` `prefix:`
+  NOT in `allowlist` `files` entries (5.6), NOT under an `allowlist` `dirs`
   entry, and NOT inside any session directory. Deletions are
   recorded but are report-only — never violations (5.8 delete principle).
 
@@ -1154,8 +1320,10 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   (Hermes first-party precedent: the security-guidance plugin appends a
   warning to the tool result; returning a string replaces the result the
   model sees). When the diff FIRST finds a violation, the terminal result
-  gets one appended notice naming the path and the remediation (move to a
-  session directory / add to the root allowlist). HARD CONSTRAINT: one
+  gets one appended notice naming the path and the remediation. v2.7 text:
+  "Remediate now: call `dir_whip_settle` to move it into quarantine, or move
+  it manually into a Session Directory" + the standing warning that further
+  Working Directory writes stay blocked until resolved. HARD CONSTRAINT: one
   notice per violation, never re-appended on later results (context
   hygiene); error results are not decorated. ORDERING (live-verified
   2026-08-22, 30.12): Hermes fires `transform_tool_result` BEFORE
@@ -1175,11 +1343,55 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   finds the path gone or moved to an allowed location. First write cannot be
   prevented; all FURTHER writes are frozen until remediation. The latch is
   session-scoped and cleared at session start; subagent sessions inherit
-  the parent's latch (child_session_ids gate, 5.4/5.16).
+  the parent's latch (child_session_ids gate, 5.4/5.16). NOTE (v2.7): while
+  latched, EVERY write-class call is blocked — including a remediation
+  `mv`/`rm` — which is why agent-side self-heal goes through the
+  `dir_whip_settle` tool (below), not through terminal commands.
 - **L4 auto-move**: OPTIONAL, DEFAULT OFF (`write_audit_autofix`, reserved).
   The plugin moves the offending file into the session's `.tmp/`. Held back
   because auto-moving conflicts with the "delete = report-only" safety
   principle and can break the agent's later references to the path.
+
+**Same-turn self-heal (v2.7, R4/R5).** Goal: the detect -> notify -> settle
+loop completes within the user turn that triggered the violation.
+
+- `dir_whip_settle(paths)` tool (5.7): the ONLY agent-side remediation
+  channel. Hard-constrained to paths currently in this session's
+  unresolved pending set; moves them via shutil.move into
+  `<working_dir_root>/.hermes/audit-quarantine/<timestamp>/` (audit-safe by
+  5.6/5.18 semantics: top-level snapshot only, directory entries never
+  judged); reversible (no deletion); subagents rejected; fail-open on error
+  (error dict, latch stays). After a successful settle the next latch
+  re-scan finds the original paths gone -> settled -> gate opens.
+  Contract (2026-08-26 ruling, plugin-skill consistency): `paths` args are
+  ABSOLUTE paths (forward-slash normalized) as the canonical form — the same
+  form every agent-facing surface already uses (verdict block message, L1
+  notice, L3 gate message, skill audit_workspace.py output); relative args
+  are tolerated and resolved against working_dir_root before the pending-set
+  check. Idempotent: a path that no longer exists is a successful
+  no-op settlement (matches the latch's lexists semantics). Returns
+  `{"settled": [<root-relative paths>]}` on success (relative for privacy)
+  or `{"error": "<reason>"}` on rejection/failure, rendered as a JSON
+  string. Records stats `allow/settle/write-audit-settle` only — NO bus
+  event (7 emits unchanged).
+- The L3 gate block message (both variants base) appends
+  `"Remediate now: call dir_whip_settle(paths=[...])"` (2026-08-26 ruling —
+  the gate blocks remediation mv/rm, so the message must name the tool
+  channel; subagent variant stays report-to-parent only).
+- `pre_verify` continuation fallback (R5): the plugin registers Hermes'
+  `pre_verify` hook; when this session has unresolved pending violations AND
+  the host reports file mutations this turn (`changed_paths` non-empty),
+  the hook returns `{"action": "continue", "message": "[dir-whip] N
+  unresolved root writes: <paths>. Call dir_whip_settle or move them into a
+  Session Directory before finishing."}` so the host keeps the turn going;
+  any other return lets the turn finish. Subagent sessions no-op
+  (remediation is the parent's job); throttling relies on the host's
+  verify-nudge budget (`max_verify_nudges()`), the hook adds none.
+  KNOWN LIMIT (accepted): pure-terminal violation turns never reach
+  `pre_verify` (the host's `_turn_file_mutation_paths` only records
+  write_file / patch landings) — there the settle tool's discoverability in
+  the L1 notice carries the loop; an upstream suggestion to count terminal
+  writes into the mutation ledger is registered (9 / feedback/10 #6).
 
 **Context hygiene (hard constraints).** The audit diff runs entirely in the
 plugin process — zero context cost. Only the single L1 notice enters the
@@ -1207,7 +1419,7 @@ discipline is the scope, aligning with the root-file semantics of 5.10).
 5.10 heuristics safe: heredoc (`<<`) demotion and `=`-residue filtering
 (SCR-033) may let a root write past the pre-check, but the post-hoc diff
 catches the actual file and enters the L1-L3 ladder. The pre-check and the
-audit use the same single `allowlist` key (discriminated `file:` / `prefix:`),
+audit use the same single `allowlist` key (structured `files` / `dirs`),
 so they never disagree. rule_keys are namespaced separately (`terminal-*` vs
 `write-audit-*`).
 
@@ -1258,7 +1470,8 @@ always-on discipline prompt covers day-to-day behavior.
 session.
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
-(allowlist with file:<name> | prefix:<abs-path>, working_dir_root override, terminal_guard).
+(structured allowlist files/dirs relative to the Working Directory root,
+working_dir_root override, terminal_guard).
 
 **Verify**: Start a new Hermes session. Try writing a file to the Working
 Directory root — it should be blocked with a helpful message.
@@ -1325,8 +1538,8 @@ Upgrade from v0.1.x: reinstall with `--force` (the plugin directory has no
       -> exit 2 + no wakeAgent line (agent not woken)
 - [ ] audit `--gate` cron mode auto-cleans `.tmp` (cleanup embedded in the
       audit per 3.4; interactive mode keeps --confirm semantics)
-- [ ] audit root allowlist from dir-whip-config `allowlist` `file:` entries; missing key
-      -> strict empty allowlist
+- [ ] audit root allowlist from dir-whip-config `allowlist` `files`/`dirs`
+      entries; missing key -> strict empty allowlist
 - [ ] workspace_resolver.py resolves dir-whip-config -> terminal.cwd -> fail-open
       (no memo, no standalone branches)
 - [ ] Removed scripts (clean_tmp.py, init_workspace.py) and installer absent
@@ -1360,10 +1573,12 @@ Upgrade from v0.1.x: reinstall with `--force` (the plugin directory has no
 - [ ] stats.jsonl appended with session fields; targets relative to
       working_dir_root; 5MB rollover to `.1`; write errors never affect
       verdicts
-- [ ] `/dir-whip` merged report implemented (allow|remove|list subcommands; any other argument
-      -> `Usage: /dir-whip [allow|remove|list]`); report single Allowlist line Files/Prefixes
+- [ ] `/dir-whip` merged report implemented (allow|remove|list subcommands with unified
+      Files/Dirs two-section numbered presentation; any other argument
+      -> `Usage: /dir-whip [allow|remove|list]`); report single Allowlist line Files/Dirs + Reminder status line
 - [ ] `dir_whip_allow_path` retained (session-scoped, cleared at session
-      start); it is the plugin's only tool
+      start); `dir_whip_settle` added (lazily registered, pending-set
+      constrained, quarantine move)
 - [ ] Removed: workspace_status / workspace_update commands;
       auto_update / register tools
 - [ ] Event bus: emits dir-whip:* events when available; silent
@@ -1435,9 +1650,9 @@ testing-standards.md v0.3.0; v2.6 allowlist key = single `allowlist`, A7 wording
       file, modified (mtime/size), deleted (record-only), unrelated change
       (ignored); directory mtime changes are ignored
 - [ ] [A7] Violation classification: a new/modified root-level file NOT in
-      the allowlist (file: / prefix: entries) / any session directory is a
-      violation; allowlist file / prefix / session-dir / `.git/` content writes
-      are not; deletions are record-only
+      the allowlist (files / dirs entries) / any session directory is a
+      violation; allowlisted files / dirs subtrees / session-dir / `.git/`
+      content writes are not; deletions are record-only
 - [ ] [A8] L1 fire-once: the `transform_tool_result` notice appears exactly
       once per violation; later tool results carry no re-append; error
       results are not decorated; non-string results untouched
@@ -1505,7 +1720,8 @@ testing-standards.md v0.3.0; v2.6 allowlist key = single `allowlist`, A7 wording
   section 4 and engineering-constraints)
 - Plugin: follows Hermes standard patterns (register(ctx), **kwargs, JSON
   returns)
-- Discipline prompt: ≤200 字, four elements, minimal (billed every round)
+- Discipline block: session-start one-shot, <=280 chars (v2.7; the
+  always-on per-round-billed prompt channel is removed)
 
 ### 8.4 Architecture
 
@@ -1513,8 +1729,9 @@ testing-standards.md v0.3.0; v2.6 allowlist key = single `allowlist`, A7 wording
 - Scripts are agent-agnostic (any agent that can run Python can use them)
 - No memo / cross-profile / multi-profile machinery
 - Code identifiers unchanged (working_dir_root, --workspace, session_dir, rule_key;
-  config keys collapsed to single `allowlist` in v2.6 B2 — `exempt_paths` /
-  `allowed_root_files` removed, kept only as parsed `file:` / `prefix:` discriminants;
+  config key `allowlist` restructured in v2.7 to a `{files: [], dirs: []}`
+  mapping of root-relative paths — the v2.6 flat `file:` / `prefix:` tagged
+  list is removed clean-break;
   the dir-whip brand itself was renamed by SCR-030, see 4.5)
 - Hermes-specific concepts explicitly marked for future Pi adaptation
 - No hardcoded absolute paths in logic (config/templates use placeholders)
@@ -1594,3 +1811,4 @@ Not implemented in v0.2.0. Design decisions should not block these:
 | 2026-08-24 | v2.4 FROZEN — re-frozen after SCR-035 structural revision pass. No behavior changes from v2.3 | User decision 2026-08-24 (freeze) |
 | 2026-08-25 | v2.5 ACTIVE — SCR-037 v0.4.1: 5.6 D1 template default `["AGENTS.md"]`→`[]` (host `agent_config_mod` scanner `skills_guard.py:462`→dangerous block, shipped tree now zero agent-config literals, engineering-constraints red line), 5.7 `/dir-whip allow|remove|list` subcommands (reverses SCR-029 single-command, `args_hint` for gateway menus, `config_writer` row-level edit), 4.2 audit whitelist wording. Spec activated 2026-08-25, re-freeze pending 37.7 verification | User decision 2026-08-25 |
 | 2026-08-25 | v2.6 ACTIVE — SCR-037 amendment v2.6 B2 single-key allowlist (BREAKING): `exempt_paths` + `allowed_root_files` removed as config keys, no backward compat (user 2026-08-25 B2 decision, feedback/09); single unified `allowlist: []` with discriminated `file:<basename>` | `prefix:<abs-path>` (prefix may end with /). 5.6 template replaced, 5.3 Tier0 = allowlist prefix OR runtime-allowlist / root-file = allowlist file, 5.7 `/dir-whip allow <file|prefix:PATH|PATH/>` intelligently discriminates (no slash→file, slash/prefix:→prefix), report single `Allowlist: Files: ...  Prefixes: ...` line, 5.18 audit aligned to single key, 5.11/5.13/5.14/6.2/7.x/8.4 swept. Old keys deleted. Spec activated 2026-08-25, re-freeze pending | User decision 2026-08-25 (B2 clean break) |
+| 2026-08-26 | v2.7 ACTIVE — SCR-039 v0.5.0 (feedback/10): (1) prompt-channel rework — Always-on Discipline Prompt removed (3.7/5.17), conditional session-start discipline block added (5.4: `discipline_applies` predicate + `agent_cwd_fn` slot wired to host `resolve_agent_cwd`; <=280 chars lock; report Reminder status line injected/skipped-outside/skipped-child/unavailable); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered, pending-set constrained, `.hermes/audit-quarantine/<ts>/` move, subagent-rejected), L1 notice upgraded with settle instruction, L3 latch note (remediation mv/rm blocked while latched -> tool channel), `pre_verify` continuation fallback (mixed-turn hard guarantee; pure-terminal turns = accepted limit + upstream suggestion registered in 9); (3) structured allowlist (BREAKING) — `allowlist` becomes `{files: [...], dirs: [...]}` mapping of working_dir_root-relative paths (dirs multi-level recursive subtree exemption; root itself and outside-root entries rejected; v2.6 flat `file:`/`prefix:` tagged list removed clean-break, legacy ignored fail-closed + `/dir-whip list` hint); `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation (bare remove enumerates current entries; disk-aware bare-name discrimination); block message gains placement-intent rule + allow_path hint. 2/3/4/5/6/7/8 swept. Re-freeze on completion | User decisions 2026-08-26 (feedback/10) |

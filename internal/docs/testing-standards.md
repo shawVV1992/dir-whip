@@ -1,13 +1,11 @@
-# Testing Standards (v0.4.2 basis, in force for v0.4.2)
+# Testing Standards (v0.5.0 basis, in force for v0.5.0)
 
 Authoritative reference for all testing in the dir-whip project.
 Test cases derive from `specs/dir-whip-spec.md` — behavior basis is the
-frozen v2.3 clause set (re-frozen 2026-08-22, section 7 acceptance criteria
-incl. 7.6 Terminal Write Discipline); the spec is now v2.6 ACTIVE
-(SCR-037 amendment v2.6 2026-08-25: single-key `allowlist: []` with
-discriminated `file:<basename>` | `prefix:<abs-path>` B2 clean break —
-`exempt_paths` + `allowed_root_files` removed as config keys, no backward
-compat; 5.6/5.3/5.7/5.18 aligned; re-freeze pending 37.12 verification)
+v2.7 ACTIVE clause set (SCR-039 amendment 2026-08-26: prompt-channel rework /
+same-turn self-heal / structured allowlist `{files, dirs}` root-relative;
+re-freeze on completion); previous basis v2.6 B2 single-key allowlist
+(re-freeze pending 37.12 verification was superseded by the v0.4.1 release)
 and unified SCR-034 proposal acceptance A1-A15
 (`archive/v0.3.0/scr-033-034-plan.md` section 9). Supersedes
 the v0.2.0 testing standards (archived at `archive/v0.2.0/testing-standards.md`);
@@ -64,7 +62,12 @@ tests/
 ├── test_config.py                  # config resolution, stats, commands, prompt (v0.4.2: allowlist command lives here as TestAllowlistUnified)
 ├── test_state_container.py         # (v0.4.0, task 31.9) state.py container anti-degradation
 ├── test_parity_resolution.py       # (v0.4.0, task 31.14) dual-implementation parity contract
-└── test_release_hygiene.py         # (v0.4.2, SCR-037 B2) shipped-tree agent-config literal sweep + template default `allowlist: []`
+├── test_release_hygiene.py         # (v0.4.2, SCR-037 B2) shipped-tree agent-config literal sweep + template default `allowlist: []`
+├── scr039_helpers.py               # (v0.5.0, SCR-039) shared helpers/fixtures/literals -- non-collected (no test_ prefix)
+├── test_teaching_channel.py        # (v0.5.0, SCR-039 REQ-1 R1-R3) prompt removal + candidate A + conditional injection + block two elements
+├── test_settle_selfheal.py         # (v0.5.0, SCR-039 REQ-2 R4-R5) dir_whip_settle + pre_verify continuation
+├── test_report_reminder.py         # (v0.5.0, SCR-039 REQ-3 R6) /dir-whip Reminder status line
+└── test_allowlist_commands.py      # (v0.5.0, SCR-039 REQ-5 R9) structured allowlist parse/match + unified allow|remove|list flow
 ```
 
 Rules:
@@ -72,6 +75,13 @@ Rules:
   test_dir_whip.py** — both the terminal front layer and the write audit are
   implemented in dir_whip.py, so no new test file is created (matches the
   one-file-per-module rule).
+- **v0.5.0 EXCEPTION (SCR-039, requirement-split organization)**: multi-module
+  requirements get ONE test file per REQUIREMENT (REQ-1 teaching channel /
+  REQ-2 self-heal / REQ-3 report line / REQ-5 allowlist+commands), named
+  `test_<feature>.py`, sharing fixtures via `scr039_helpers.py` (non-collected
+  plain module; fixtures imported into each test module namespace). The
+  one-file-per-module rule keeps governing single-module work; the
+  requirement-split rule governs SCR-039's cross-cutting features.
 - **v0.4.0 (SCR-035)**: the plugin splits into 11 modules; new-module tests
   follow the one-file-per-module rule again — `test_state_container.py`
   (state.py) and `test_parity_resolution.py` (cross-implementation contract,
@@ -141,6 +151,53 @@ Pattern: `Test<Category>`.
 | TestReleaseHygiene (test_release_hygiene.py, SCR-037 R2) | **Shipped-tree hygiene** (ADR-0008 D1 + B2): scan every text file under `dir-whip/` (`.yaml/.yml/.json/.toml/.md/.py`) for the four agent-config literals `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `.clinerules` — any hit fails; also asserts the shipped template default is `allowlist: []` (discriminated `file:` | `prefix:`, strict empty; old keys `exempt_paths` / `allowed_root_files` deleted, `allowed_root_files: []` no longer accepted) |
 | TestAllowlistUnified (test_config.py, SCR-037 R3/R5 B2) | **`/dir-whip allow|remove|list` command — single-key `allowlist` (spec 5.7, ADR-0008 D2/D3 B2)**: bare `/dir-whip` still renders the merged report with `Allowlist: Files: ...  Prefixes: ...` (or `Allowlist: (strict empty allowlist)` when key missing); `allow` without args lists numbered root-file candidates (excludes session dirs / already-allowlisted `file:` entries; prefix candidates not listed); `allow <file|prefix:PATH|PATH/>` / `allow 1,3` / `remove <file|prefix:PATH|PATH/>` mutate the persistent `allowlist` via row-level edit (comments preserved, missing-key append, `file:` vs `prefix:` discrimination: no slash -> `file:<basename>`, slash or `prefix:` tag -> `prefix:<abs-path>`, trailing `/` normalized, duplicate add idempotent); `list` shows current allowlist split into Files / Prefixes; unknown subcommand -> `Usage: /dir-whip [allow|remove|list]`; invalid file names (slash, `..`, empty) and invalid prefixes (non-absolute, `..`, empty, `prefix:` with relative) rejected with no mutation; mutation narrowly refreshes the config cache so the next `classify` / `audit_classify` sees the new allowlist (both file and prefix tiers) |
 | TestPluginEnablementPrecheck (test_audit_workspace.py, SCR-037 R7) | **Skill-side enablement precheck** (ADR-0008 D4): `audit_workspace.py` locates the current profile's `config.yaml` (inline layout-aware `_profile_config_path` shape test, no import of `workspace_resolver` per #55) and reports three states — `enabled` (quiet), `not-enabled` (WARN + `hermes plugins enable dir-whip` guidance), `disabled` (WARN, in `plugins.disabled`) — without changing the exit code |
+
+#### v0.5.0 classes (SCR-039; spec v2.7 — requirement-split files, TDD red at 39.R#.1)
+
+Requirement taxonomy (shared with tasks.md Phase 8 and scr-039-plan.md):
+REQ-1 teaching channel (R1-R3) / REQ-2 same-turn self-heal (R4-R5) / REQ-3
+report observability (R6) / REQ-4 project-mode exemption (R7, spike-gated,
+tests created after 39.R4.0 spike) / REQ-5 structured allowlist + unified
+commands (R9). R8 upstream suggestion is a tracking row, no tests.
+
+##### REQ-1 教导通道重排 (test_teaching_channel.py, R1-R3)
+
+| Class | Purpose |
+|-------|---------|
+| TestReminderMessageV27 | **Prompt-channel rework (R1, spec 3.7/5.4/5.17)**: `verdict.REMINDER_MESSAGE` equals candidate A verbatim and `len <= 280`; `register()` NEVER calls `register_system_prompt_section`; `verdict.DISCIPLINE_PROMPT` no longer exists |
+| TestConditionalInjection | **Conditional injection (R2, spec 5.4)**: `discipline_applies` predicate None-safe fail-open / equality / casefold drive / different drive outside; on_start matrix via the `agent_cwd_fn` slot (inside-inject / outside-skip / cwd None-inject / root unresolved-inject / child skip); `reminder_status` all states |
+| TestBlockMessageV27 | **Block-message completion (R3, spec 5.3)**: placement-intent rule + `dir_whip_allow_path` hint on top-level variant only; project hint relative `dirs` syntax (no `prefix:`); subagent variant carries neither new line |
+
+##### REQ-2 同轮自愈 (test_settle_selfheal.py, R4-R5)
+
+| Class | Purpose |
+|-------|---------|
+| TestSettleTool | **Same-turn self-heal (R4, spec 5.18)**: `settle_paths` pending-set hard constraint / quarantine move settles latch / subagent rejected / fail-open error dict keeps latch / absolute canonical + relative tolerated / vanished-path idempotent success / L1 notice carries settle instruction / L3 gate message appends the settle line / settle stats rule key only (no bus event) / lazy registration on first notice fire |
+| TestPreVerifyHook | **pre_verify continuation (R5, spec 5.18)**: continue-nudge iff unresolved pending AND non-empty `changed_paths`; settled / no-pending / empty-changed / child -> None; `register()` wires the hook |
+
+##### REQ-3 报告可观测 (test_report_reminder.py, R6)
+
+| Class | Purpose |
+|-------|---------|
+| TestReportReminderLine | **Reminder status line (R6, spec 5.7)**: `_dir_whip_report()` renders `Reminder: <state>` for all four states after the corresponding on_start path |
+
+##### REQ-4 项目模式豁免 (R7, spike-gated)
+
+| Class | Purpose |
+|-------|---------|
+| (created after 39.R4.0 spike) | **Project-mode exemption (R7, spec 5.4)**: active project + CWD under project path -> skip injection (`skipped-project`); pdb signature pinned by the spike; degrade = CWD-in-root ruling (no test) if infeasible |
+
+##### REQ-5 结构化 allowlist 与命令统一 (test_allowlist_commands.py, R9)
+
+| Class | Purpose |
+|-------|---------|
+| TestAllowlistStructured | **Structured allowlist (R9, spec 5.6)**: parse `{files, dirs}` mapping; `dirs` multi-level relative recursive subtree match; validation rejects `..` / absolute / drive / empty / `.`; legacy v2.6 flat list ignored fail-closed; format roundtrip |
+| TestCommandsUnified | **Unified commands (R9, spec 5.7 R1-R8 + input layer v2.1)**: continuous two-section numbering; bare allow enumerates Files/Dirs candidates (excludes session dirs + `.hermes/` + covered subtrees) with Add hint; number maps file vs dir; **path tokens accept relative/absolute input — existing path disk-aware; outside-root/ancestor guided rejection (main sentence + reason clause); non-existent path confirm-create protocol (no `--create` -> guided message; `--create`: trailing slash -> makedirs+dirs, bare name -> empty root file+files, nested no-slash -> dir tree+dirs; `--create` idempotent on existing)**; bare remove enumerates current entries with Remove hint; number removal; name removal accepts absolute/relative and matches BOTH sets; list aligned + ignored-legacy hint; empty states |
+
+Supersedes for v0.5.0: `TestAllowlistUnified` (test_config.py, v0.4.2
+flat-format cases) is reworked at 39.R5.2/39.R5.3 into the structured
+contract; legacy flat-format cases are migrated with the implementation, not
+kept red.
 
 Sample — state container anti-degradation (task 31.9):
 
@@ -310,7 +367,12 @@ def make_hermes_home(tmp_path, profiles=None, guard_config=None):
 
 - Profiles fixture: `config.yaml` (default) + `profiles/{learn,job-hunt}/config.yaml`
   each with `terminal.cwd`.
-- dir-whip-config fixture: `allowlist: []` (discriminated `file:<basename>` | `prefix:<abs-path>`, default strict empty, v2.6 B2; old keys `exempt_paths` / `allowed_root_files` deleted, no compat; bare no-slash entries treated as `file:`, bare with slash as `prefix:` — generator compat, not a config key), optional `working_dir_root`, optional `terminal_guard`, **optional `write_audit` / `write_audit_entry_cap` (v0.3.0)**.
+- dir-whip-config fixture: structured mapping `allowlist: {files: [], dirs: []}`
+  (v2.7, default strict empty, root-relative only; v2.6 flat tagged list and
+  old keys `exempt_paths` / `allowed_root_files` deleted clean-break, legacy
+  flat values ignored fail-closed + surfaced by `/dir-whip list`), optional
+  `working_dir_root`, optional `terminal_guard`, **optional `write_audit` /
+  `write_audit_entry_cap` (v0.3.0)**.
 - Session env fixture: `env = {"HERMES_HOME": str(hh),
   "HERMES_SESSION_PROFILE": "learn"}` (and pop TERMINAL_CWD for determinism).
 
@@ -328,6 +390,28 @@ def make_workspace_root(tmp_path, entries=None):
 ```
 
 ### Snapshot Determinism
+
+#### v0.5.0 fixture notes (grouped by REQ; all shared via scr039_helpers.py)
+
+- **REQ-1 (teaching channel)**: default `state.session.agent_cwd_fn = None`
+  (-> fail-open inject, = v0.4 behavior); tests override it with a lambda
+  returning the fake workspace root / an outside path / None to exercise the
+  injection matrix. Do NOT write real session-cwd dictionaries — the slot is
+  the single seam (ADR-0007). `register()` wiring asserted with a fresh
+  MagicMock ctx (slot must be `None` in the test env — hermes absent,
+  fail-open; delete the attr first since `reset()` keeps unknown attributes).
+- **REQ-2 (self-heal)**: seed pending via `audit.pending_add(session_id,
+  path)` with the file physically created at the fake workspace root so the
+  unresolved re-scan keeps it pending; `state.audit.pending` must never be
+  mutated directly in tests (container access is read-only, ADR-0005).
+  Quarantine assertions glob `<root>/.hermes/audit-quarantine/**` (timestamp
+  dir name is not deterministic). settle-path args may be absolute or
+  relative (both must settle).
+- **REQ-5 (allowlist/commands)**: `_configure_root(root, files=..., dirs=...)`
+  writes the structured mapping form; `raw_allowlist="[...]"` injects a
+  v2.6 flat value for legacy-ignore tests. Command tests call
+  `report._handle_allow/remove/list("...")` directly (no slash-command
+  harness); candidates come from a real `_make_ws` tree.
 
 - The plugin's snapshot is (name, size, mtime_ns, is_dir) per top-level entry.
 - Tests control modification WITHOUT sleeps:
@@ -398,8 +482,8 @@ def clean_state():
 | unrelated | file elsewhere / unchanged snapshot | no diff, no event (A6) |
 | dir content change | file added inside `sess/Outputs/` (session dir) | dir entry mtime changes -> IGNORED, not a violation (A6/A7) |
 | `.git/` content | file created under `.git/` | not a violation (A7) |
-| allowlist file write | `README.md` with `file:README.md` entry rewritten | not a violation (A7) |
-| allowlist prefix write | file under `prefix:E:/ws/projects/foo` entry | not a violation (A7) |
+| allowlist file write | `README.md` with `files: ["README.md"]` entry rewritten | not a violation (A7) |
+| allowlist dir write | file under `dirs: ["projects/foo"]` entry (relative, recursive) | not a violation (A7) |
 | fire-once | violation persists across two terminal calls | notice on first result only (A8) |
 | error result | terminal returns an error dict | notice NOT appended (A8) |
 | gate block | unresolved violation; next `write_file` | block with path + remediation (A9) |
@@ -553,6 +637,53 @@ Spec 5.6 D1 single-key `allowlist: []` (B2 clean break — `exempt_paths` + `all
 | 2026-08-24 | Task 31.14 executed + record correction: TestParityResolution landed as 8 tests (test_resolution_parity parametrized over the five feedback/08 §9.3 vector shapes + three normalization methods covering MSYS / /c// //c/ / Cygwin / case / slash direction / absolute dot segments / backslash UNC root / foreign-drive rows); full suite 504 passed / 5 skipped. Matrix row 13 had been pre-flipped to Done citing "15 tests = ... / 511 passed" by a run that left NO test file on disk (two empty commits f24b48b and 672cd20 with the phase message remain in history); row corrected to measured values. Measured out-of-contract divergences documented in the test docstring, not asserted: paths.normalize_target drive-inherits from working_dir_root (also onto relative targets), workspace_resolver.normalize_path inherits from the process cwd (absolute rooted-no-drive only); on POSIX normalize_path is normpath identity so normalization rows are Windows-host guarded | SCR-035 task 31.14 (2026-08-24) |
 | 2026-08-25 | SCR-037 v0.4.1 pre-registration (docs-only): `docs/scr-037-plan.md` (merged feedback/09 + scanner block + allowlist command, 0.4.1去Dashboard), spec 5.6/5.7 v2.5 ACTIVE, engineering-constraints red line (four literals), feedback/09 errata (二*), ADR-0008 (D1-D4). Testing-standards §2 gains `test_release_hygiene.py`, new classes TestReleaseHygiene / TestAllowlistCommand / TestPluginEnablementPrecheck with method-name examples, acceptance matrix §7.8 (9 rows, all Pending, mapped to tasks 37.3-37.7). Rows flip to Done as impl tasks complete | SCR-037 (2026-08-25) |
 | 2026-08-25 | v0.4.2 B2 single-key allowlist (BREAKING, spec v2.6): `exempt_paths` + `allowed_root_files` removed as config keys (no backward compat, B2 clean break per user 2026-08-25); single key `allowlist: []` with discriminated `file:<basename>` | `prefix:<abs-path>` (prefix may end with `/`; bare no-slash -> `file:`, bare with slash -> `prefix:`). Testing-standards header v0.4.1->v0.4.2, spec source v2.5->v2.6; §2 test_config comment `TestAllowlistUnified`, §3 v0.4.1->v0.4.2 TestAllowlistUnified (file:/prefix: discrimination, Files/Prefixes list, invalid prefix handling, cache refresh for both tiers), fixture Guard config `allowlist`, §5 audit matrix `allowlist file` | `prefix:` split, §7.8 rows 1-9 revised to single allowlist (row 2: `allowlist: []`, rows 3-7: file/prefix discrimination, list Files/Prefixes, invalid prefix, mutation refresh) | SCR-037 amendment v2.6 B2 (2026-08-25 user decision) |
+| 2026-08-26 | v0.5.0 pre-registration (SCR-039, docs-only): spec EN/ZH v2.6->v2.7 ACTIVE (3.7/5.3/5.4/5.6/5.7/5.11/5.17/5.18 swept), `docs/scr-039-plan.md` (R1-R9), ADR-0009, feedback/10 sync, engineering-constraints/deployment/CONTEXT/AGENTS version sweep. Testing-standards header v0.4.2->v0.5.0; **requirement-split reorganization** (2026-08-26): test files split by REQ — `test_teaching_channel.py` (REQ-1) / `test_settle_selfheal.py` (REQ-2) / `test_report_reminder.py` (REQ-3) / `test_allowlist_commands.py` (REQ-5) + shared `scr039_helpers.py` (replaces monolithic `tests/test_scr039.py`, 60 cases across 8 classes);  v0.5.0 exception clause (requirement-split over one-file-per-module for cross-cutting features);  classes registered per-REQ; acceptance matrices §7.9.1-7.9.5 (13 rows, all Pending, mapped to tasks 39.R1.*-39.R5.*). Rows flip to Done as impl tasks complete | SCR-039 (2026-08-26 user decisions + requirement-split ruling) |
+
+---
+
+## 7.9 v0.5.0 — SCR-039 acceptance matrices (spec v2.7, per-REQ)
+
+Requirement-split acceptance: 7.9.1-7.9.5 map 1:1 to tasks.md Phase 8
+(39.R1.* .. 39.R5.*) and the test files above. Row numbers restart per REQ.
+
+### 7.9.1 REQ-1 教导通道重排 (R1-R3) — test_teaching_channel.py, tasks 39.R1.*
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | REMINDER_MESSAGE == candidate A verbatim; `len <= 280` (3.7/5.4) | TestReminderMessageV27 | 39.R1.1/39.R1.2 | Pending |
+| 2 | Always-on prompt channel removed: register() never calls register_system_prompt_section; DISCIPLINE_PROMPT constant gone (3.7/5.17) | TestReminderMessageV27 | 39.R1.1/39.R1.2 | Pending |
+| 3 | Conditional injection matrix: inside->inject / outside+drive->skip / cwd None->inject / root None->inject / child skip / unavailable debug; reminder_status recorded (5.4) | TestConditionalInjection | 39.R1.1/39.R1.2 | Pending |
+| 4 | discipline_applies predicate: None-safe True; equality inside; casefold drive rules; different drive outside (5.4) | TestConditionalInjection | 39.R1.1/39.R1.2 | Pending |
+| 5 | Block message: placement-intent rule + allow_path hint on top-level variant only; project hint relative dirs syntax (5.3 R3) | TestBlockMessageV27 (+TestBlockMessage updated lock) | 39.R1.1/39.R1.2 | Pending |
+
+### 7.9.2 REQ-2 同轮自愈 (R4-R5) — test_settle_selfheal.py, tasks 39.R2.*
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | dir_whip_settle: pending-set constraint, quarantine move settles latch, subagent rejected, fail-open error dict, absolute canonical + relative tolerated, vanished-path idempotent, settle stats only (no bus event) (5.18 R4) | TestSettleTool | 39.R2.1/39.R2.2 | Pending |
+| 2 | L1 notice carries settle instruction; first fire lazily registers the tool; L3 gate message appends the settle line (5.18 R4) | TestSettleTool | 39.R2.1/39.R2.2 | Pending |
+| 3 | pre_verify hook: continue-nudge iff unresolved pending + changed_paths; settled/no-pending/child -> None; registered at register() (5.18 R5) | TestPreVerifyHook | 39.R2.1/39.R2.2 | Pending |
+
+### 7.9.3 REQ-3 报告可观测 (R6) — test_report_reminder.py, tasks 39.R3.*
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | Report Reminder status line renders all states (5.7 R6) | TestReportReminderLine | 39.R3.1 | Pending |
+
+### 7.9.4 REQ-4 项目模式豁免 (R7) — spike-gated, tasks 39.R4.*
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | Active project + CWD under project path -> skip injection (skipped-project); pdb signature pinned by spike; degrade = CWD-in-root ruling if infeasible (5.4 R7) | (created post-spike) | 39.R4.0/39.R4.1 | Pending |
+
+### 7.9.5 REQ-5 结构化 allowlist 与命令统一 (R9) — test_allowlist_commands.py, tasks 39.R5.*
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | Structured allowlist parse/match: mapping form, dirs multi-level recursive, root/outside-root rejected, `..`/absolute rejected, legacy flat ignored fail-closed (5.6 R9) | TestAllowlistStructured | 39.R5.1/39.R5.2 | Pending |
+| 2 | Commands unified (R1-R8 + input layer v2.1): continuous numbering; bare allow enumerates Files/Dirs candidates (excluding session dirs + .hermes + covered subtrees) with Add hint; number maps file vs dir; path tokens relative/absolute — existing disk-aware; outside-root/ancestor guided rejection; non-existent confirm-create protocol (message + --create file/dir/nested forms, idempotent); all-or-nothing batch (5.7 R9) | TestCommandsUnified | 39.R5.1/39.R5.2 | Pending |
+| 3 | bare remove enumerates current entries two-section numbered with Remove hint; remove by number/name mutates (name matches BOTH sets); list aligned with remove numbering + ignored-legacy hint (5.7 R9) | TestCommandsUnified | 39.R5.1/39.R5.2 | Pending |
+| 4 | Scripts + migration: audit_workspace.py parses the mapping form; parity vectors extended; TestReleaseHygiene / TestAllowlistUnified / _configure helper migrated (4.2/5.6 R9) | TestReleaseHygiene / TestAllowlistUnified (migrated) / parity | 39.R5.3 | Pending |
 
 ---
 

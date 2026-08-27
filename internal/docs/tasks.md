@@ -127,6 +127,67 @@ ADR & testing-standards supplement (37.1-continued, committed `5373656` + B2 ame
 
 ---
 
+## Phase 8 — SCR-039 v0.5.0 提示通道重排 + 同轮自愈 + 结构化 allowlist (39.x)
+
+TDD per task: write the mapped tests FIRST (red), then implement (green).
+Acceptance = mapped testing-standards v0.5.0 classes all green + KPI column +
+spec 7.9.x criteria (v2.7). Active branch: `0.5.0_dev` (from `main@22cf0e5`).
+Design source: feedback/10 + `docs/scr-039-plan.md`（R1-R9 定稿设计）。
+
+**需求拆分组织（2026-08-26）**：任务按 REQ 分组（39.R1-R5），与
+testing-standards 测试文件（test_teaching_channel / test_settle_selfheal /
+test_report_reminder / test_allowlist_commands）及 scr-039-plan 五节一一对应；
+收尾任务 39.9/39.10；R8 登记行保持 39.x。
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.1 | **文档批**：spec-changes 登记 + `scr-039-plan.md` + spec EN/ZH v2.6->v2.7 ACTIVE（3.7/5.3/5.4/5.6/5.7/5.11/5.17/5.18 + 2/4/6/7/8 扫描）+ changelog + feedback/10 同步 + 需求拆分重构（测试/标准/tasks 三对齐） | - | Docs batch done | Done (2026-08-26) |
+
+### REQ-1 教导通道重排（R1-R3，test_teaching_channel.py，spec 3.7/5.3/5.4/5.17）
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.R1.1 | **red**：TestReminderMessageV27（候选 A verbatim + `len<=280` + register 无 prompt-section + DISCIPLINE_PROMPT 移除）/ TestConditionalInjection（谓词单测 + on_start 注入矩阵 + reminder_status 四态）/ TestBlockMessageV27（两要素 + 相对 dirs 提示 + 子代理不含新行）；test_dir_whip.py 旧锁同步（reminder 文本 / TestDisciplinePrompt 通道移除 / block 全文） | 39.1 | 红灯确认（REQ-1 组） | Done (2026-08-26) |
+| 39.R1.2 | **green**：verdict.py（删 DISCIPLINE_PROMPT、REMINDER 换候选 A、discipline_applies 谓词、block 补全两要素）、state.py（agent_cwd_fn + reminder_status）、__init__.py（移除 prompt-section 注册、装填 agent_cwd_fn、on_start 条件注入三步） | 39.R1.1 | REQ-1 全绿 | Pending |
+
+### REQ-2 同轮自愈（R4-R5，test_settle_selfheal.py，spec 5.18）
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.R2.1 | **red**：TestSettleTool（pending 约束/隔离区搬移结算/子代理拒绝/fail-open/相对路径/幂等/闸门 settle 行/stats rule_key/懒注册）+ TestPreVerifyHook（nudge 条件矩阵/register 接线） | 39.1 | 红灯确认（REQ-2 组） | Done (2026-08-26) |
+| 39.R2.2 | **green**：audit.py（settle_paths + L1 文案升级 + L3 消息补 settle 行 + write-audit-settle stats + 懒注册挂接）、__init__.py（settle schema+handler、pre_verify 适配器 + register_hook） | 39.R2.1 | REQ-2 全绿 | Pending |
+
+### REQ-3 报告可观测（R6，test_report_reminder.py，spec 5.7）
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.R3.1 | **red + green**（小项合一）：TestReportReminderLine 四态（injected/skipped-outside/skipped-child/unavailable）+ report.py 渲染 Reminder 行 | 39.R1.1 | REQ-3 全绿 | Pending |
+
+### REQ-4 项目模式豁免（R7，spike 门控，spec 5.4）
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.R4.0 | **spike**：宿主源码核实 `pdb.get_active_id(conn)` 的 conn 来源与项目路径字段（project_tools.py + 项目存储，30 分钟窗口） | 39.1 | pdb 签名钉死 or 降级裁定 | Pending |
+| 39.R4.1 | （spike 通过）red + green：项目活动态注入槽 + CWD∈项目路径跳过注入（skipped-project）+ 测试文件按需建；不可行则降级登记（维持 CWD∈root 判定） | 39.R4.0 | REQ-4 闭合（或降级登记） | Pending |
+
+### REQ-5 结构化 allowlist 与命令统一（R9，test_allowlist_commands.py，spec 5.6/5.7）
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.R5.1 | **red**：TestAllowlistStructured（映射解析/多级递归匹配/校验拒绝/遗留忽略/format 往返）+ TestCommandsUnified（两段式连续编号/候选枚举排除规则/数字与名称判别/**绝对路径归一/根外与祖先拒绝消息/不存在确认提示/--create 建目录与建文件/幂等**/裸 remove 枚举/双集合名称删除/list 对齐+遗留提示/空态） | 39.1 | 红灯确认（REQ-5 组） | Done (2026-08-26) |
+| 39.R5.2 | **green**：allowlist.py 结构化重构（parse/format/match 需拼根，约 4 调用点）、config_writer.py（映射双子列表 flow 风格编辑保注释）、report.py（_list_candidates 扩目录 + 三命令 Files/Dirs 统一渲染 + **输入归一化与 --create 确认-创建协议** + R1-R8 流程） | 39.R5.1 | REQ-5 全绿 | Pending |
+| 39.R5.3 | **迁移**：audit_workspace.py allowlist 解析适配映射形态、workspace_resolver.py parity 向量扩展（allowed-root-file 形态）；三处旧测试迁移（TestReleaseHygiene 模板默认值 / test_config.py TestAllowlistUnified 平铺用例 / test_dir_whip.py `_configure` helper legacy 翻译废弃） | 39.R5.2 | 全量绿（含迁移后） | Pending |
+
+### 收尾
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 39.9 | **回归 + bump**：pytest 全量基线对比、plugin.yaml 0.5.0 + provides_hooks +pre_verify、README EN/ZH（提示通道/allowlist 结构/命令面）、after-install.md、SKILL.md allowlist 表述核对 | 39.R1.2/39.R2.2/39.R3.1/39.R4.1/39.R5.3 | 基线全绿 | Pending |
+| 39.10 | **发布 + 真机**：tag `v0.5.0` + GitHub Release；八场景验证（工作区开场提醒含 CWD 时序 / 非工作区零注入 / heredoc 根写->L1->settle->开闸同轮闭环 / 混合轮次 pre_verify 续轮 / 报告 Reminder 四态 / resolve_agent_cwd 导入路径+懒注册可见性 / allowlist 结构化全链路 / 三命令交互流 R1-R8 逐条） | 39.9 | Release Done | Pending |
+| 39.x | **R8 upstream 登记项（外部依赖，非代码）**：建议 hermes 将 terminal 落地写入计入 `_turn_file_mutation_paths`（使 verify-on-stop/pre_verify 覆盖纯终端违规轮）；tasks 挂账跟踪直至 upstream 采纳或否决 | - | 登记于 spec 9 / feedback/10 #6 | Open |
+
+---
+
 _Note: testing-standards.md v0.3.0 rebuild (listed in the earlier backlog) is
 already DONE (2026-08-22) — it is the acceptance source for this phase, not a
 pending task. Version bump (30.13) was deferred per user until SCR review
