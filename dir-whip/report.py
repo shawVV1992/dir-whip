@@ -259,6 +259,16 @@ def _dir_whip_report():
             prefixes_str = ", ".join(prefixes) if prefixes else "(none)"
             lines.append("Allowlist: Files: %s  Prefixes: %s" % (files_str, prefixes_str))
 
+        # Line 5b (v2.7 R6): session-start discipline-block outcome (5.4).
+        # reminder_status is set by on_start (injected | skipped-outside |
+        # skipped-child | unavailable); None (on_start not yet run in this
+        # process) renders a neutral placeholder -- never one of the four
+        # spec states.
+        reminder = getattr(state.session, "reminder_status", None)
+        lines.append(
+            "Reminder: %s" % (reminder if reminder else "(not recorded)")
+        )
+
         # Line 6: health (one line per problem when PROBLEM).
         problems = []
         if not root:
