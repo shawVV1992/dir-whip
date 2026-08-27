@@ -177,25 +177,17 @@ def write_audit_entry_cap(config_path=None):
 
 
 def _parse_allowlist(value):
-    """Parse the unified allowlist config value (spec 5.6 B2, D1).
+    """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
 
-    Single key ``allowlist: []`` with discriminated ``file:<basename>`` |
-    ``prefix:<abs-path>`` entries. STRICT fallback: None / non-list -> []
-    (every root file blocks, fail-closed). When allowlist core is available,
-    invalid discriminated entries are silently ignored (strict filter) and
-    the result is normalized via format_allowlist for stable storage.
-    Otherwise, filter to string entries only.
+    Parsing/validation moved to allowlist.parse_allowlist at the
+    consumption points (verdict/audit/report). Keeping the RAW value
+    (structured mapping dict, legacy flat list, or []) preserves the
+    loaded-value contract while legacy flat lists stay visible for the
+    clean-break hint. Non-list/dict scalars -> [].
     """
-    if not isinstance(value, list):
-        return []
-    if _allowlist_parse is not None and _allowlist_format is not None:
-        try:
-            parsed = _allowlist_parse(value)
-            return _allowlist_format(parsed)
-        except Exception:
-            pass
-    # Fallback: keep string entries only
-    return [item for item in value if isinstance(item, str)]
+    if isinstance(value, (list, dict)):
+        return value
+    return []
 
 
 def _get_guard_config_path():

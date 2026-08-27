@@ -1,38 +1,39 @@
-"""Single source of truth for unified allowlist parsing (spec v2.6 B2).
+"""Single source of truth for structured allowlist parsing (spec v2.7 R9).
 
-Spec references: 5.6 (single key ``allowlist: []`` discriminated
-``file:<basename>`` | ``prefix:<abs-path>``), 5.3 (Tier 0 = allowlist
-prefix OR runtime allowlist; root file = allowlist file), 5.18 (audit
-reads same file/prefix subsets). B2 clean break: old keys
-``exempt_paths`` / ``allowed_root_files`` deleted, no backward compat,
-strict empty fallback when key missing or value is not a list.
+Spec references: 5.6 (structured ``allowlist`` mapping, BREAKING clean
+break of the v2.6 flat tagged list), 5.3 (Tier 0 = allowlist dirs subtree
+OR runtime allowlist; root file = allowlist files entry), 5.18 (audit
+reads the same key). Storage is ALWAYS relative to working_dir_root;
+absolute input is input-layer tolerance only (report command layer
+relativizes before storing).
 
-Discriminated entries
----------------------
-- ``file:<basename>`` -> root file allowed at Working Directory root.
-  Validation: basename only (no "/" or "\\" or "..", non-empty,
-  length <= 255, not "." or "..").
-- ``prefix:<abs-path>`` -> exempt prefix (project dir inside workspace).
-  Validation: absolute path (via ``paths.is_absolute_any``), non-empty,
-  length <= 4096, no ".." path component, forward slashes normalized,
-  trailing slash normalized.
-- Bare entries without a tag (generator compat, not a config key):
-  ``no slash`` -> ``file:``, ``contains slash`` -> ``prefix:``. The
-  extended check also treats bare entries containing "/" or "\\" or ":"
-  as prefix attempts (colon = drive), otherwise file. Invalid entries
-  are silently ignored (strict filter, fail-closed for guard).
+Structured mapping
+------------------
+- ``files: [basename...]`` -> root-level file basenames allowed at the
+  Working Directory root. Validation: basename only (no "/" or "\\" or
+  "..", non-empty, length <= 255, not "." or "..", no ":").
+- ``dirs: [rel-path...]`` -> paths RELATIVE to working_dir_root with a
+  recursive subtree exemption; multi-level allowed ("proj/sub").
+  Validation: relative only (no drive/absolute forms, no ":"), no ".."
+  or "." segments, non-empty, forward slashes normalized, trailing slash
+  stripped (R7 storage normalization).
+
+Clean break: a legacy FLAT value under ``allowlist`` (the v2.6 list of
+``file:<name>`` / ``prefix:<abs>`` tagged strings) is IGNORED fail-closed
+(parse returns empty sets); the report/list surfaces surface it as
+ignored legacy entries.
 
 Matching
 --------
 - File: exact basename match, case-insensitive on Windows via
   ``os.name == "nt"`` and ``casefold()``.
-- Prefix: prefix match on forward-slash-normalized paths,
-  case-insensitive on Windows, trailing slash normalized. Subtree
-  semantics: target == prefix or target starts with prefix + "/".
+- Dir: target equals or is under ``<working_dir_root>/<entry>``
+  (recursive subtree), forward-slash normalized, case-insensitive on
+  Windows (and for drive-rooted pairs on any host, SCR-006). The root
+  itself is never exempt.
 
 Pure functions only: no host imports, no state (core module discipline,
-ADR-0007). Import surface: stdlib + ``paths`` + ``yaml`` (yaml only for
-callers that load the file; parsing itself works on an already-loaded list).
+ADR-0007). Import surface: stdlib + ``paths``.
 """
 
 import os
@@ -54,13 +55,13 @@ except ImportError:
             return target.startswith("\\") and not target.startswith("\\\\")
 
 MAX_FILENAME_LEN = 255
-MAX_PREFIX_LEN = 4096
+MAX_DIR_LEN = 4096
 
 # ---------------------------------------------------------------- Validation
 
 
 def _validate_file(name):
-    """Strict file basename checks (spec 5.6 D1 / config_writer precedent).
+    """Strict file basename checks (spec 5.6 R9).
 
     Returns (ok, reason). Valid file: non-empty stripped, length <=255,
     no "/" or "\\", not "." or "..", no ".." substring, basename == name,
@@ -86,66 +87,57 @@ def _validate_file(name):
     return True, ""
 
 
-def _validate_prefix(path):
-    """Strict prefix checks (spec 5.6 D1).
+def _validate_dir_rel(path):
+    """Strict relative-dir checks (spec 5.6 R9).
 
-    Returns (ok, reason). Valid prefix: non-empty stripped, length
-    <=4096, absolute via is_absolute_any, no ".." path component.
+    Returns (ok, reason). Valid dir entry: non-empty stripped string,
+    RELATIVE to working_dir_root (no drive/absolute forms, no ":"),
+    no "." or ".." path segments, length <=4096. Multi-level allowed.
+    Trailing slashes are a storage-normalization concern (stripped by
+    _normalize_dir_rel), not a validation failure.
     """
     if not isinstance(path, str):
-        return False, "prefix must be a string"
+        return False, "dir entry must be a string"
     stripped = path.strip()
     if not stripped:
-        return False, "prefix must not be empty"
-    if len(stripped) > MAX_PREFIX_LEN:
-        return False, "prefix too long (max %d)" % MAX_PREFIX_LEN
-    if not _is_absolute_any(stripped):
-        return False, "prefix must be absolute"
-    # No ".." path component (split on both separators)
-    normalized_slashes = stripped.replace("\\", "/")
-    parts = normalized_slashes.split("/")
-    if ".." in parts:
-        return False, "prefix must not contain '..'"
+        return False, "dir entry must not be empty"
+    if len(stripped) > MAX_DIR_LEN:
+        return False, "dir entry too long (max %d)" % MAX_DIR_LEN
+    if stripped in (".", ".."):
+        return False, "dir entry must not be '.' or '..'"
+    if _is_absolute_any(stripped):
+        return False, "dir entry must be relative to the Working Directory root"
+    if ":" in stripped:
+        return False, "dir entry must not contain ':'"
+    normalized = stripped.replace("\\", "/")
+    if normalized.startswith("/"):
+        return False, "dir entry must be relative to the Working Directory root"
+    parts = normalized.split("/")
+    for part in parts:
+        if part in ("", ".", ".."):
+            return False, "dir entry must not contain '.', '..' or empty segments"
     return True, ""
 
 
-def _normalize_prefix(path):
-    """Normalize a validated prefix to forward slashes, trailing slash stripped.
-
-    Preserves drive root "E:/" and posix root "/". Backslashes become "/",
-    duplicate slashes collapsed (except leading drive). Does not call
-    normpath (keeps dot segments as-is; they were rejected above). Stripping
-    is single-pass rstrip after the root check.
-    """
+def _normalize_dir_rel(path):
+    """Normalize a validated dir entry: forward slashes, trailing slash
+    stripped, duplicate slashes collapsed (R7 storage normalization)."""
     if not isinstance(path, str):
         return ""
     s = path.strip().replace("\\", "/")
-    # Collapse duplicate slashes (e.g. E://ws//p -> E:/ws/p) but keep protocol?
-    # Use regex to collapse //+ to / . This handles double-backslash inputs
-    # that become // after replacement.
     s = re.sub(r"/{2,}", "/", s)
-    # Fix drive letter that may have lost its slash after collapse? e.g. E:/ -> already correct
-    # Preserve roots: "/" and "X:/" stay with slash
-    if s == "/":
-        return s
-    if re.match(r"^[A-Za-z]:/$", s):
-        return s
-    if s.endswith("/") and len(s) > 1:
+    while s.endswith("/") and len(s) > 1:
         s = s.rstrip("/")
-        # After rstrip, "E:" would result from "E:/" but we already returned
-        # for that case, so no extra handling needed.
-        if not s:
-            s = "/"
-    return s
+    return s.rstrip("/")
 
 
 def _normalize_for_match(path):
-    """Forward-slash normalized form for prefix/file matching."""
+    """Forward-slash normalized form for dir matching."""
     if path is None:
         return ""
     s = str(path).replace("\\", "/")
     s = re.sub(r"/{2,}", "/", s)
-    # Trailing slash normalized except roots (same rule as prefix)
+    # Trailing slash normalized except roots (same rule as prefixes had)
     if s != "/" and not re.match(r"^[A-Za-z]:/$", s) and s.endswith("/"):
         s = s.rstrip("/")
     return s
@@ -155,123 +147,80 @@ def _normalize_for_match(path):
 
 
 def parse_allowlist(raw):
-    """Parse a raw allowlist value into discriminated sets.
+    """Parse the raw ``allowlist`` config value into structured sets.
 
     Args:
-        raw: value of ``allowlist`` key after yaml.safe_load. Expected
-            list of strings (discriminated ``file:`` | ``prefix:``).
-            Bare entries without a tag are treated as ``file:`` when they
-            contain no slash and as ``prefix:`` when they contain a slash
-            (spec 5.6 generator compat). Extended bare check also treats
-            entries containing "/" or "\\" or ":" as prefix attempts.
+        raw: value of the ``allowlist`` key after yaml.safe_load.
+            Expected MAPPING ``{"files": [...], "dirs": [...]}`` with
+            root-relative entries (spec 5.6 v2.7). A legacy FLAT value
+            (v2.6 list of tagged strings) or any non-dict input is
+            ignored fail-closed -> empty sets (clean break).
 
     Returns:
-        dict ``{"files": set, "prefixes": set}`` with validated, normalized
-        entries. Invalid entries (bad file basename, non-absolute prefix,
-        empty, wrong type) are silently ignored (strict filter). Non-list
-        input (missing key, None, dict) returns strict empty ``{"files":
-        set(), "prefixes": set()}`` (fail-closed, B2).
+        dict ``{"files": set, "dirs": set}`` with validated, normalized
+        entries. Invalid entries are silently ignored (strict filter,
+        hand-edited configs fail-closed; guard and audit agree).
 
     Example:
-        parse_allowlist(["file:a.txt", "prefix:E:/ws/p", "b.txt", "C:/x/"])
-        -> {"files": {"a.txt", "b.txt"}, "prefixes": {"E:/ws/p", "C:/x"}}
+        parse_allowlist({"files": ["a.txt"], "dirs": ["proj/sub"]})
+        -> {"files": {"a.txt"}, "dirs": {"proj/sub"}}
     """
-    empty = {"files": set(), "prefixes": set()}
-    if not isinstance(raw, list):
-        return {"files": set(), "prefixes": set()}
+    if not isinstance(raw, dict):
+        # Legacy flat list / missing key / scalar -> fail-closed ignore.
+        return {"files": set(), "dirs": set()}
     files = set()
-    prefixes = set()
-    for item in raw:
-        if not isinstance(item, str):
-            continue
-        stripped = item.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("file:"):
-            part = stripped[5:].strip()
-            ok, _ = _validate_file(part)
+    dirs = set()
+    raw_files = raw.get("files")
+    if isinstance(raw_files, (list, tuple, set)):
+        for item in raw_files:
+            ok, _ = _validate_file(item)
             if ok:
-                files.add(part)
-            continue
-        if stripped.startswith("prefix:"):
-            part = stripped[7:].strip()
-            ok, _ = _validate_prefix(part)
+                files.add(item.strip())
+    raw_dirs = raw.get("dirs")
+    if isinstance(raw_dirs, (list, tuple, set)):
+        for item in raw_dirs:
+            ok, _ = _validate_dir_rel(item)
             if ok:
-                prefixes.add(_normalize_prefix(part))
-            continue
-        # Bare entry compat
-        # Spec: no slash -> file, contains slash -> prefix
-        # Extended: "/" or "\\" or ":" -> prefix attempt
-        has_slash = "/" in stripped or "\\" in stripped
-        has_colon = ":" in stripped
-        is_prefix_bare = has_slash or has_colon
-        if is_prefix_bare:
-            ok, _ = _validate_prefix(stripped)
-            if ok:
-                prefixes.add(_normalize_prefix(stripped))
-            # Invalid bare prefix is ignored, not fell back to file
-            continue
-        else:
-            ok, _ = _validate_file(stripped)
-            if ok:
-                files.add(stripped)
-            continue
-    return {"files": files, "prefixes": prefixes}
+                dirs.add(_normalize_dir_rel(item))
+    return {"files": files, "dirs": dirs}
 
 
 def format_allowlist(parsed):
-    """Format a parsed allowlist back to a tagged list for YAML flow dump.
+    """Format a parsed allowlist back to the structured mapping form.
 
     Args:
-        parsed: dict with ``files`` and ``prefixes`` (sets or lists) as
+        parsed: dict with ``files`` and ``dirs`` (sets or lists) as
             returned by ``parse_allowlist``.
 
     Returns:
-        list of strings with discriminated tags: ``file:<basename>`` for
-        files and ``prefix:<abs-path>`` for prefixes. Deterministic
-        sorted order (files sorted, then prefixes sorted) for stable YAML.
+        dict ``{"files": [sorted...], "dirs": [sorted...]}`` — the
+        canonical YAML mapping shape (deterministic sorted order for
+        stable flow-style writing).
 
     Example:
-        format_allowlist({"files": {"b.txt", "a.txt"}, "prefixes": {"E:/ws/p"}})
-        -> ["file:a.txt", "file:b.txt", "prefix:E:/ws/p"]
+        format_allowlist({"files": {"a.txt"}, "dirs": {"proj"}})
+        -> {"files": ["a.txt"], "dirs": ["proj"]}
     """
     if not isinstance(parsed, dict):
-        return []
-    files = parsed.get("files") or []
-    prefixes = parsed.get("prefixes") or []
-    # Normalize to sorted lists for determinism
-    try:
-        files_sorted = sorted(files)
-    except TypeError:
-        files_sorted = sorted(list(files))
-    try:
-        prefixes_sorted = sorted(prefixes)
-    except TypeError:
-        prefixes_sorted = sorted(list(prefixes))
-    out = []
-    for f in files_sorted:
-        # f should already be validated basename; skip any invalid just in case
+        return {"files": [], "dirs": []}
+    files_out = []
+    for f in (parsed.get("files") or []):
         ok, _ = _validate_file(f)
         if ok:
-            out.append("file:%s" % f)
-    for p in prefixes_sorted:
-        ok, _ = _validate_prefix(p)
+            files_out.append(str(f).strip())
+    dirs_out = []
+    for d in (parsed.get("dirs") or []):
+        ok, _ = _validate_dir_rel(d)
         if ok:
-            out.append("prefix:%s" % _normalize_prefix(p))
-        else:
-            # If p was already normalized but fails absolute check due to
-            # test fixture using posix path on Windows-absolute, keep it if
-            # it looks like a normalized path; fallback to raw
-            # This branch is defensive, normal prefixes pass the check.
-            out.append("prefix:%s" % _normalize_prefix(str(p)))
-    return out
+            dirs_out.append(_normalize_dir_rel(d))
+    return {"files": sorted(files_out), "dirs": sorted(dirs_out)}
 
 
 # ---------------------------------------------------------------- Matching helpers
 
 
 def is_allowlist_file(name, parsed):
-    """Check whether a basename is allowlisted as file.
+    """Check whether a basename is allowlisted as a root file.
 
     Args:
         name: basename to test (e.g. "notes.txt"). If a full path is
@@ -279,7 +228,7 @@ def is_allowlist_file(name, parsed):
         parsed: dict from ``parse_allowlist``.
 
     Returns:
-        True if ``name`` matches an allowlist ``file:`` entry (exact
+        True if ``name`` matches an allowlist ``files`` entry (exact
         basename, case-insensitive on Windows via casefold).
     """
     if not isinstance(name, str):
@@ -299,18 +248,60 @@ def is_allowlist_file(name, parsed):
         return base in files
 
 
-def is_allowlist_prefix(path, parsed):
-    """Check whether a path is under an allowlist prefix entry.
+def is_allowlist_dir(path, working_dir_root, parsed):
+    """Check whether a path is exempted by an allowlist ``dirs`` entry.
 
     Args:
-        path: absolute path to test (forward or back slashes). Relative
-            paths return False (prefix entries are absolute).
+        path: absolute path to test (forward or back slashes).
+        working_dir_root: the Working Directory root (dirs entries are
+            relative to it).
         parsed: dict from ``parse_allowlist``.
 
     Returns:
-        True if ``path`` equals or is inside any allowlist ``prefix:``
-        entry (prefix match, forward-slash normalized, case-insensitive
-        on Windows via casefold, trailing slash normalized).
+        True when ``path`` equals or is UNDER ``<root>/<entry>`` for any
+        ``dirs`` entry (recursive subtree exemption, forward-slash
+        normalized, case-insensitive on Windows via casefold — and for
+        drive-rooted pairs on any host, SCR-006). The root itself and
+        anything outside it are never exempt.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return False
+    if not working_dir_root:
+        return False
+    t = _normalize_for_match(path)
+    r = _normalize_for_match(working_dir_root)
+    if not t or not r:
+        return False
+    cf = os.name == "nt" or (
+        _is_absolute_any(t) and _is_absolute_any(r)
+    )
+    t_cmp = t.casefold() if cf else t
+    r_cmp = r.casefold() if cf else r
+    r_cmp = r_cmp.rstrip("/")
+    if t_cmp == r_cmp:
+        return False  # the root itself is never exempt
+    prefix = r_cmp + "/"
+    if not t_cmp.startswith(prefix):
+        return False  # outside the root -> never exempt
+    rel = t[len(r.rstrip("/")) + 1:]
+    rel_cmp = rel.casefold() if cf else rel
+    for d in (parsed or {}).get("dirs") or set():
+        if not isinstance(d, str):
+            continue
+        d_norm = _normalize_for_match(d)
+        d_cmp = d_norm.casefold() if cf else d_norm
+        if rel_cmp == d_cmp or rel_cmp.startswith(d_cmp + "/"):
+            return True
+    return False
+
+
+def is_allowlist_prefix(path, parsed):
+    """DEPRECATED v2.6 shim (kept so legacy importers keep collecting).
+
+    Prefix entries no longer exist in the structured model; the parsed
+    dict carries ``dirs`` (root-relative) instead of absolute prefixes,
+    so this always returns False unless a caller hand-builds a legacy
+    ``prefixes`` set. New code must use is_allowlist_dir.
     """
     if not isinstance(path, str):
         return False
@@ -327,28 +318,23 @@ def is_allowlist_prefix(path, parsed):
             pref_norm = _normalize_for_match(pref).casefold()
             if target_cf == pref_norm:
                 return True
-            # Subtree: target starts with prefix + "/"
             if target_cf.startswith(pref_norm.rstrip("/") + "/"):
                 return True
         return False
-    else:
-        # On POSIX, Windows-style drive prefixes still match case-insensitively
-        # if both sides look Windowsy (drive-rooted). Use casefold for those.
-        for pref in prefixes:
-            if not isinstance(pref, str):
-                continue
-            pref_norm = _normalize_for_match(pref)
-            # If both look drive-rooted, compare case-insensitively
-            drive_re = re.compile(r"^[A-Za-z]:/")
-            if drive_re.match(target_norm) and drive_re.match(pref_norm):
-                t_cf = target_norm.casefold()
-                p_cf = pref_norm.casefold()
-                if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
-                    return True
-            else:
-                if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
-                    return True
-        return False
+    for pref in prefixes:
+        if not isinstance(pref, str):
+            continue
+        pref_norm = _normalize_for_match(pref)
+        drive_re = re.compile(r"^[A-Za-z]:/")
+        if drive_re.match(target_norm) and drive_re.match(pref_norm):
+            t_cf = target_norm.casefold()
+            p_cf = pref_norm.casefold()
+            if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
+                return True
+        else:
+            if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------- Supplemental helpers (for config_writer / report)
@@ -362,50 +348,30 @@ def validate_file_entry(name):
     return _validate_file(name)
 
 
-def validate_prefix_entry(path):
-    """Public wrapper for prefix validation (config_writer contract).
+def validate_dir_entry(rel):
+    """Public wrapper for relative-dir validation (R9 contract).
 
     Returns (ok, reason).
     """
-    return _validate_prefix(path)
+    return _validate_dir_rel(rel)
 
 
-def normalize_allowlist_entry(entry):
-    """Normalize a single allowlist entry string (tagged or bare) for display.
-
-    Returns the normalized tagged form or None if invalid.
-    Example: "prefix:E:/ws/p/" -> "prefix:E:/ws/p"
-    """
-    if not isinstance(entry, str):
-        return None
-    stripped = entry.strip()
-    if stripped.startswith("file:"):
-        part = stripped[5:].strip()
-        ok, _ = _validate_file(part)
-        return "file:%s" % part if ok else None
-    if stripped.startswith("prefix:"):
-        part = stripped[7:].strip()
-        ok, _ = _validate_prefix(part)
-        return "prefix:%s" % _normalize_prefix(part) if ok else None
-    # Bare
-    has_slash = "/" in stripped or "\\" in stripped
-    has_colon = ":" in stripped
-    if has_slash or has_colon:
-        ok, _ = _validate_prefix(stripped)
-        return "prefix:%s" % _normalize_prefix(stripped) if ok else None
-    else:
-        ok, _ = _validate_file(stripped)
-        return "file:%s" % stripped if ok else None
+def normalize_dir_entry(rel):
+    """Normalize a dir entry to stored form (fwd slashes, no trailing
+    slash) or None when invalid."""
+    ok, _ = _validate_dir_rel(rel)
+    return _normalize_dir_rel(rel) if ok else None
 
 
 __all__ = [
     "parse_allowlist",
     "format_allowlist",
     "is_allowlist_file",
-    "is_allowlist_prefix",
+    "is_allowlist_dir",
+    "is_allowlist_prefix",  # deprecated v2.6 shim
     "validate_file_entry",
-    "validate_prefix_entry",
-    "normalize_allowlist_entry",
+    "validate_dir_entry",
+    "normalize_dir_entry",
     "MAX_FILENAME_LEN",
-    "MAX_PREFIX_LEN",
+    "MAX_DIR_LEN",
 ]

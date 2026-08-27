@@ -77,19 +77,19 @@ except ImportError:
         _tokenize_command,
     )
 
-# Unified allowlist helpers (spec v2.6 B2)
+# Unified allowlist helpers (spec v2.7 R9 structured mapping)
 try:
-    from .allowlist import is_allowlist_file, is_allowlist_prefix, parse_allowlist
+    from .allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist
 except ImportError:
     try:
-        from allowlist import is_allowlist_file, is_allowlist_prefix, parse_allowlist  # type: ignore
+        from allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist  # type: ignore
     except ImportError:
         # Fallback stubs (should never happen in repo)
         def parse_allowlist(raw):  # type: ignore
-            return {"files": set(), "prefixes": set()}
+            return {"files": set(), "dirs": set()}
         def is_allowlist_file(name, parsed):  # type: ignore
             return False
-        def is_allowlist_prefix(path, parsed):  # type: ignore
+        def is_allowlist_dir(path, root, parsed):  # type: ignore
             return False
 
 logger = logging.getLogger("dir-whip")
@@ -182,7 +182,10 @@ def guard(tool_name, args, task_id=None, **kwargs):
         # demotion, guard-disabled, device exemption, uncertain tier);
         # blocked calls never snapshot (nothing to pair at post).
         if result is None:
-            _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist)
+            _audit_pre_snapshot(
+                session_id, task_id, working_dir_root,
+                _allowlist_snapshot_transport(allowlist),
+            )
         return result
 
     target_paths = _extract_target_paths(tool_name, args)
@@ -311,11 +314,11 @@ def _resolve_target(target, task_id, working_dir_root):
 
 
 def _parsed_allowlist_raw(raw):
-    """Parse raw allowlist list into {files, prefixes} via allowlist module."""
+    """Parse raw allowlist value into {files, dirs} via allowlist module."""
     try:
         return parse_allowlist(raw)
     except Exception:
-        return {"files": set(), "prefixes": set()}
+        return {"files": set(), "dirs": set()}
 
 
 def _parsed_allowlist():
@@ -324,34 +327,67 @@ def _parsed_allowlist():
         raw = load_guard_config().get("allowlist") or []
         return _parsed_allowlist_raw(raw)
     except Exception:
-        return {"files": set(), "prefixes": set()}
+        return {"files": set(), "dirs": set()}
+
+
+def _resolve_parsed_allowlist(allowlist):
+    """Interpret the allowlist argument (v2.7 structured model).
+
+    - dict with files/dirs keys -> parsed mapping (raw config value or
+      an already-parsed dict; both carry the same keys).
+    - a 1-element list/tuple wrapping such a dict -> the audit
+      pre-snapshot transport round-trip (audit stores tuple(allowlist);
+      a bare dict would flatten to its keys, so guard wraps the parsed
+      mapping in a 1-tuple -- see _allowlist_snapshot_transport).
+    - anything else (legacy flat list, None) -> parse_allowlist
+      (fail-closed: legacy values yield empty sets).
+    """
+    try:
+        if isinstance(allowlist, dict) and "files" in allowlist and "dirs" in allowlist:
+            return allowlist
+        if (
+            isinstance(allowlist, (list, tuple))
+            and len(allowlist) == 1
+            and isinstance(allowlist[0], dict)
+            and "files" in allowlist[0]
+            and "dirs" in allowlist[0]
+        ):
+            return allowlist[0]
+        return _parsed_allowlist_raw(allowlist)
+    except Exception:
+        return {"files": set(), "dirs": set()}
+
+
+def _allowlist_snapshot_transport(allowlist):
+    """Audit pre-snapshot transport (v2.7 R9).
+
+    audit._audit_pre_snapshot stores tuple(allowlist); a mapping dict
+    would flatten to its KEY strings and be lost. Wrap the PARSED
+    mapping in a 1-tuple so the tuple() round-trip preserves it;
+    classify_target unwraps it via _resolve_parsed_allowlist.
+    """
+    return (_parsed_allowlist_raw(allowlist),)
 
 
 def classify_target(target, working_dir_root, allowlist=None, is_subagent=False):
-    """Classify a single normalized absolute target (spec 5.3 step 6, v2.6 B2).
+    """Classify a single normalized absolute target (spec 5.3 step 6, v2.7 R9).
 
     Returns a verdict dict:
       {"outcome": "allow", "rule_key": ...}                      -> allow
       {"outcome": "external-write", "rule_key": "external-write"} -> allow + log
       {"outcome": "block", "rule_key": ..., "message": ...}      -> block
 
-    Order: Tier 0 (allowlist prefix + runtime allowlist) first; under
+    Order: Tier 0 (allowlist dirs subtree + runtime allowlist) first; under
     working_dir_root -> allowlist file at root, then valid Session
     Directory, then BLOCK; outside working_dir_root (incl. sibling profile
     dirs) -> external-write. There is NO approve tier. Casefold handling
     delegated to allowlist module.
     """
     # Resolve parsed allowlist: prefer passed allowlist, else fresh load.
-    if isinstance(allowlist, dict) and "files" in allowlist and "prefixes" in allowlist:
-        parsed = allowlist
-    elif allowlist is not None:
-        # allowlist is expected to be list of discriminated strings (cached)
-        parsed = _parsed_allowlist_raw(allowlist)
-    else:
-        parsed = _parsed_allowlist()
+    parsed = _resolve_parsed_allowlist(allowlist)
 
-    # Tier 0: allowlist prefix OR runtime allowlist -> ALLOW
-    if is_allowlist_prefix(target, parsed):
+    # Tier 0: allowlist dirs subtree OR runtime allowlist -> ALLOW
+    if is_allowlist_dir(target, working_dir_root, parsed):
         return {"outcome": "allow", "rule_key": "tier0-allowlist"}
     if is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}

@@ -20,6 +20,7 @@ except ImportError:
 
 try:
     from .config import (
+        SESSION_DIR_RE,
         _effective_root,
         _get_hermes_home,
         _paths_equal,
@@ -29,6 +30,7 @@ try:
     )
 except ImportError:
     from config import (
+        SESSION_DIR_RE,
         _effective_root,
         _get_hermes_home,
         _paths_equal,
@@ -42,35 +44,29 @@ try:
 except ImportError:
     from stats import _stats_jsonl_path
 
-# Unified allowlist core (B2)
+# Unified allowlist core (v2.7 R9 structured mapping)
 try:
     from .allowlist import (
-        format_allowlist,
-        is_allowlist_file,
-        is_allowlist_prefix,
-        normalize_allowlist_entry,
         parse_allowlist,
+        validate_dir_entry,
     )
 except ImportError:
     try:
-        from allowlist import (
-            format_allowlist,
-            is_allowlist_file,
-            is_allowlist_prefix,
-            normalize_allowlist_entry,
+        from allowlist import (  # type: ignore
             parse_allowlist,
-        )  # type: ignore
+            validate_dir_entry,
+        )
     except ImportError:
         def parse_allowlist(raw):  # type: ignore
-            return {"files": set(), "prefixes": set()}
-        def format_allowlist(parsed):  # type: ignore
-            return []
-        def is_allowlist_file(name, parsed):  # type: ignore
-            return False
-        def is_allowlist_prefix(path, parsed):  # type: ignore
-            return False
-        def normalize_allowlist_entry(entry):  # type: ignore
-            return None
+            return {"files": set(), "dirs": set()}
+        def validate_dir_entry(rel):  # type: ignore
+            return False, "allowlist core unavailable"
+
+# Structured allowlist persistence (v2.7 R9): row-level mapping writer.
+try:
+    from . import config_writer
+except ImportError:
+    import config_writer  # type: ignore
 
 logger = logging.getLogger("dir-whip")
 
@@ -246,18 +242,19 @@ def _dir_whip_report():
             % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
         )
 
-        # Line 5: allowlist (single key B2).
-        # Display: strict empty hint when key missing, otherwise Files/Prefixes.
+        # Line 5: allowlist (structured mapping v2.7 R9).
+        # Display: strict empty hint when key missing, otherwise Files/Dirs;
+        # an ignored legacy flat value appends the clean-break hint.
         if not _guard_config_key_present("allowlist"):
             lines.append("Allowlist: (strict empty allowlist)")
         else:
-            raw = cfg.get("allowlist") or []
-            parsed = parse_allowlist(raw)
-            files = sorted(parsed.get("files") or [])
-            prefixes = sorted(parsed.get("prefixes") or [])
-            files_str = ", ".join(files) if files else "(none)"
-            prefixes_str = ", ".join(prefixes) if prefixes else "(none)"
-            lines.append("Allowlist: Files: %s  Prefixes: %s" % (files_str, prefixes_str))
+            state_map, legacy_n = _load_allowlist_state()
+            files_str = ", ".join(state_map["files"]) if state_map["files"] else "(none)"
+            dirs_str = ", ".join(state_map["dirs"]) if state_map["dirs"] else "(none)"
+            allow_line = "Allowlist: Files: %s  Dirs: %s" % (files_str, dirs_str)
+            if legacy_n:
+                allow_line += "  | ignored legacy entries: %d" % legacy_n
+            lines.append(allow_line)
 
         # Line 5b (v2.7 R6): session-start discipline-block outcome (5.4).
         # reminder_status is set by on_start (injected | skipped-outside |
@@ -302,457 +299,392 @@ def _dir_whip_report():
         return "[dir-whip] report failed: %s" % exc
 
 
-# ---------------------------------------------------------------- Helpers for allowlist persistence (B2 row-level edit)
+# ---------------------------------------------------------------- Allowlist state + rendering (v2.7 R9)
 
-def _load_allowlist_raw():
-    """Load current allowlist raw list via load_guard_config."""
+def _load_allowlist_state():
+    """Current structured allowlist + ignored legacy count.
+
+    Returns ({"files": [sorted...], "dirs": [sorted...]}, legacy_count).
+    Legacy flat values are ignored fail-closed by parse_allowlist; the
+    count surfaces them for the clean-break hint.
+    """
     try:
         cfg = load_guard_config()
-        raw = cfg.get("allowlist") or []
-        if isinstance(raw, list):
-            return [x for x in raw if isinstance(x, str)]
-        return []
+        raw = cfg.get("allowlist")
     except Exception:
-        return []
+        raw = None
+    parsed = parse_allowlist(raw)
+    legacy = 0
+    if isinstance(raw, list):
+        legacy = sum(1 for x in raw if isinstance(x, str) and x.strip())
+    return {
+        "files": sorted(parsed.get("files") or []),
+        "dirs": sorted(parsed.get("dirs") or []),
+    }, legacy
 
 
-def _write_allowlist_raw(tagged_list):
-    """Row-level edit of allowlist key, preserving other lines/comments.
+def _render_two_sections(files, dirs, header=None, tail=None):
+    """Files:/Dirs: two-section listing with ONE continuous numbering
+    (R1); empty sections render (none); both-empty renders the compact
+    single-line empty state (R6)."""
+    files = list(files or [])
+    dirs = list(dirs or [])
+    if not files and not dirs:
+        out = "Files: (none)  Dirs: (none)"
+        if header:
+            out = "%s\n%s" % (header, out)
+        if tail:
+            out = "%s\n%s" % (out, tail)
+        return out
+    lines = [header] if header else []
+    lines.append("Files:")
+    n = 0
+    for f in files:
+        n += 1
+        lines.append("  %d: %s" % (n, f))
+    if not files:
+        lines.append("  (none)")
+    lines.append("Dirs:")
+    for d in dirs:
+        n += 1
+        lines.append("  %d: %s" % (n, d))
+    if not dirs:
+        lines.append("  (none)")
+    if tail:
+        lines.append(tail)
+    return "\n".join(lines)
 
-    - If the key exists, rewrite that line as flow list (handling block-form
-      continuation lines for legacy allowed_root_files / exempt_paths).
-    - If not found, append the key at end with newline.
-    - Creates parent dir if missing, utf-8.
-    - tagged_list is list of discriminated strings (file:<...> | prefix:<...>).
-    """
-    path = _guard_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Format as flow list: allowlist: ["file:a", "prefix:E:/p"]
-    import json
-    if not tagged_list:
-        new_line = "allowlist: []"
-    else:
-        flow = json.dumps(list(tagged_list), ensure_ascii=False)
-        new_line = "allowlist: %s" % flow
-    if not path.is_file():
-        path.write_text(new_line + "\n", encoding="utf-8")
-        _refresh_cache()
-        return
+
+def _render_current_state():
+    """The trailing two-section current-state block (R3/R5 feedback)."""
+    state_map, _legacy = _load_allowlist_state()
+    return _render_two_sections(state_map["files"], state_map["dirs"])
+
+
+def _case_eq(a, b):
+    """Casefold-aware equality on Windows (SCR-006)."""
+    if os.name == "nt":
+        return str(a).casefold() == str(b).casefold()
+    return str(a) == str(b)
+
+
+def _is_abs_any(path):
+    """Absolute check incl. drive-rooted forms (paths.is_absolute_any proxy)."""
     try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
-        path.write_text(new_line + "\n", encoding="utf-8")
-        _refresh_cache()
-        return
-    lines = text.splitlines()
-    # Match allowlist key, or legacy keys for migration (exempt_paths / allowed_root_files)
-    # For B2 clean break, we treat legacy keys as allowlist and replace them.
-    pat_allow = re.compile(r"^\s*allowlist\s*:")
-    # Also detect legacy keys to remove them when we write allowlist
-    pat_legacy_exempt = re.compile(r"^\s*exempt_paths\s*:")
-    pat_legacy_allowed = re.compile(r"^\s*allowed_root_files\s*:")
-    idx = None
-    legacy_indices = []
-    for i, line in enumerate(lines):
-        if pat_allow.search(line):
-            idx = i
-            break
-    # Collect legacy indices for removal if we are adding allowlist anew
-    if idx is None:
-        for i, line in enumerate(lines):
-            if pat_legacy_exempt.search(line) or pat_legacy_allowed.search(line):
-                legacy_indices.append(i)
-    if idx is not None:
-        # Detect block form: allowlist: with optional comment/whitespace only
-        block_pat = re.compile(r"^\s*allowlist\s*:\s*(?:#.*)?\s*$")
-        if block_pat.match(lines[idx]):
-            j = idx + 1
-            item_pat = re.compile(r"^\s*-\s*.*$")
-            while j < len(lines) and item_pat.match(lines[j]):
-                j += 1
-            new_lines = lines[:idx] + [new_line] + lines[j:]
-        else:
-            new_lines = lines[:idx] + [new_line] + lines[idx + 1 :]
-        # Also strip any legacy keys that may remain elsewhere
-        # (clean break: remove exempt_paths / allowed_root_files if present)
-        filtered = []
-        for k, ln in enumerate(new_lines):
-            # Skip legacy keys except the new allowlist line we just inserted
-            if k != idx and (pat_legacy_exempt.search(ln) or pat_legacy_allowed.search(ln)):
-                # Need to also skip its block items
-                # Check if next lines are list items, skip them as well via lookahead
-                # But for simplicity, if line is legacy key with block form, we will skip following items in next iteration
-                # Handle block removal: if legacy key is block-form, skip following "- " lines
-                # Determine if this ln is legacy key block
-                block_legacy_pat = re.compile(r"^\s*(?:exempt_paths|allowed_root_files)\s*:\s*(?:#.*)?\s*$")
-                if block_legacy_pat.match(ln):
-                    # Skip this line and following list items; we will handle by scanning?
-                    continue
-                else:
-                    continue
-            filtered.append(ln)
-        # Second pass to remove orphaned list items that belonged to legacy keys we skipped
-        # If we skipped a block legacy key, its following "- " items would still be in filtered if not removed above?
-        # Our filtered loop above skips only the key line, not items. Need to handle properly:
-        # Reconstruct by scanning original new_lines and excluding legacy blocks entirely.
-        final_lines = []
-        skip_block = False
-        for ln in new_lines:
-            if pat_legacy_exempt.search(ln) or pat_legacy_allowed.search(ln):
-                # Start of legacy block
-                block_legacy_pat = re.compile(r"^\s*(?:exempt_paths|allowed_root_files)\s*:\s*(?:#.*)?\s*$")
-                if block_legacy_pat.match(ln):
-                    skip_block = True
-                    continue
-                else:
-                    # Inline form, just skip this line
-                    continue
-            if skip_block:
-                if re.match(r"^\s*-\s*.*$", ln):
-                    continue
-                else:
-                    skip_block = False
-                    final_lines.append(ln)
-            else:
-                final_lines.append(ln)
-        new_lines = final_lines
-        new_text = "\n".join(new_lines)
-        if text.endswith("\n"):
-            new_text += "\n"
-        path.write_text(new_text, encoding="utf-8")
-    else:
-        # No allowlist key yet: append, but first strip legacy keys if present
-        # Build new content without legacy keys/blocks, then append allowlist
-        cleaned = []
-        skip_block = False
-        for ln in lines:
-            if pat_legacy_exempt.search(ln) or pat_legacy_allowed.search(ln):
-                block_legacy_pat = re.compile(r"^\s*(?:exempt_paths|allowed_root_files)\s*:\s*(?:#.*)?\s*$")
-                if block_legacy_pat.match(ln):
-                    skip_block = True
-                    continue
-                else:
-                    continue
-            if skip_block:
-                if re.match(r"^\s*-\s*.*$", ln):
-                    continue
-                else:
-                    skip_block = False
-                    cleaned.append(ln)
-            else:
-                cleaned.append(ln)
-        text_cleaned = "\n".join(cleaned)
-        if text_cleaned and not text_cleaned.endswith("\n"):
-            text_cleaned += "\n"
-        text_cleaned += new_line + "\n"
-        path.write_text(text_cleaned, encoding="utf-8")
-    _refresh_cache()
-
-
-def _refresh_cache():
-    """Narrow cache refresh so next verdict.classify_target sees new allowlist."""
-    try:
-        from . import config as _cfg
-        if hasattr(_cfg, "_refresh_allowlist_cache"):
-            _cfg._refresh_allowlist_cache()
-        elif hasattr(_cfg, "refresh_allowlist_cache"):
-            _cfg.refresh_allowlist_cache()
-    except Exception:
+        from .paths import is_absolute_any
+    except ImportError:
         try:
-            import config as _cfg2
-            if hasattr(_cfg2, "_refresh_allowlist_cache"):
-                _cfg2._refresh_allowlist_cache()
-        except Exception:
-            pass
+            from paths import is_absolute_any  # type: ignore
+        except ImportError:
+            return os.path.isabs(path)
+    return is_absolute_any(path)
 
 
-# ---------------------------------------------------------------- Allowlist helpers (SCR-037 B2)
+def _relativize_input(token, root):
+    """Relativize an input token against working_dir_root (5.6 input layer).
+
+    Returns (rel_or_None, reason_clause). rel keeps forward slashes and a
+    possible trailing slash (the --create form signal); None means guided
+    rejection (root itself / ancestor / outside root).
+    """
+    t = str(token).replace("\\", "/").strip()
+    r = str(root).replace("\\", "/").rstrip("/")
+    cf = os.name == "nt" or (_is_abs_any(t) and _is_abs_any(r))
+    t_cmp = t.casefold() if cf else t
+    r_cmp = r.casefold() if cf else r
+    if t_cmp == r_cmp:
+        return None, "'%s' is the Working Directory itself" % token
+    if t_cmp.startswith(r_cmp + "/"):
+        return t[len(r) + 1:], None
+    return None, "'%s' resolves outside it" % token
+
 
 def _list_candidates():
-    """Scan working_dir_root for root-file candidates.
+    """Scan working_dir_root for allow candidates (R2).
 
-    Returns (candidates_list, error_string). Candidates are top-level
-    files excluding already-allowlisted files, allowlist prefixes (subtree),
-    and session-dir entries. Sorted for determinism.
+    Returns ((file_candidates, dir_candidates), error_string). Files =
+    top-level files minus already-listed files entries; Dirs = top-level
+    directories minus session-format dirs, .hermes/, and subtrees already
+    covered by a dirs entry. Sorted for determinism.
     """
     ctx = _get_cmd_ctx()
     root = _effective_root(ctx)
     if not root:
         return None, "[dir-whip] Working Directory unresolved: cannot list candidates"
-    try:
-        cfg = load_guard_config()
-        raw = cfg.get("allowlist") or []
-        parsed = parse_allowlist(raw)
-    except Exception:
-        parsed = {"files": set(), "prefixes": set()}
-    candidates = []
+    state_map, _legacy = _load_allowlist_state()
+    listed_files = state_map["files"]
+    dir_first_segments = [d.split("/")[0] for d in state_map["dirs"]]
+    file_cands = []
+    dir_cands = []
     try:
         with os.scandir(root) as it:
             for entry in it:
                 try:
-                    if not entry.is_file():
-                        continue
+                    if entry.is_file():
+                        if any(_case_eq(entry.name, f) for f in listed_files):
+                            continue
+                        file_cands.append(entry.name)
+                    elif entry.is_dir():
+                        name = entry.name
+                        if SESSION_DIR_RE.match(name):
+                            continue
+                        if _case_eq(name, ".hermes"):
+                            continue
+                        if any(_case_eq(name, seg) for seg in dir_first_segments):
+                            continue
+                        dir_cands.append(name)
                 except Exception:
                     continue
-                name = entry.name
-                # Exclude allowlist files (exact basename, case-insensitive on Windows)
-                if is_allowlist_file(name, parsed):
-                    continue
-                full = os.path.join(root, name)
-                try:
-                    # Exclude allowlist prefixes (subtree)
-                    if is_allowlist_prefix(full, parsed):
-                        continue
-                    from .config import is_inside_session_dir
-                except ImportError:
-                    from config import is_inside_session_dir  # type: ignore
-                try:
-                    if is_inside_session_dir(full, root):
-                        continue
-                except Exception:
-                    pass
-                candidates.append(name)
     except Exception as exc:
         return None, "[dir-whip] failed to list candidates: %s" % exc
-    candidates.sort()
-    return candidates, None
+    file_cands.sort()
+    dir_cands.sort()
+    return (file_cands, dir_cands), None
+
+
+_ALLOW_GUIDED_REJECTION = (
+    "[dir-whip] Invalid path: choose a file or folder inside the "
+    "Working Directory (%s)."
+)
 
 
 def _handle_allow(rest):
-    """Handle /dir-whip allow subcommand (B2 unified).
+    """/dir-whip allow (v2.7 R2/R3 + input layer v2.1).
 
-    Bare allow -> list candidates. With args, intelligently discriminate
-    file vs prefix via allowlist.normalize_allowlist_entry: no slash
-    (e.g. README.md) -> file:, slash or prefix: -> prefix:.
-    Supports numeric indices for candidates, batch comma/whitespace separated.
+    Bare -> candidate enumeration (two-section numbered + Add hint).
+    Args -> digit tokens map into the candidate list (file number ->
+    files, dir number -> dirs); path tokens accept relative/absolute
+    input (relativized against the root): existing -> disk-aware
+    classification; non-existent -> confirm-create protocol (--create
+    form decides: trailing slash -> makedirs + dirs, bare name -> empty
+    root file + files, nested no-slash -> directory tree + dirs);
+    outside-root/root-itself/ancestor -> guided rejection. Batch
+    comma/whitespace, all-or-nothing (first invalid token rejects).
     """
-    # Bare allow -> list candidates
-    if not rest.strip():
+    rest = (rest or "").strip()
+    create = False
+    m = re.search(r"(?:^|\s)--create\b", rest)
+    if m:
+        create = True
+        rest = (rest[:m.start()] + " " + rest[m.end():]).strip()
+    ctx = _get_cmd_ctx()
+    root = _effective_root(ctx)
+    root_fwd = str(root).replace("\\", "/") if root else ""
+    if not rest:
+        if not root:
+            return "[dir-whip] Working Directory unresolved: cannot list candidates"
         cands, err = _list_candidates()
         if err:
             return err
-        if not cands:
-            return "No candidates: no root-level files to allowlist"
-        lines = []
-        for i, name in enumerate(cands, 1):
-            lines.append("%d: %s" % (i, name))
-        return "\n".join(lines)
-    # Parse tokens (comma or whitespace separated, supports "1,3" and names with slashes/colons)
-    # Use regex split on comma or whitespace, but preserve entries that contain colon? They have no spaces.
-    tokens = [t for t in re.split(r"[,\s]+", rest.strip()) if t]
+        fc, dc = cands
+        return _render_two_sections(
+            fc, dc,
+            header="Candidates in %s:" % root_fwd,
+            tail="Add: /dir-whip allow <number|name>",
+        )
+    if not root:
+        return "[dir-whip] Working Directory unresolved: cannot allow"
+    tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
         return "[dir-whip] Invalid argument: empty filename"
-    # Need candidates for numeric index resolution
     cands, err = _list_candidates()
-    if cands is None:
-        cands = []
-    to_add_raw = []
+    if err:
+        return err
+    fc, dc = cands
+    numbered = list(fc) + list(dc)
+    adds_files = []
+    adds_dirs = []
+    seen = set()
+
+    def _mark(kind, value):
+        key = (kind, value.casefold() if os.name == "nt" else value)
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
     for tok in tokens:
         if tok.isdigit():
-            if not cands:
-                return "[dir-whip] Invalid index '%s': no candidates available" % tok
             idx = int(tok)
-            if 1 <= idx <= len(cands):
-                # Candidate files are bare basenames -> file: entry
-                to_add_raw.append("file:%s" % cands[idx - 1])
+            if not numbered or not 1 <= idx <= len(numbered):
+                return "[dir-whip] Invalid index '%s': valid 1-%d" % (
+                    tok, max(len(numbered), 1),
+                )
+            name = numbered[idx - 1]
+            if idx <= len(fc):
+                if _mark("f", name):
+                    adds_files.append(name)
             else:
-                return "[dir-whip] Invalid index '%s': valid 1-%d" % (tok, len(cands))
+                if _mark("d", name):
+                    adds_dirs.append(name)
+            continue
+        # Path token: ABSOLUTE input is relativized against the root
+        # (input tolerance); a relative token is taken as-is.
+        tok_fwd = tok.replace("\\", "/")
+        if _is_abs_any(tok_fwd) or tok_fwd.startswith("/"):
+            rel_raw, reason = _relativize_input(tok, root)
+            if rel_raw is None:
+                return "%s\n%s" % (_ALLOW_GUIDED_REJECTION % root_fwd, reason)
         else:
-            # Intelligent discrimination via allowlist normalize
-            norm = normalize_allowlist_entry(tok)
-            if norm is None:
-                # Try to give precise error: validate as file or prefix
-                # Fallback: if tok contains slash or colon, treat as prefix error, else file
-                has_slash = "/" in tok or "\\" in tok
-                has_colon = ":" in tok
-                if tok.startswith("file:"):
-                    return "[dir-whip] Invalid filename '%s': must be basename only" % tok
-                if tok.startswith("prefix:") or has_slash or has_colon:
-                    return "[dir-whip] Invalid prefix '%s': must be absolute path" % tok
-                return "[dir-whip] Invalid entry '%s'" % tok
-            to_add_raw.append(norm)
-    # Dedup preserve order
-    seen = set()
-    uniq_add = []
-    for n in to_add_raw:
-        if n not in seen:
-            seen.add(n)
-            uniq_add.append(n)
-    # Load current allowlist and merge
-    current_raw = _load_allowlist_raw()
-    current_parsed = parse_allowlist(current_raw)
-    current_formatted = format_allowlist(current_parsed)
-    # Determine which of uniq_add are already present
-    # Use parsed sets for comparison (normalized)
-    add_parsed = parse_allowlist(uniq_add)
-    # Build new merged sets
-    new_files = set(current_parsed.get("files") or [])
-    new_prefixes = set(current_parsed.get("prefixes") or [])
-    added = []
-    for f in add_parsed.get("files") or []:
-        if f not in new_files:
-            new_files.add(f)
-            added.append("file:%s" % f)
-    for p in add_parsed.get("prefixes") or []:
-        # Normalize prefix already done via parse
-        if p not in new_prefixes:
-            # But need to check case-insensitive on Windows? Use parsed set directly
-            # For now exact check
-            found = False
-            for existing in new_prefixes:
-                # casefold compare on Windows handled by is_allowlist_prefix but for dedup we use exact
-                if os.name == "nt" and existing.casefold() == p.casefold():
-                    found = True
-                    break
-                if existing == p:
-                    found = True
-                    break
-            if not found:
-                new_prefixes.add(p)
-                added.append("prefix:%s" % p)
-    if not added:
-        # Idempotent: already present
-        merged_formatted = format_allowlist({"files": new_files, "prefixes": new_prefixes})
-        allow_str = ", ".join(merged_formatted) if merged_formatted else "(none)"
-        # For strict empty vs none, we show current
-        return "Already allowlisted: %s\nAllowlist: %s" % (", ".join(uniq_add), allow_str)
-    # Validate total entries <=100 (file+prefix combined cap)
-    total = len(new_files) + len(new_prefixes)
-    if total > 100:
-        return "[dir-whip] Too many entries: max 100 allowlisted items"
-    merged_formatted = format_allowlist({"files": new_files, "prefixes": new_prefixes})
-    _write_allowlist_raw(merged_formatted)
-    allow_str = ", ".join(merged_formatted) if merged_formatted else "(none)"
-    return "Added: %s\nAllowlist: %s" % (", ".join(added), allow_str)
+            rel_raw = tok_fwd
+        had_trailing_slash = rel_raw.endswith("/")
+        rel = rel_raw.rstrip("/")
+        ok, vreason = validate_dir_entry(rel)
+        if not ok:
+            return "%s\n'%s' %s" % (
+                _ALLOW_GUIDED_REJECTION % root_fwd, tok, vreason,
+            )
+        if not _mark("p", rel):
+            continue
+        full = os.path.join(str(root), *rel.split("/"))
+        if os.path.lexists(full):
+            # Existence decides first (--create on existing = plain add).
+            if os.path.isdir(full):
+                adds_dirs.append(rel)
+            elif "/" in rel:
+                return (
+                    "[dir-whip] Invalid path: '%s' is an existing file in a "
+                    "subdirectory; only root-level files can be files entries."
+                    % tok
+                )
+            else:
+                adds_files.append(rel)
+        else:
+            if not create:
+                return "'%s' does not exist -- run: /dir-whip allow %s --create" % (
+                    tok, tok,
+                )
+            # Form decides the created artifact (input layer v2.1).
+            if had_trailing_slash or "/" in rel:
+                try:
+                    os.makedirs(full, exist_ok=True)
+                except OSError as exc:
+                    return "[dir-whip] cannot create '%s': %s" % (rel, exc)
+                adds_dirs.append(rel)
+            else:
+                try:
+                    with open(full, "a", encoding="utf-8"):
+                        pass
+                except OSError as exc:
+                    return "[dir-whip] cannot create '%s': %s" % (rel, exc)
+                adds_files.append(rel)
+    # Merge idempotently (Added to ... / Already in ...), cap, persist.
+    state_map, _legacy = _load_allowlist_state()
+    new_files = list(state_map["files"])
+    new_dirs = list(state_map["dirs"])
+    feedback = []
+    for f in adds_files:
+        if any(_case_eq(f, x) for x in new_files):
+            feedback.append("Already in files: %s" % f)
+        else:
+            new_files.append(f)
+            feedback.append("Added to files: %s" % f)
+    for d in adds_dirs:
+        if any(_case_eq(d, x) for x in new_dirs):
+            feedback.append("Already in dirs: %s" % d)
+        else:
+            new_dirs.append(d)
+            feedback.append("Added to dirs: %s" % d)
+    if len(new_files) + len(new_dirs) > config_writer.MAX_ENTRIES:
+        return "[dir-whip] Too many entries: max %d allowlisted items" % (
+            config_writer.MAX_ENTRIES,
+        )
+    if any(line.startswith("Added to") for line in feedback):
+        config_writer.write_allowlist(
+            {"files": sorted(new_files), "dirs": sorted(new_dirs)}
+        )
+    return "\n".join(feedback) + "\n\n" + _render_current_state()
 
 
 def _handle_remove(rest):
-    """Handle /dir-whip remove subcommand (B2 unified)."""
-    if not rest.strip():
-        return "Usage: /dir-whip [allow|remove|list]"
-    tokens = [t for t in re.split(r"[,\s]+", rest.strip()) if t]
+    """/dir-whip remove (v2.7 R4/R5).
+
+    Bare -> enumerate CURRENT entries (two-section numbered + Remove
+    hint); strict-empty hint when nothing is listed. Args -> digit
+    tokens map into the current-entry numbering; name tokens accept
+    relative/absolute input and match BOTH sets (casefold on Windows;
+    a hand-edited double entry is removed from both). Disk-awareness is
+    an ALLOW-time concern only (remove deletes an entry, not a path).
+    """
+    rest = (rest or "").strip()
+    state_map, _legacy = _load_allowlist_state()
+    files = state_map["files"]
+    dirs = state_map["dirs"]
+    if not rest:
+        if not files and not dirs:
+            return "Allowlist: (strict empty allowlist)"
+        return _render_two_sections(
+            files, dirs, tail="Remove: /dir-whip remove <number|name>",
+        )
+    ctx = _get_cmd_ctx()
+    root = _effective_root(ctx)
+    tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
         return "Usage: /dir-whip [allow|remove|list]"
-    current_raw = _load_allowlist_raw()
-    current_parsed = parse_allowlist(current_raw)
-    current_formatted = format_allowlist(current_parsed)
-    if not current_formatted:
-        # No entries, check if key missing -> strict empty
-        if not _guard_config_key_present("allowlist"):
-            return "Allowlist: (strict empty allowlist)"
-        return "Allowlist: (none)"
-    to_remove_raw = []
+    numbered = list(files) + list(dirs)
+    rem_names = []
+    seen = set()
     for tok in tokens:
         if tok.isdigit():
-            if not current_formatted:
-                return "[dir-whip] Invalid index '%s': allowlist empty" % tok
             idx = int(tok)
-            if 1 <= idx <= len(current_formatted):
-                to_remove_raw.append(current_formatted[idx - 1])
-            else:
-                return "[dir-whip] Invalid index '%s': valid 1-%d" % (tok, len(current_formatted))
+            if not numbered or not 1 <= idx <= len(numbered):
+                return "[dir-whip] Invalid index '%s': valid 1-%d" % (
+                    tok, max(len(numbered), 1),
+                )
+            name = numbered[idx - 1]
         else:
-            norm = normalize_allowlist_entry(tok)
-            if norm is None:
-                # Also allow bare file name removal via file: inference?
-                # Try to see if tok is a bare file that should be treated as file:
-                # If tok has no slash/colon but fails validation (e.g. contains ..), error
-                has_slash = "/" in tok or "\\" in tok
-                has_colon = ":" in tok
-                if tok.startswith("file:") or (not has_slash and not has_colon):
-                    return "[dir-whip] Invalid filename '%s': must be basename only" % tok
-                return "[dir-whip] Invalid prefix '%s': must be absolute path" % tok
-            to_remove_raw.append(norm)
-    # Dedup preserve order
-    seen = set()
-    uniq_rem = []
-    for n in to_remove_raw:
-        if n not in seen:
-            seen.add(n)
-            uniq_rem.append(n)
-    # Parse uniq_rem to files/prefixes sets for removal
-    rem_parsed = parse_allowlist(uniq_rem)
-    rem_files = rem_parsed.get("files") or set()
-    rem_prefixes = rem_parsed.get("prefixes") or set()
-    # Normalize prefixes for comparison (case-insensitive on Windows)
-    # Build new sets after removal
-    new_files = set(current_parsed.get("files") or [])
-    new_prefixes = set(current_parsed.get("prefixes") or [])
-    removed = []
-    for f in list(new_files):
-        # Check if f matches any rem file (casefold on Windows)
-        for rf in rem_files:
-            if os.name == "nt":
-                if f.casefold() == rf.casefold():
-                    new_files.remove(f)
-                    removed.append("file:%s" % f)
-                    break
+            # Name token: relative or absolute (normalized, 5.6); matched
+            # by NAME against both sets -- no disk-aware discrimination.
+            tok_fwd = tok.replace("\\", "/")
+            rel = None
+            if _is_abs_any(tok_fwd) or tok_fwd.startswith("/"):
+                if root:
+                    rel, _reason = _relativize_input(tok, root)
+            if rel is None:
+                rel = tok_fwd.strip().rstrip("/")
+            if not rel or rel in (".", ".."):
+                return "[dir-whip] Invalid entry '%s'" % tok
+            name = rel
+        if name not in seen:
+            seen.add(name)
+            rem_names.append(name)
+    removed_lines = []
+    new_files = list(files)
+    new_dirs = list(dirs)
+
+    def _drop(entries, name, label):
+        kept = []
+        for x in entries:
+            if _case_eq(x, name):
+                removed_lines.append("Removed from %s: %s" % (label, x))
             else:
-                if f == rf:
-                    new_files.remove(f)
-                    removed.append("file:%s" % f)
-                    break
-    # For prefixes, need to handle normalization
-    for p in list(new_prefixes):
-        for rp in rem_prefixes:
-            # Compare normalized prefixes case-insensitively on Windows
-            # Use helper to normalize both
-            try:
-                from .allowlist import _normalize_prefix as _norm  # type: ignore
-            except Exception:
-                def _norm(x):  # fallback
-                    return x.replace("\\", "/").rstrip("/")
-            p_norm = _norm(p)
-            rp_norm = _norm(rp)
-            if os.name == "nt":
-                if p_norm.casefold() == rp_norm.casefold():
-                    new_prefixes.remove(p)
-                    removed.append("prefix:%s" % p_norm)
-                    break
-            else:
-                # On POSIX, Windows drive prefixes still case-insensitive if both drive-rooted
-                import re as _re
-                drive_re = _re.compile(r"^[A-Za-z]:/")
-                if drive_re.match(p_norm) and drive_re.match(rp_norm):
-                    if p_norm.casefold() == rp_norm.casefold():
-                        new_prefixes.remove(p)
-                        removed.append("prefix:%s" % p_norm)
-                        break
-                else:
-                    if p_norm == rp_norm:
-                        new_prefixes.remove(p)
-                        removed.append("prefix:%s" % p_norm)
-                        break
-    if not removed:
-        merged_formatted = format_allowlist({"files": new_files, "prefixes": new_prefixes})
-        allow_str = ", ".join(merged_formatted) if merged_formatted else "(none)"
-        return "Not in allowlist: %s\nAllowlist: %s" % (", ".join(uniq_rem), allow_str)
-    merged_formatted = format_allowlist({"files": new_files, "prefixes": new_prefixes})
-    _write_allowlist_raw(merged_formatted)
-    allow_str = ", ".join(merged_formatted) if merged_formatted else "(none)"
-    return "Removed: %s\nAllowlist: %s" % (", ".join(removed), allow_str)
+                kept.append(x)
+        return kept
+
+    for name in rem_names:
+        new_files = _drop(new_files, name, "files")
+        new_dirs = _drop(new_dirs, name, "dirs")
+    if not removed_lines:
+        return "Not in allowlist: %s\n\n%s" % (
+            ", ".join(rem_names), _render_current_state(),
+        )
+    config_writer.write_allowlist(
+        {"files": sorted(new_files), "dirs": sorted(new_dirs)}
+    )
+    return "\n".join(removed_lines) + "\n\n" + _render_current_state()
 
 
 def _handle_list(rest):
-    """Handle /dir-whip list subcommand (B2 unified)."""
-    if rest.strip():
+    """/dir-whip list (v2.7 R6): the same two-section numbered format as
+    remove (numbers align so a listed number can be copied directly),
+    plus the ignored-legacy hint when a flat value was ignored."""
+    if (rest or "").strip():
         return "Usage: /dir-whip [allow|remove|list]"
-    try:
-        if not _guard_config_key_present("allowlist"):
-            return "Allowlist: (strict empty allowlist)"
-        cfg = load_guard_config()
-        raw = cfg.get("allowlist") or []
-        parsed = parse_allowlist(raw)
-        files = sorted(parsed.get("files") or [])
-        prefixes = sorted(parsed.get("prefixes") or [])
-        if not files and not prefixes:
-            return "Allowlist: Files: (none)  Prefixes: (none)"
-        files_str = ", ".join(files) if files else "(none)"
-        prefixes_str = ", ".join(prefixes) if prefixes else "(none)"
-        # Also show raw tagged list for clarity? Keep simple Files/Prefixes
-        return "Allowlist: Files: %s  Prefixes: %s" % (files_str, prefixes_str)
-    except Exception as exc:
-        return "[dir-whip] command failed: %s" % exc
+    state_map, legacy = _load_allowlist_state()
+    out = _render_two_sections(state_map["files"], state_map["dirs"])
+    if legacy:
+        out += "\n[!] ignored legacy entries: %d -- re-add via /dir-whip allow" % legacy
+    return out
 
 
 def _dir_whip_cmd(raw_args):
