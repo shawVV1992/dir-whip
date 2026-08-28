@@ -168,11 +168,12 @@ commands:
 > deletion cannot clear it. Sanctioned ways out: call `dir_whip_settle`
 > (moves the file into `.hermes/audit-quarantine/`), move the file into a
 > Session Directory, register it in `allowlist` (`files` / `dirs`
-> entries), authorize the path via `dir_whip_allow_path`, or
-> remove it out-of-band. The latch itself is session-scoped: once the file
-> no longer sits at the root, writes pass again. Note also that `AGENTS.md`
-> writes are additionally gated by Hermes itself (agent-instruction
-> protection) and need interactive approval regardless of dir-whip's verdict.
+> entries — the user runs `/dir-whip allow <path>`; a runtime exemption
+> does NOT clear a recorded violation), or remove it out-of-band. The latch
+> itself is session-scoped: once the file no longer sits at the root,
+> writes pass again. Note also that `AGENTS.md` writes are additionally
+> gated by Hermes itself (agent-instruction protection) and need
+> interactive approval regardless of dir-whip's verdict.
 
 ### Boundaries
 
@@ -229,12 +230,17 @@ Subcommands `allow|remove|list` manage the allowlist via `config_writer`
 
 ### Agent Tools
 
-`dir_whip_allow_path(path)` is the plugin's eager tool: call it before writing
-when the user explicitly names a target path in the conversation. The entry
-lasts for the current session only and merges with `allowlist` `dirs`
-entries at Tier 0. A second tool, `dir_whip_settle(paths)`, is registered
-lazily on the first write-audit notice and moves flagged root files into the
-audit quarantine (same-turn self-heal).
+`dir_whip_allow_path(path, confirm=false)` is the plugin's eager tool: call
+it before writing when the user explicitly names a target path in the
+conversation. Two-step user confirmation: the first call returns a briefing
+payload (risk + removal method) without adding; re-call with `confirm=true`
+after the user approves. The entry is prospective-only — future writes pass
+the guard, but it never clears a recorded violation — lasts for the current
+session only, and merges with `allowlist` `dirs` entries at Tier 0.
+Subagent calls and the Working Directory root itself are rejected. A second
+tool, `dir_whip_settle(paths)`, is registered lazily on the first
+write-audit notice and moves flagged root files into the audit quarantine
+(same-turn self-heal).
 
 ## See It In Action
 

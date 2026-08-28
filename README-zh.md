@@ -143,8 +143,8 @@ hermes plugins disable dir-whip
 > **闸门须知（真机实测）。** 闩锁期间*所有*写入类调用都会被冻结——包括
 > `rm`，因此会话内删除无法解除闩锁。合规出路：调用 `dir_whip_settle`
 > （把文件移入 `.hermes/audit-quarantine/`）、把文件移入会话目录、登记进
-> `allowlist`（`files` / `dirs` 条目）、经 `dir_whip_allow_path`
-> 授权该路径，或在带外直接移除文件。闩锁本身仅限当前会话：文件一旦不在
+> `allowlist`（`files` / `dirs` 条目——由用户运行 `/dir-whip allow <path>`；
+> 运行时豁免**不清偿**已记录违规），或在带外直接移除文件。闩锁本身仅限当前会话：文件一旦不在
 > 根目录，后续写入即恢复放行。另注意：对 `AGENTS.md` 的写入还会被 Hermes 自身
 > 的 agent 指令保护门额外拦截，需要交互式批准——与 dir-whip 的判定无关。
 
@@ -199,9 +199,12 @@ hermes plugins disable dir-whip
 
 ### Agent 工具
 
-`dir_whip_allow_path(path)` 是插件的常驻工具：当用户在对话中明确指定
-目标路径时，写入前调用它以注册该路径。该记录仅对当前会话有效，并与
-`allowlist` `dirs` 条目在 Tier 0 合并。第二个工具 `dir_whip_settle(paths)`
+`dir_whip_allow_path(path, confirm=false)` 是插件的常驻工具：当用户在对话中明确指定
+目标路径时，写入前调用它以注册该路径。两步用户确认：首调返回风险告知单
+（风险 + 去除方法）且不添加；用户批准后带 `confirm=true` 重调。该记录仅
+**前瞻生效**——未来写入放行，但**不清偿**已记录违规；仅对当前会话有效，并与
+`allowlist` `dirs` 条目在 Tier 0 合并。子代理调用与工作区根目录自身被拒绝。
+第二个工具 `dir_whip_settle(paths)`
 在首次写入审计通告时懒注册，把违规的根文件移入审计隔离区（同轮自愈）。
 
 ## 效果演示

@@ -24,9 +24,12 @@ under HERMES_HOME/dir-whip/ at DEBUG level; the /dir-whip report shows
 the exact path.
 
 **Tools**: dir_whip_allow_path — allow a user-specified path for this
-session. dir_whip_settle — lazily registered on the first write-audit
-notice; moves flagged root files into the audit quarantine (same-turn
-self-heal).
+session (two-step user confirmation: the first call returns a briefing
+payload without adding; re-call with confirm=true after the user approves;
+prospective-only — never clears a recorded violation; subagent calls and
+the Working Directory root itself are rejected). dir_whip_settle — lazily
+registered on the first write-audit notice; moves flagged root files into
+the audit quarantine (same-turn self-heal).
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
 (structured allowlist mapping {files, dirs}, working_dir_root override).
