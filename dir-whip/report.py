@@ -1,7 +1,8 @@
-"""The /dir-whip report command surface (spec 5.7, SCR-037, v2.6 B2).
+"""The /dir-whip report command surface (spec 5.7, SCR-037, v2.8 R6).
 
-Renders the merged report (version, State, Working Directory + source,
-Terminal Guard, Allowlist, Health, WARNING, Stats File)
+Renders the merged report (version, State enabled/disabled, Working
+Directory + source, Allowlist block, WARNING, Stats File, Debug Log,
+Health last)
 and registers the slash command. Depends on the config resolution/stats
 surface (report -> config direction, per the plan's dependency graph).
 Extracted from config.py (task 31.8). Allowlist management
@@ -43,6 +44,12 @@ try:
     from .stats import _stats_jsonl_path
 except ImportError:
     from stats import _stats_jsonl_path
+
+# Diagnostic log path (v2.8 R6): single source of truth from logsetup.
+try:
+    from . import logsetup
+except ImportError:
+    import logsetup  # type: ignore
 
 # Unified allowlist core (v2.7 R9 structured mapping)
 try:
@@ -107,57 +114,6 @@ def _resolution_source(ctx):
     return "fail-open"
 
 
-def _guard_config_path():
-    """Profile-aware dir-whip-config.yaml path for key-presence checks.
-
-    Mirrors config._get_guard_config_path / stats._stats_jsonl_path pattern
-    so report, writer and config agree on the file location.
-    """
-    try:
-        from .config import _get_guard_config_path as _cfg_path
-        return _cfg_path()
-    except Exception:
-        pass
-    try:
-        # Fallback: profile-aware via state if config helper unavailable
-        from .paths import _profile_home
-        home = _get_hermes_home()
-        profile = None
-        try:
-            if getattr(state.session, "session_profile", None):
-                profile = state.session.session_profile
-        except Exception:
-            pass
-        if not profile:
-            try:
-                ctx = _get_cmd_ctx()
-                if ctx and getattr(ctx, "profile_name", None):
-                    profile = ctx.profile_name
-            except Exception:
-                pass
-        if profile:
-            try:
-                home = _profile_home(home, profile)
-            except Exception:
-                pass
-        return Path(home) / "dir-whip" / "dir-whip-config.yaml"
-    except Exception:
-        return _get_hermes_home() / "dir-whip" / "dir-whip-config.yaml"
-
-
-def _guard_config_key_present(key):
-    """True when the key appears in dir-whip-config.yaml (raw line scan)."""
-    try:
-        path = _guard_config_path()
-        if not path.is_file():
-            return False
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        return re.search(r"^\s*%s\s*:" % re.escape(key), text, re.MULTILINE) is not None
-    except Exception:
-        return False
-
-
 def _stats_writable():
     """Check stats.jsonl writability (Health). Returns (ok, error)."""
     path = _stats_jsonl_path()
@@ -208,13 +164,14 @@ def _plugin_version(path=None):
 
 
 def _dir_whip_report():
-    """Render the merged /dir-whip report (SCR-029 Plan A; spec 5.7 v2.6 B2).
+    """Render the merged /dir-whip report (spec 5.7 v2.8 R6).
 
-    Fixed field order: version, State, Working Directory + source,
-    Terminal Guard, Allowlist, Health (+ one
-    line per problem), WARNING (anomaly-only), Stats File path. A missing
-    dir-whip-config.yaml is the design default, NOT a Health problem.
-    Never raises.
+    Fixed field order: version, State (enabled/disabled), Working
+    Directory + source, Allowlist (multi-line block; strict-empty keeps
+    the single line), WARNING (anomaly-only), Stats File path, Debug Log
+    path, Health (LAST; single Good when clean, else a brief issue
+    list). A missing dir-whip-config.yaml is the design default, NOT a
+    Health problem. Never raises.
     """
     try:
         ctx = _get_cmd_ctx()
@@ -225,8 +182,8 @@ def _dir_whip_report():
         # Line 1: version (plugin.yaml, unknown fallback).
         lines.append("[dir-whip] v%s" % _plugin_version())
 
-        # Line 2: state.
-        lines.append("State: ACTIVE" if root else "State: FAIL-OPEN")
+        # Line 2: state (v2.8: ACTIVE/FAIL-OPEN -> enabled/disabled).
+        lines.append("State: enabled" if root else "State: disabled")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
         if root:
@@ -236,50 +193,28 @@ def _dir_whip_report():
         else:
             lines.append("Working Directory: (unresolved)")
 
-        # Line 4: terminal guard.
-        lines.append(
-            "Terminal Guard: %s"
-            % ("enabled" if cfg.get("terminal_guard", True) else "disabled")
-        )
-
-        # Line 5: allowlist (structured mapping v2.7 R9).
-        # Display: strict empty hint when key missing, otherwise Files/Dirs;
-        # an ignored legacy flat value appends the clean-break hint.
-        if not _guard_config_key_present("allowlist"):
+        # Line 4 (v2.8): allowlist multi-line block -- header + one line
+        # each for Files/Dirs (indented 2 spaces); with NO entries at
+        # all (no files/dirs/legacy) the strict-empty single line is
+        # kept; an ignored legacy flat value adds an indented block line.
+        state_map, legacy_n = _load_allowlist_state()
+        if not state_map["files"] and not state_map["dirs"] and not legacy_n:
             lines.append("Allowlist: (strict empty allowlist)")
         else:
-            state_map, legacy_n = _load_allowlist_state()
-            files_str = ", ".join(state_map["files"]) if state_map["files"] else "(none)"
+            files_str = (
+                ", ".join(state_map["files"]) if state_map["files"] else "(none)"
+            )
             dirs_str = ", ".join(state_map["dirs"]) if state_map["dirs"] else "(none)"
-            allow_line = "Allowlist: Files: %s  Dirs: %s" % (files_str, dirs_str)
+            lines.append("Allowlist:")
+            lines.append("  Files: %s" % files_str)
+            lines.append("  Dirs: %s" % dirs_str)
             if legacy_n:
-                allow_line += "  | ignored legacy entries: %d" % legacy_n
-            lines.append(allow_line)
+                lines.append(
+                    "  [!] ignored legacy entries: %d -- re-add via /dir-whip allow"
+                    % legacy_n
+                )
 
-        # Line 5b (v2.7 R6): session-start discipline-block outcome (5.4).
-        # reminder_status is set by on_start (injected | skipped-outside |
-        # skipped-child | unavailable); None (on_start not yet run in this
-        # process) renders a neutral placeholder -- never one of the four
-        # spec states.
-        reminder = getattr(state.session, "reminder_status", None)
-        lines.append(
-            "Reminder: %s" % (reminder if reminder else "(not recorded)")
-        )
-
-        # Line 6: health (one line per problem when PROBLEM).
-        problems = []
-        if not root:
-            problems.append("resolution: FAIL-OPEN")
-        writable, error = _stats_writable()
-        if not writable:
-            problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
-        if problems:
-            lines.append("Health: PROBLEM")
-            lines.extend("- %s" % p for p in problems)
-        else:
-            lines.append("Health: OK")
-
-        # Line 7 (anomaly only): Q6 footgun — explicit override differs
+        # Anomaly-only WARNING: Q6 footgun — explicit override differs
         # from the profile terminal.cwd (doctor logic retained).
         override = cfg.get("working_dir_root")
         if override:
@@ -291,9 +226,37 @@ def _dir_whip_report():
                     "masked by the override" % (override, profile_cwd)
                 )
 
-        # Last line (always): stats.jsonl absolute path (session profile
-        # home, 5.13/SCR-027).
+        # Stats File (always): stats.jsonl absolute path (session profile
+        # home, 5.13/SCR-027), placed before Debug Log.
         lines.append("Stats File: %s" % _stats_jsonl_path())
+
+        # Debug Log (v2.8, second-to-last): absolute path from logsetup
+        # (single source of truth); suffixed (no records yet) when the
+        # file does not exist yet, (unavailable) when log setup failed
+        # (log_handler_installed False wins over a stale file).
+        log_path = logsetup.diagnostic_log_path()
+        if not state.session.log_handler_installed:
+            log_suffix = " (unavailable)"
+        elif not log_path.exists():
+            log_suffix = " (no records yet)"
+        else:
+            log_suffix = ""
+        lines.append("Debug Log: %s%s" % (log_path, log_suffix))
+
+        # Health (v2.8, LAST): single Good when clean; with problems a
+        # brief issue list (one indented line per problem).
+        problems = []
+        if not root:
+            problems.append("resolution: FAIL-OPEN")
+        writable, error = _stats_writable()
+        if not writable:
+            problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
+        if problems:
+            lines.append("Health: %d issue(s)" % len(problems))
+            lines.extend("  - %s" % p for p in problems)
+        else:
+            lines.append("Health: Good")
+
         return "\n".join(lines)
     except Exception as exc:
         return "[dir-whip] report failed: %s" % exc
