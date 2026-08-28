@@ -17,7 +17,11 @@ day-to-day behavior.
 
 **Quick command**:
     /dir-whip   # merged report: version, state, Working Directory +
-                # source, config detail, reminder status, health, stats file
+                # source, config detail, stats file, debug log, health
+
+**Debug log**: v0.6.0 writes a dedicated diagnostic log (dir-whip.log)
+under HERMES_HOME/dir-whip/ at DEBUG level; the /dir-whip report shows
+the exact path.
 
 **Tools**: dir_whip_allow_path — allow a user-specified path for this
 session. dir_whip_settle — lazily registered on the first write-audit
@@ -25,8 +29,7 @@ notice; moves flagged root files into the audit quarantine (same-turn
 self-heal).
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
-(structured allowlist mapping {files, dirs}, working_dir_root override,
-terminal_guard, write_audit, write_audit_entry_cap).
+(structured allowlist mapping {files, dirs}, working_dir_root override).
 
 **Allowlist**: template ships with a strict empty structured allowlist.
 No workspace rules file is allowlisted by default; add entries via slash

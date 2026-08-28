@@ -25,7 +25,7 @@
 ## 核心能力
 
 1. **教罚结合：** skill 教纪律、plugin 强制执行，默认工作区管理纪律有效稳定，文件管理不再混乱。
-2. **插件的双层检测：** 在插件中，前置层拦截根级违规写入并附修正指引；审计层以快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 `pre_verify` 续轮兜底。
+2. **插件的双层检测：** 在插件中，前置层拦截根级违规写入并附修正指引；审计层以快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
 3. **可观测：** 定义 7 类 `dir-whip:*` 事件保存至 stats.jsonl（5 MB 滚动），可观测溯源。
 4. **定时治理：** 针对 cron 任务采用 wakeAgent / [SILENT] 模式，不打断 agent 执行。下次 cron tick 继续治理。
 5. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
@@ -97,7 +97,7 @@ hermes plugins disable dir-whip
 | 层 | 职责 | 形态 |
 |----|------|------|
 | **Skill（教导）** | 纪律参考 | 捆绑的 `workspace-organization` 技能（可选加载）+ 一条条件化会话开始提醒（≤280 字符，仅当 agent CWD 位于工作目录内且无活跃项目覆盖时注入） |
-| **Plugin（强制）** | 拦截违规落地前 | 9 个钩子：`pre_tool_call` 拦截 + 写入审计 + 会话/子代理观察 + `pre_verify` 续轮兜底 |
+| **Plugin（强制）** | 拦截违规落地前 | 9 个钩子：`pre_tool_call` 拦截 + 写入审计 + 会话/子代理观察 + dir-whip 续推兜底 |
 | **Scripts（工具）** | Agent 和 cron 的 CLI 辅助 | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | 唯一配置源 | `dir-whip-config.yaml` |
 | **Observability** | 记录与报告 | stats.jsonl + `dir-whip:*` 事件 + `/dir-whip` |

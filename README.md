@@ -33,7 +33,7 @@ directories are not subject to enforcement.
 2. **Plugin dual-layer detection.** The front layer intercepts root-level
    violations with a fix-it message; the audit layer catches what slips
    past via snapshot diff — with same-turn self-heal (`dir_whip_settle`)
-   and a `pre_verify` continuation fallback.
+   and a dir-whip continuation nudge.
 3. **Observable.** 7 `dir-whip:*` events recorded to stats.jsonl
    (5 MB rollover) for audit and diagnostics.
 4. **Scheduled governance.** wakeAgent / [SILENT] pattern for cron tasks
@@ -110,7 +110,7 @@ hermes plugins disable dir-whip
 | Layer | Role | Form |
 |-------|------|------|
 | **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it) |
-| **Plugin (enforces)** | Blocks violations before they land | 9 hooks: `pre_tool_call` interception + write audit + session/subagent observation + `pre_verify` continuation fallback |
+| **Plugin (enforces)** | Blocks violations before they land | 9 hooks: `pre_tool_call` interception + write audit + session/subagent observation + dir-whip continuation nudge |
 | **Scripts (tools)** | CLI helpers for agents and cron | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
 | **Config** | Sole configuration source | `dir-whip-config.yaml` |
 | **Observability** | Records and reports | stats.jsonl + `dir-whip:*` events + `/dir-whip` |
