@@ -621,6 +621,29 @@ def _record_settle_stats(working_dir_root):
         logger.debug("dir-whip: settle stats error (ignored): %s", exc)
 
 
+def _record_settle_rejected(reason, is_subagent=False):
+    """Record one settle rejection/failure (SCR-040 R4, 5.13 v2.8): stats
+    row + WARNING log only, NO bus event (the 5.14 emit surface stays at
+    7 events).
+
+    reason is a category code -- subagent-rejected / invalid-paths /
+    not-in-pending / move-failed; raw paths are never carried (5.13
+    privacy). The block outcome cannot ride events.emit (it would fan
+    out a generic blocked bus event), so it uses the stats channel
+    directly. Fail-open: never raises.
+    """
+    try:
+        _stats_record(
+            "block", "settle", "write-audit-settle-rejected",
+            target=None, reason=reason, is_subagent=is_subagent,
+        )
+        logger.warning("dir-whip: settle rejected (%s)", reason)
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: settle-rejected stats error (ignored): %s", exc
+        )
+
+
 def audit_settle_paths(session_id, paths):
     """dir_whip_settle core (5.18 R4): move pending root writes into the
     audit quarantine, settling the L3 latch.
@@ -641,16 +664,21 @@ def audit_settle_paths(session_id, paths):
     """
     try:
         if session_id and _is_child_session(session_id):
+            _record_settle_rejected("subagent-rejected", is_subagent=True)
             return {"error": "subagent sessions cannot settle; report the "
                              "pending path(s) to the parent agent"}
         if isinstance(paths, str):
             paths = [paths]
         if not isinstance(paths, (list, tuple)) or not paths:
+            _record_settle_rejected("invalid-paths")
             return {"error": "paths must be a non-empty list"}
         working_dir_root, _allowlist = get_cached_config(
             state.session.registered_ctx
         )
         if not working_dir_root:
+            # Operation-level failure: the settle cannot proceed without
+            # a resolved root (same failure class as a failed move).
+            _record_settle_rejected("move-failed")
             return {"error": "working_dir_root unresolved; cannot settle"}
         pending = audit_pending_snapshot(session_id)
         # Validate EVERY path against the pending set BEFORE touching the
@@ -658,12 +686,14 @@ def audit_settle_paths(session_id, paths):
         keys = []
         for path in paths:
             if not isinstance(path, str) or not path.strip():
+                _record_settle_rejected("invalid-paths")
                 return {"error": "invalid path entry: %r" % (path,)}
             candidate = path if os.path.isabs(path) else os.path.join(
                 working_dir_root, path
             )
             key = _audit_norm_path(candidate)
             if key not in pending:
+                _record_settle_rejected("not-in-pending")
                 return {"error": "path is not in the pending violation "
                                  "set: %s" % str(path).replace("\\", "/")}
             keys.append(key)
@@ -691,6 +721,7 @@ def audit_settle_paths(session_id, paths):
         _record_settle_stats(working_dir_root)
         return {"settled": settled}
     except Exception as exc:
+        _record_settle_rejected("move-failed")
         logger.debug("dir-whip: settle_paths error (fail-open): %s", exc)
         return {"error": "settle failed: %s" % exc}
 
@@ -730,6 +761,17 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
             if count >= PRE_VERIFY_NUDGE_CAP:
                 return None
             state.audit.nudge_counts[session_id] = count + 1
+        # SCR-040 R4 (5.13 v2.8): observability row for the actual nudge
+        # fire -- allow/verify, target=None (the paths are already carried
+        # by the violation events; privacy does not repeat them), reason
+        # carries the 1-based session-cumulative attempt ordinal (the cap
+        # counter value AFTER increment). Allow outcome -> no bus fanout
+        # (the 5.14 emit surface stays at 7).
+        emit(
+            "allow", "verify", "pre-verify-nudge", None,
+            "continuation nudge issued (attempt %d)" % (count + 1),
+            session_id, False,
+        )
         display = [str(path).replace("\\", "/") for path in unresolved]
         return {
             "action": "continue",

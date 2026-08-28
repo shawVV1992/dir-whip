@@ -182,8 +182,11 @@ def register(ctx):
         ctx.register_hook("subagent_start", on_subagent_start)
         ctx.register_hook("subagent_stop", on_subagent_stop)
         ctx.register_hook("transform_tool_result", on_transform_tool_result)
-        # 5.18 R5: pre_verify continuation fallback (nudge budget is the
-        # host's max_verify_nudges; the hook adds none).
+        # 5.18 R5 / v2.8 R2: pre_verify continuation fallback. The nudge
+        # budget is the plugin-side SESSION-CUMULATIVE cap=3
+        # (audit.PRE_VERIFY_NUDGE_CAP, counter reset at session start);
+        # the host's per-turn max_verify_nudges budget remains the outer
+        # bound.
         ctx.register_hook("pre_verify", on_pre_verify)
         if hasattr(ctx, "register_tool"):
             try:
@@ -228,6 +231,21 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
         return None
 
 
+def _record_session_reminder(session_id, status):
+    """One session-reminder stats row at a terminal reminder state
+    (SCR-040 R4, 5.13 v2.8): allow/session, reason = the state literal
+    (injected | skipped-outside | skipped-child | skipped-project |
+    unavailable -- all five states observable here; this is the five-state
+    outlet after the v2.8 report Reminder line's removal), target=None.
+    One row per session start; child sessions record their own
+    skipped-child state. Allow outcome -> no bus fanout (the 5.14 emit
+    surface stays at 7). Fail-open: events.emit never raises."""
+    events.emit(
+        "allow", "session", "session-reminder", None,
+        status, session_id, sessions._is_child_session(session_id),
+    )
+
+
 def on_start(session_id, model=None, platform=None, **kwargs):
     """on_session_start hook adapter (5.4): top-level sessions only.
 
@@ -239,6 +257,9 @@ def on_start(session_id, model=None, platform=None, **kwargs):
     try:
         if sessions._is_child_session(session_id):
             state.session.reminder_status = "skipped-child"
+            # 5.13 v2.8: the five-state stats outlet covers skipped-child
+            # too (the report Reminder line is removed in v2.8).
+            _record_session_reminder(session_id, "skipped-child")
             return
         # 5.18: top-level session start clears the audit state (pending
         # violations, leftover pre snapshots, cap warning); child sessions
@@ -289,6 +310,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
                         cwd, folders
                     ):
                         state.session.reminder_status = "skipped-project"
+                        _record_session_reminder(session_id, "skipped-project")
                         logger.debug(
                             "dir-whip: session-start reminder skipped "
                             "(active project %s contains the agent CWD)",
@@ -298,6 +320,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         working_dir_root, _ = verdict._resolved_config()
         if not verdict.discipline_applies(cwd, working_dir_root):
             state.session.reminder_status = "skipped-outside"
+            _record_session_reminder(session_id, "skipped-outside")
             logger.debug(
                 "dir-whip: session-start reminder skipped "
                 "(agent CWD outside the Working Directory)"
@@ -307,14 +330,17 @@ def on_start(session_id, model=None, platform=None, **kwargs):
             injected = ctx.inject_message(verdict.REMINDER_MESSAGE)
             if injected:
                 state.session.reminder_status = "injected"
+                _record_session_reminder(session_id, "injected")
             else:
                 state.session.reminder_status = "unavailable"
+                _record_session_reminder(session_id, "unavailable")
                 logger.debug(
                     "dir-whip: session-start reminder skipped "
                     "(inject_message unavailable)"
                 )
         else:
             state.session.reminder_status = "unavailable"
+            _record_session_reminder(session_id, "unavailable")
             logger.debug(
                 "dir-whip: session-start reminder skipped "
                 "(inject_message unavailable)"
@@ -464,7 +490,8 @@ def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
 
 
 def _allow_path_handler(args, **kwargs):
-    """Registered allow_path handler: config tool + allowlisted event (5.14)."""
+    """Registered allow_path handler: config tool + allowlisted event (5.14)
+    + the symmetric runtime-allowlist-add stats row (SCR-040 R4, 5.13)."""
     try:
         path = args.get("path") if isinstance(args, dict) else args
         result = config.dir_whip_allow_path(args, **kwargs)
@@ -475,6 +502,16 @@ def _allow_path_handler(args, **kwargs):
                 "rule_key": "runtime-allowlist",
                 "target": relativize_target(path, working_dir_root),
             })
+            # SCR-040 R4 (5.13 v2.8): symmetric stats row -- allow/
+            # allow-path; the emit channel relativizes the target (same
+            # privacy shape as the bus event above). Allow outcome -> no
+            # extra bus fanout (the 5.14 emit surface stays at 7).
+            session_id = kwargs.get("session_id")
+            events.emit(
+                "allow", "allow-path", "runtime-allowlist-add", path,
+                "runtime allowlist entry added", session_id,
+                sessions._is_child_session(session_id),
+            )
         return result
     except Exception as exc:
         logger.debug("dir-whip: allow_path handler error (fail-open): %s", exc)
