@@ -1,9 +1,10 @@
 # dir-whip — Complete Specification
 
-- Version: 2.7
-- Date: 2026-08-26 (SCR-039 amendment v2.7 — prompt-channel rework + same-turn self-heal + structured allowlist; previous freeze v2.6 2026-08-25)
-- Status: FROZEN (v2.7, re-frozen 2026-08-27 at implementation-complete state; activated 2026-08-26) — SCR-039 amendment v2.7 (feedback/10, user decisions 2026-08-26): (1) prompt-channel rework — the Always-on Discipline Prompt (register_system_prompt_section, per-round billing) is REMOVED and replaced by a conditional session-start discipline block (5.4, <=280 chars lock); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered) + L1 notice upgrade close the violation loop within the user turn; pre_verify continuation fallback added; (3) structured allowlist (BREAKING v2.7) — `allowlist` becomes a mapping `{files: [...], dirs: [...]}` of paths RELATIVE to working_dir_root (dirs recursive, root itself and outside-root entries rejected); flat tagged list (`file:` / `prefix:` strings) removed clean-break, legacy ignored fail-closed; `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation. R7 project-mode injection exemption (`skipped-project`, 5.4/5.7) landed with implementation (39.R4.1, 2026-08-27). Historical:
-  authoritative v0.3.0 baseline
+- Version: 2.8
+- Date: 2026-08-27 (SCR-040 amendment v2.8 — continuation-nudge rework + observability pack + config/report surface rework; previous freeze v2.7 2026-08-27)
+- Status: FROZEN (v2.8, implemented and re-frozen 2026-08-28; SCR-040 implementation batch complete) — SCR-040 amendment v2.8 (scr-040-plan.md / feedback/11, user decisions 2026-08-27): (1) continuation-nudge rework — nudge message settle-first (shares the L1 remediation sentence helper, exact `dir_whip_settle(paths=[...])` call form, allow_path never mentioned) + plugin-side session-cumulative cap=3 (`PRE_VERIFY_NUDGE_CAP` hardcoded, overturning the v2.7 "hook adds no throttling" clause); (2) observability pack — four new stats rule_keys (`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`; emits stay at 7) + new module logsetup.py attaching a dedicated diagnostic log dir-whip.log (profile-aware, DEBUG-full, CLH→stdlib→console three-tier degradation, 5MiB×3+delay+utf-8, absolute-path policy); (3) report surface rework — State values become enabled/disabled, Terminal Guard and Reminder lines removed, Allowlist rendered as a multi-line block (header line + one line each for Files/Dirs, valued sections indented 2 spaces, strict-empty keeps the single line), Health moved last with Good/brief-problem-list two states, a Debug Log line added near the end; (4) three-key de-configuration (BREAKING) — `terminal_guard` / `write_audit` / `write_audit_entry_cap` stop being user config (internal constants: interception/audit always on, cap=2000), leftover keys completely ignored; shipped template comments corrected to the v2.7 structured tutorial; (5) placement-wording de-ambiguation (R9, folded in 2026-08-27 after a realhost misread incident) — block message (5.3) and session-start reminder (3.7/5.4) arrow shorthand replaced with explicit `Outputs/<filename>` / `.tmp/<filename>` sentences, create_session_dir.py stdout gains a placement hint line (4.1 output contract). Terminology unified: external-facing 「dir-whip 续推兜底」/"dir-whip continuation nudge"; the host hook identifier `pre_verify` survives only in implementation contexts. session_dir_pattern judged worth developing, registered in feedback/11 for a separate SCR. Historical: SCR-039 v2.7 (activated 2026-08-26: prompt-channel rework + same-turn self-heal + structured allowlist; re-frozen 2026-08-27 at implementation-complete state). Earlier activations: 2026-08-22 — SCR-033 terminal false-positive fix (v2.1),
+  SCR-034 root write audit feature (v2.2), SCR-034 acceptance clauses 7.6 (v2.3), all
+  re-frozen after completion. Changes go through the SCR process again (spec-changes.md).
   (SCR-024 root), superseding the v1.4 baseline. v0.2.0 implemented and
   verified 2026-08-14 (acceptance matrix all Done, testing-standards.md;
   live phases 27.1-27.6 with WSL POSIX coverage; SCR-025 registered — native
@@ -328,10 +329,10 @@ round) is REMOVED in v2.7. Teaching is carried by two channels instead:
 1. **Session-start discipline block** — injected ONCE per top-level session via
    `ctx.inject_message()`, CONDITIONALLY (only when the session lives inside
    the Working Directory; mechanics and fail-open matrix in 5.4). Locked text
-   (verbatim; `len <= 280` chars, ~70 tokens, test-locked by character count):
+   (verbatim; `len <= 280` chars, ~78 tokens, test-locked by character count):
 
 ```
-[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (write the deliverable to Outputs/<filename>, or scratch to .tmp/<filename>). Root forbidden. User path -> dir_whip_allow_path first.
 ```
 
    Elements dropped vs the old prompt, each with a deterministic downstream
@@ -340,7 +341,8 @@ round) is REMOVED in v2.7. Teaching is carried by two channels instead:
    (block message), `[Reason]/[Next]` template pointer (block message carries
    the full template), timestamp format (create_session_dir.py enforces it).
 2. **Block-message completion** — the guard's block message now carries the
-   placement-intent rule (deliverable -> Outputs/ else .tmp/) and the
+   placement-intent rule (deliverable to Outputs/<filename>, scratch to
+   .tmp/<filename>) and the
    `dir_whip_allow_path` hint (5.3), so every interception is a complete
    teaching point.
 
@@ -422,6 +424,13 @@ Exit codes:
   2 = target already exists OR --workspace does not equal the resolved
       Working Directory
 ```
+
+Output (stdout, R9): exactly two lines on success (exit 0) and on the
+already-exists branch of exit 2 — line 1 is the absolute session-dir path
+(forward slashes), line 2 is the placement hint:
+`Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>.`
+All other failure paths (exit 1; exit-2 boundary mismatch) stay silent on
+stdout (errors go to stderr).
 
 ### 4.2 audit_workspace.py
 
@@ -524,8 +533,8 @@ The `--workspace` flag remains unchanged. Terminology decision G still
 governs display-layer terms. Intentional exclusions from the rename (do
 not sweep): `stats.jsonl`, the `config.py` module name, the
 `workspace-organization` skill name, guard-judgment identifiers (e.g.
-`terminal_guard`, `load_guard_config`), and historical surfaces (archive,
-feedback, change registers). Forward note (SCR-035, v0.4.0): the
+`load_guard_config`), and historical surfaces (archive, feedback, change
+registers). Forward note (SCR-035, v0.4.0): the
 `dir_whip.py` module named here dissolves into the 11-module layout of
 section 5.1; `config.py` persists as a module name.
 
@@ -699,7 +708,7 @@ project-dir hint switched to relative `dirs` syntax):
     "Fix: Create a session directory first:\n"
     "  python <scripts_path>/create_session_dir.py <task_name> "
     "--workspace <working_dir_root>\n"
-    "Then write there: deliverable -> Outputs/, scratch -> .tmp/.\n"
+    "Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).\n"
     "User-specified path -> dir_whip_allow_path first.\n"
     "If this is a project directory, add it to the allowlist dirs in "
     "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
@@ -729,7 +738,7 @@ this session's profile (SCR-027), then CONDITIONALLY inject the discipline
 block via `ctx.inject_message()`:
 
 ```
-[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (write the deliverable to Outputs/<filename>, or scratch to .tmp/<filename>). Root forbidden. User path -> dir_whip_allow_path first.
 ```
 
 **Conditional injection (v2.7).** The block is injected only when the session
@@ -846,15 +855,17 @@ allowlist:
 # Optional override: working_dir_root (authoritative when set; fallback =
 # current profile's terminal.cwd)
 # working_dir_root: E:/HermesWorkspace/learn
-
-# Optional: enable/disable terminal write interception (default: enabled)
-# terminal_guard: enabled
-
-# Optional: enable/disable the root write audit (5.18; default: enabled).
-# Skipped when the root entry count exceeds write_audit_entry_cap.
-# write_audit: true
-# write_audit_entry_cap: 2000
 ```
+
+**v2.8 BREAKING — three-key de-configuration.** `terminal_guard` /
+`write_audit` / `write_audit_entry_cap` are no longer user configuration keys
+(supported through v2.7): the parser stops reading them and behavior becomes
+internally constant — terminal write interception always on (5.10), the root
+write audit always on (5.18), the audit entry guardrail an internal constant
+of 2000. The `write_audit_autofix` reservation key (L4 auto-move) is removed
+too (5.18 L4 becomes a keyless reserved direction). Leftover occurrences of
+these keys in runtime configs are **completely ignored** (no hint line, no
+log entry). Upgrade notes in deployment.md.
 
 Matching (v2.7 structured mapping): `files` entries are basenames allowed at
 the Working Directory root (exact basename match, case-insensitive on Windows).
@@ -1020,50 +1031,63 @@ Registered at `register()`:
 
 ```
 [dir-whip] v<version>
-State: ACTIVE
+State: enabled|disabled
 Working Directory: <value>  (source: <source>)
-Terminal Guard: enabled|disabled
-Allowlist: Files: (none)|<comma-joined file basenames>  Dirs: (none)|<comma-joined relative dir paths>  | (strict empty allowlist) [| ignored legacy entries: N]
-Reminder: injected|skipped-outside|skipped-child|skipped-project|unavailable
-Health: OK|PROBLEM
-- resolution: FAIL-OPEN              # one line per problem, only when PROBLEM
-- stats.jsonl: NOT WRITABLE (<err>)
-WARNING: ...                         # only when override != terminal.cwd
+Allowlist:                              # multi-line block (when any entry exists, see below)
+  Files: (none)|<comma-joined file basenames>
+  Dirs: (none)|<comma-joined relative dir paths>
+  [!] ignored legacy entries: N -- re-add via /dir-whip allow   # legacy values only
+WARNING: ...                            # only when override != terminal.cwd
 Stats File: <absolute stats.jsonl path>
+Debug Log: <absolute dir-whip.log path> [(no records yet)|(unavailable)]
+Health: Good                            # last line; single Good when clean
+# With problems, Health becomes a brief problem list:
+# Health: N issue(s)
+#   - resolution: FAIL-OPEN
+#   - stats.jsonl: NOT WRITABLE (<err>)
 ```
 
-Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2; v2.7):
+Field rules (SCR-029 Plan A; labels redesigned per SCR-031 / B2; v2.8 rework):
 - Line 1 `[dir-whip] v<version>`: version read from the package-root
   plugin.yaml (the single version source; simple text parse, no PyYAML).
   Any failure (missing/unreadable file, no match) -> `unknown`; never
   raises.
-- Line 2 `State`: `ACTIVE`, or `FAIL-OPEN` when the resolution chain (5.5)
-  returned no root (fail-open semantics unchanged, 5.12).
+- Line 2 `State`: `enabled` (working_dir_root resolved), or `disabled` when
+  the resolution chain (5.5) returned no root (fail-open semantics
+  unchanged, 5.12). v2.8 renames the values from ACTIVE/FAIL-OPEN to
+  enabled/disabled.
 - Line 3 `Working Directory`: the resolved value, two spaces, then the
   resolving source — `guard-config` (dir-whip-config.yaml override) /
   `profile-config` (profile terminal.cwd) / `fail-open`, matching the 5.5
   chain steps; no value -> `Working Directory: (unresolved)`. Display term
   is "Working Directory" (G1); code identifier working_dir_root unchanged.
-- Lines 4-5 (display labels):
-  `Terminal Guard` (= terminal_guard, default enabled);
-  `Allowlist` (= allowlist, structured mapping v2.7): `Files: (none)` or
-  comma-joined file basenames, `Dirs: (none)` or comma-joined relative dir
-  paths; `Allowlist: (strict empty allowlist)` when the `allowlist` key is
-  MISSING from dir-whip-config.yaml (fail-closed hint), or
-  `Files: (none)  Dirs: (none)` when present but empty; an ignored legacy
-  flat value appends `ignored legacy entries: N`. Old keys
-  `exempt_paths` / `allowed_root_files` are not displayed (removed, B2).
-  `Reminder` (= session-start discipline-block outcome, 5.4:
-  `injected` | `skipped-outside` | `skipped-child` | `skipped-project` |
-  `unavailable`).
-- Line 6 `Health`: `OK`, or `PROBLEM` with one line per problem:
+- **Allowlist multi-line block (v2.8)**: the former single line
+  `Allowlist: Files: X  Dirs: Y` becomes a block — an `Allowlist:` header
+  line plus one line each for `Files:` / `Dirs:`, valued sections indented
+  2 spaces; with NO entries at all (no files/dirs/legacy) the existing
+  single line `Allowlist: (strict empty allowlist)` is kept (also when the
+  key is missing, fail-closed hint); an ignored legacy flat value adds an
+  indented block line `[!] ignored legacy entries: N -- re-add via
+  /dir-whip allow`. Old keys `exempt_paths` / `allowed_root_files` are not
+  displayed (removed, B2).
+- **Removed lines (v2.8)**: `Terminal Guard:` (meaningless after the
+  three-key de-configuration, R7) and `Reminder:` (five-state observability
+  moves to the 5.13 `session-reminder` stats record; the internal
+  `state.session.reminder_status` field stays for the stats reason).
+- **Debug Log line (v2.8, new)**: second-to-last line (before Health); the
+  absolute path of the dedicated diagnostic log dir-whip.log (5.13,
+  profile-aware); suffixed `(no records yet)` when the file does not exist
+  yet, `(unavailable)` when log setup failed.
+- **Health moved last (v2.8)**: a single `Health: Good` line when clean
+  (value vocabulary changes from OK to Good); with problems it becomes a
+  brief problem list (`Health: N issue(s)` + indented problem lines):
   `- resolution: FAIL-OPEN` and/or `- stats.jsonl: NOT WRITABLE (<err>)`.
   A missing dir-whip-config.yaml is the design default, NOT a problem.
 - Anomaly-only WARNING line: emitted when an explicit `working_dir_root`
   override differs from the current profile's `terminal.cwd` (the Q6
   footgun: the desktop-settings edit is masked by the override).
-- Last line (always) `Stats File`: the absolute stats.jsonl path of the
-  session profile's home (5.13, SCR-027).
+- `Stats File`: the absolute stats.jsonl path of the session profile's home
+  (5.13, SCR-027), placed before Debug Log.
 
 Removed earlier (memo gone, B4): `/dir-whip workspace_status` and
 `/dir-whip workspace_update` commands; tools
@@ -1141,8 +1165,8 @@ must not be drive-inherited into a fabricated path such as `E:\dev\null`.)
 Relative targets resolve against `args["workdir"]`, falling back to
 `get_session_cwd(task_id)`, then `working_dir_root` if the session CWD is
 unrecorded (never `os.getcwd()`). Multi-target commands use strictest-wins
-precedence (any block -> block; else allow). Controlled by `terminal_guard`
-config (5.6).
+precedence (any block -> block; else allow). Always on (as of v2.8 the
+`terminal_guard` config key is removed; no switch).
 
 rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 `terminal-cp-mv`, `terminal-write-uncertain`.
@@ -1212,6 +1236,20 @@ rule_key, split by `is_subagent`:
 - `transform_tool_result` / write-audit observation (5.18): records root
   write audit violations and latch blocks (rule_key `write-audit-violation`
   / `write-audit-gate-block`); the L1 notice itself is NOT an event.
+- Continuation-nudge observation (5.18, v2.8): records nudge firings
+  (rule_key `pre-verify-nudge`, reason carries the attempt ordinal;
+  target=None — paths are already carried by the violation events).
+- `allow_path` tool-call observation (v2.8): records runtime exemption adds
+  (rule_key `runtime-allowlist-add`, target relativized; symmetric with the
+  `dir-whip:allowlisted` bus event).
+- Session-start observation (5.4, v2.8): records the discipline-block
+  injection five states (rule_key `session-reminder`, reason = the state
+  literal injected | skipped-outside | skipped-child | skipped-project |
+  unavailable; one line per top-level session).
+- Settle-rejection observation (5.18 R4, v2.8): records settlement
+  rejection/failure categories (rule_key `write-audit-settle-rejected`,
+  reason = category code subagent-rejected / invalid-paths /
+  not-in-pending / move-failed, no raw paths).
 
 **Persistence (D3).** Append one JSON line per event to
 `HERMES_HOME/dir-whip/stats.jsonl`:
@@ -1227,6 +1265,24 @@ rule_key, split by `is_subagent`:
 The `/dir-whip` command does not display statistics (SCR-029); the recording
 backend is unchanged — totals are inspectable via the Stats File path shown
 by `/dir-whip`.
+
+**Diagnostic log file (v2.8 R5).** At register() the plugin attaches a
+dedicated DEBUG-full log `<HERMES_HOME>/dir-whip/dir-whip.log`
+(profile-aware placement mirroring the stats path pattern) via the new
+logsetup.py module: it captures every `dir-whip` logger line — including the
+DEBUG breadcrumbs below the host agent.log INFO+ threshold (allow-class
+verdicts, fail-open handling paths, etc.). Three-tier fail-open degradation:
+`concurrent_log_handler.ConcurrentRotatingFileHandler` (cross-process-safe
+rotation, installed in the host venv; a third-party import does not violate
+ADR-0007) → stdlib `RotatingFileHandler` → console only. Parameters:
+maxBytes=5 MiB, backupCount=3, delay=True (file created on first write),
+encoding=utf-8. Privacy policy: absolute paths ARE allowed (a local
+diagnostic file; diagnostic value first; no secret-class content in dir-whip
+messages). Known limitations: with one desktop process serving multiple
+profiles the log lands in the registering profile's directory and lines from
+other profiles interleave (verdict JSONs carry session_id for attribution);
+the stdlib fallback path has the known Windows multi-process rotation
+WinError 32 risk.
 
 ### 5.14 Event Bus Events (D5)
 
@@ -1361,10 +1417,13 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   latched, EVERY write-class call is blocked — including a remediation
   `mv`/`rm` — which is why agent-side self-heal goes through the
   `dir_whip_settle` tool (below), not through terminal commands.
-- **L4 auto-move**: OPTIONAL, DEFAULT OFF (`write_audit_autofix`, reserved).
-  The plugin moves the offending file into the session's `.tmp/`. Held back
-  because auto-moving conflicts with the "delete = report-only" safety
-  principle and can break the agent's later references to the path.
+- **L4 auto-move**: reserved direction, NO config key (as of v2.8 the
+  `write_audit_autofix` reservation key is removed — an extension of the
+  de-configuration ruling; any future activation goes through its own SCR).
+  The envisioned behavior moves the offending file into the session's
+  `.tmp/`. Held back because auto-moving conflicts with the "delete =
+  report-only" safety principle and can break the agent's later references
+  to the path.
 
 **Same-turn self-heal (v2.7, R4/R5).** Goal: the detect -> notify -> settle
 loop completes within the user turn that triggered the violation.
@@ -1392,17 +1451,29 @@ loop completes within the user turn that triggered the violation.
   `"Remediate now: call dir_whip_settle(paths=[...])"` (2026-08-26 ruling —
   the gate blocks remediation mv/rm, so the message must name the tool
   channel; subagent variant stays report-to-parent only).
-- `pre_verify` continuation fallback (R5): the plugin registers Hermes'
-  `pre_verify` hook; when this session has unresolved pending violations AND
-  the host reports file mutations this turn (`changed_paths` non-empty),
-  the hook returns `{"action": "continue", "message": "[dir-whip] N
-  unresolved root writes: <paths>. Call dir_whip_settle or move them into a
-  Session Directory before finishing."}` so the host keeps the turn going;
-  any other return lets the turn finish. Subagent sessions no-op
-  (remediation is the parent's job); throttling relies on the host's
-  verify-nudge budget (`max_verify_nudges()`), the hook adds none.
-  KNOWN LIMIT (accepted): pure-terminal violation turns never reach
-  `pre_verify` (the host's `_turn_file_mutation_paths` only records
+- **Continuation nudge (v2.8 R1/R2 rewrite; host hook identifier `pre_verify`,
+  external-facing term 「dir-whip 续推兜底」/"dir-whip continuation nudge")**:
+  the plugin registers Hermes' `pre_verify` hook; when this session has
+  unresolved pending violations AND the host reports file mutations this turn
+  (`changed_paths` non-empty), the hook returns a continue directive so the
+  host keeps the turn going; any other return lets the turn finish. Subagent
+  sessions no-op (remediation is the parent's job).
+  - **Message (verbatim lock, shares the L1 remediation sentence helper)**:
+    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Finish only after settlement.`
+    Paths are absolute forward-slash form (matching the settle canonical
+    input contract); allow_path is never mentioned (no exemption option
+    offered, no negative call-out).
+  - **Session-cumulative cap (v2.8, overturning the v2.7 "throttling relies
+    on the host budget, the hook adds none" clause)**: plugin-side constant
+    `PRE_VERIFY_NUDGE_CAP = 3` (hardcoded) — at most 3 continuation nudges
+    per session lifetime (the counter resets in `_audit_session_start`);
+    after the cap the hook returns None and the turn finishes naturally.
+    The host's per-turn verify-nudge budget (`max_verify_nudges()`) remains
+    as the outer bound.
+  - Each firing records stats (rule_key `pre-verify-nudge`, reason carries
+    the attempt ordinal, 5.13).
+  KNOWN LIMIT (accepted): pure-terminal violation turns never reach the
+  continuation nudge (the host's `_turn_file_mutation_paths` only records
   write_file / patch landings) — there the settle tool's discoverability in
   the L1 notice carries the loop; an upstream suggestion to count terminal
   writes into the mutation ledger is registered (9 / feedback/10 #6).
@@ -1416,15 +1487,17 @@ periodic re-notification); they surface only via the L3 gate or the
 **Performance (measured, Windows 10 / NTFS / Python 3.11).** One snapshot:
 0.04ms at 15 entries (typical root), 0.15ms at 95, 6.3ms at ~4900
 (pathological). One audit round (pre + post + diff): ~0.1-0.3ms typical,
-<1% of command execution time. Guardrails: `write_audit_entry_cap` (default
-2000) skips the audit with a one-time WARNING when the root entry count
-exceeds the cap; `write_audit: false` disables it; scan OSError → silent
+<1% of command execution time. Guardrails: an internal audit entry constant
+of 2000 (not configurable as of v2.8) skips the audit with a one-time
+WARNING when the root entry count exceeds the cap; scan OSError → silent
 skip (fail-open). Acceptance: p95 < 10ms at ≤500 entries.
 
 **Known limitations.** Background processes (`cmd &`) that write after the
 post hook fall outside the audit window — covered by the cron
 audit_workspace.py net (same diff logic reusable). Network-mounted roots
-may stat slowly → disable via config. Parallel terminal calls in one task
+may stat slowly — as of v2.8 the `write_audit` config escape is removed
+(the audit is always on); affected users can only disable the plugin for
+that profile. Parallel terminal calls in one task
 are last-snapshot-wins (Hermes executes tools sequentially per turn;
 acceptable). Deep subdirectory content is NOT audited (root-level
 discipline is the scope, aligning with the root-file semantics of 5.10).
@@ -1485,7 +1558,8 @@ session.
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
 (structured allowlist files/dirs relative to the Working Directory root,
-working_dir_root override, terminal_guard).
+working_dir_root override; as of v2.8 the terminal_guard/write_audit/
+write_audit_entry_cap keys are removed).
 
 **Verify**: Start a new Hermes session. Try writing a file to the Working
 Directory root — it should be blocked with a helpful message.
@@ -1589,7 +1663,7 @@ Upgrade from v0.1.x: reinstall with `--force` (the plugin directory has no
       verdicts
 - [ ] `/dir-whip` merged report implemented (allow|remove|list subcommands with unified
       Files/Dirs two-section numbered presentation; any other argument
-      -> `Usage: /dir-whip [allow|remove|list]`); report single Allowlist line Files/Dirs + Reminder status line
+      -> `Usage: /dir-whip [allow|remove|list]`); report Allowlist multi-line block (header line + Files/Dirs one line each, valued sections indented 2 spaces; strict-empty single line)
 - [ ] `dir_whip_allow_path` retained (session-scoped, cleared at session
       start); `dir_whip_settle` added (lazily registered, pending-set
       constrained, quarantine move)
@@ -1682,11 +1756,12 @@ testing-standards.md v0.3.0; v2.6 allowlist key = single `allowlist`, A7 wording
       parent's latch (child_session_ids gate); parent-delegated target dirs
       stay exempt
 - [ ] [A12] Performance: audit round p95 < 10 ms on roots up to 500 entries;
-      root entry count above `write_audit_entry_cap` (default 2000) skips
-      the audit with a one-time WARNING
-- [ ] [A13] Config wiring: `write_audit` off disables the audit (no
-      snapshot/diff, no events, no gate); scan OSError fails open silently;
-      entry cap configurable
+      root entry count above the internal audit entry constant 2000 (not
+      configurable as of v2.8) skips the audit with a one-time WARNING
+- [ ] [A13] Config wiring (v2.8 rewrite): the three keys terminal_guard /
+      write_audit / write_audit_entry_cap are removed — the parser stops
+      reading them, leftover keys are completely ignored (no hint, no log),
+      interception and audit always on; scan OSError fails open silently
 - [ ] [A14] Stats/events: verdict events `write-audit-violation` /
       `write-audit-gate-block` in the 5.13 recording and the 5.14 event bus
       (`dir-whip:write-audit-*`), privacy rules unchanged; L1 notice itself
@@ -1826,3 +1901,4 @@ Not implemented in v0.2.0. Design decisions should not block these:
 | 2026-08-25 | v2.5 ACTIVE — SCR-037 v0.4.1: 5.6 D1 template default `["AGENTS.md"]`→`[]` (host `agent_config_mod` scanner `skills_guard.py:462`→dangerous block, shipped tree now zero agent-config literals, engineering-constraints red line), 5.7 `/dir-whip allow|remove|list` subcommands (reverses SCR-029 single-command, `args_hint` for gateway menus, `config_writer` row-level edit), 4.2 audit whitelist wording. Spec activated 2026-08-25, re-freeze pending 37.7 verification | User decision 2026-08-25 |
 | 2026-08-25 | v2.6 ACTIVE — SCR-037 amendment v2.6 B2 single-key allowlist (BREAKING): `exempt_paths` + `allowed_root_files` removed as config keys, no backward compat (user 2026-08-25 B2 decision, feedback/09); single unified `allowlist: []` with discriminated `file:<basename>` | `prefix:<abs-path>` (prefix may end with /). 5.6 template replaced, 5.3 Tier0 = allowlist prefix OR runtime-allowlist / root-file = allowlist file, 5.7 `/dir-whip allow <file|prefix:PATH|PATH/>` intelligently discriminates (no slash→file, slash/prefix:→prefix), report single `Allowlist: Files: ...  Prefixes: ...` line, 5.18 audit aligned to single key, 5.11/5.13/5.14/6.2/7.x/8.4 swept. Old keys deleted. Spec activated 2026-08-25, re-freeze pending | User decision 2026-08-25 (B2 clean break) |
 | 2026-08-26 | v2.7 ACTIVE — SCR-039 v0.5.0 (feedback/10): (1) prompt-channel rework — Always-on Discipline Prompt removed (3.7/5.17), conditional session-start discipline block added (5.4: `discipline_applies` predicate + `agent_cwd_fn` slot wired to host `resolve_agent_cwd`; <=280 chars lock; report Reminder status line injected/skipped-outside/skipped-child/unavailable); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered, pending-set constrained, `.hermes/audit-quarantine/<ts>/` move, subagent-rejected), L1 notice upgraded with settle instruction, L3 latch note (remediation mv/rm blocked while latched -> tool channel), `pre_verify` continuation fallback (mixed-turn hard guarantee; pure-terminal turns = accepted limit + upstream suggestion registered in 9); (3) structured allowlist (BREAKING) — `allowlist` becomes `{files: [...], dirs: [...]}` mapping of working_dir_root-relative paths (dirs multi-level recursive subtree exemption; root itself and outside-root entries rejected; v2.6 flat `file:`/`prefix:` tagged list removed clean-break, legacy ignored fail-closed + `/dir-whip list` hint); `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation (bare remove enumerates current entries; disk-aware bare-name discrimination); block message gains placement-intent rule + allow_path hint. 2/3/4/5/6/7/8 swept. Re-freeze on completion | User decisions 2026-08-26 (feedback/10) |
+| 2026-08-27 | v2.8 ACTIVE — SCR-040 v0.6.0 (scr-040-plan.md / feedback/11, two ruling rounds after the v0.5.0 release): (1) continuation-nudge rework — nudge message rewritten settle-first (shares the L1 remediation sentence helper, exact `dir_whip_settle(paths=[...])` call form, allow_path never mentioned) + plugin-side session-cumulative cap=3 (`PRE_VERIFY_NUDGE_CAP` hardcoded, reset at session start, host per-turn budget kept as outer bound — overturns the v2.7 "hook adds no throttling" clause); grounded in realhost experiment A (one-nudge conversion hard evidence + the agent's allow_path detour); (2) observability pack — 5.13 adds four stats rule_keys (`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`; emits stay at 7) + a diagnostic log file dir-whip.log subsection (new module logsetup.py, profile-aware, DEBUG-full, CLH→stdlib→console three-tier degradation, 5MiB×3+delay+utf-8, absolute-path policy); (3) report surface rework (5.7 layout rewrite) — State values become enabled/disabled, Terminal Guard and Reminder lines removed, Allowlist multi-lined (header line + Files/Dirs one line each, valued sections indented 2 spaces, strict-empty keeps the single line), Health moved last with Good/brief-problem-list two states, a Debug Log line added near the end; (4) three-key de-configuration (BREAKING, 5.6) — terminal_guard/write_audit/write_audit_entry_cap stop being user config, internal constants (interception/audit always on, cap=2000), leftover keys completely ignored, and the `write_audit_autofix` reservation key is removed too (L4 becomes a keyless reserved direction); (5) shipped template comments corrected to the v2.7 structured tutorial. Terminology unified: external-facing 「dir-whip 续推兜底」/"dir-whip continuation nudge", host hook identifier pre_verify only in implementation contexts. (6) placement-wording de-ambiguation (R9, folded in 2026-08-27; realhost incident session 20260827_222411_245249: the block message arrow shorthand `deliverable -> Outputs/` was misread as a literal path template and the file landed at <session>/deliverable/Outputs/) — block message line reworded to `Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).` (5.3), session-start reminder parenthetical reworded accordingly (3.7/5.4; 251 chars <= 280 lock), create_session_dir.py stdout gains a placement hint line (4.1 output contract added); docs first, code/tests land with the SCR-040 implementation batch (40.R9.1). session_dir_pattern judged worth developing, registered in feedback/11 for a separate SCR. Implemented and re-frozen 2026-08-28 (implementation batch 40.x complete; suite 644 passed / 5 skipped / 0 failed) | User decisions 2026-08-27 (scr-040-plan.md rulings: Plan A four records / log absolute paths / report rework + Health last + Allowlist multi-line / three-key de-configuration + leftovers completely ignored / version target 0.6.0) |

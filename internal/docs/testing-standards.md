@@ -1,20 +1,22 @@
-# Testing Standards (v0.5.0 basis, in force for v0.5.0)
+# Testing Standards (v0.6.0 basis, in force for v0.6.0)
 
 Authoritative reference for all testing in the dir-whip project.
 Test cases derive from `specs/dir-whip-spec.md` — behavior basis is the
-v2.7 ACTIVE clause set (SCR-039 amendment 2026-08-26: prompt-channel rework /
-same-turn self-heal / structured allowlist `{files, dirs}` root-relative;
-re-freeze on completion); previous basis v2.6 B2 single-key allowlist
-(re-freeze pending 37.12 verification was superseded by the v0.4.1 release)
-and unified SCR-034 proposal acceptance A1-A15
+v2.8 FROZEN clause set (SCR-040 amendment 2026-08-27: continuation-nudge
+rework / observability pack / config+report surface rework incl. three-key
+de-configuration BREAKING; re-frozen 2026-08-28); previous basis v2.7
+SCR-039 (prompt-channel rework / same-turn self-heal / structured allowlist
+`{files, dirs}` root-relative; re-frozen 2026-08-27) and unified SCR-034
+proposal acceptance A1-A15
 (`archive/v0.3.0/scr-033-034-plan.md` section 9). Supersedes
 the v0.2.0 testing standards (archived at `archive/v0.2.0/testing-standards.md`);
 the v0.2.0 criteria rows remain the frozen v0.2.0 basis (Done), this revision
 ADDS the v0.3.0 terminal-discipline layer and the v0.4.2 single-key allowlist +
 release-hygiene + allowlist-command layers. This document remains in force for
-the v0.4.2 line (SCR-037 B2): single-key allowlist is the behavior delta vs
-v2.5; the unified allowlist command and hygiene tests are the added regression
-net (ADR-0008 + amendment 2026-08-25).
+the v0.6.0 line (SCR-040): the report rework supersedes the v0.5.0 REQ-3
+Reminder-line criteria (§7.9.3 marked superseded), and the three-key
+de-configuration supersedes the v0.3.0 config-wiring criteria A13 (§7.6 row
+rewritten).
 
 ---
 
@@ -65,9 +67,11 @@ tests/
 ├── test_release_hygiene.py         # (v0.4.2, SCR-037 B2) shipped-tree agent-config literal sweep + template default `allowlist: []`
 ├── scr039_helpers.py               # (v0.5.0, SCR-039) shared helpers/fixtures/literals -- non-collected (no test_ prefix)
 ├── test_teaching_channel.py        # (v0.5.0, SCR-039 REQ-1 R1-R3) prompt removal + candidate A + conditional injection + block two elements
-├── test_settle_selfheal.py         # (v0.5.0, SCR-039 REQ-2 R4-R5) dir_whip_settle + pre_verify continuation
-├── test_report_reminder.py         # (v0.5.0, SCR-039 REQ-3 R6) /dir-whip Reminder status line
-└── test_allowlist_commands.py      # (v0.5.0, SCR-039 REQ-5 R9) structured allowlist parse/match + unified allow|remove|list flow
+├── test_settle_selfheal.py         # (v0.5.0, SCR-039 REQ-2 R4-R5; extended v0.6.0) dir_whip_settle + continuation nudge (settle-first message + session cap)
+├── test_report_reminder.py         # (v0.5.0, SCR-039 REQ-3 R6) SUPERSEDED v0.6.0 -- Reminder line removed; surviving cases migrate to test_observability.py
+├── test_allowlist_commands.py      # (v0.5.0, SCR-039 REQ-5 R9) structured allowlist parse/match + unified allow|remove|list flow
+├── test_observability.py           # (v0.6.0, SCR-040 R4/R6) four stats records + report rework (State enabled/disabled, Allowlist multi-line, Health last, Debug Log line)
+└── test_config_surface.py          # (v0.6.0, SCR-040 R5/R7) logsetup (attach idempotent, three-tier degradation, profile-aware path) + three-key de-configuration (parser stops reading, leftovers ignored)
 ```
 
 Rules:
@@ -173,7 +177,7 @@ commands (R9). R8 upstream suggestion is a tracking row, no tests.
 | Class | Purpose |
 |-------|---------|
 | TestSettleTool | **Same-turn self-heal (R4, spec 5.18)**: `settle_paths` pending-set hard constraint / quarantine move settles latch / subagent rejected / fail-open error dict keeps latch / absolute canonical + relative tolerated / vanished-path idempotent success / L1 notice carries settle instruction / L3 gate message appends the settle line / settle stats rule key only (no bus event) / lazy registration on first notice fire |
-| TestPreVerifyHook | **pre_verify continuation (R5, spec 5.18)**: continue-nudge iff unresolved pending AND non-empty `changed_paths`; settled / no-pending / empty-changed / child -> None; `register()` wires the hook |
+| TestPreVerifyHook | **dir-whip continuation nudge (R5, spec 5.18)**: continue-nudge iff unresolved pending AND non-empty `changed_paths`; settled / no-pending / empty-changed / child -> None; `register()` wires the hook |
 
 ##### REQ-3 报告可观测 (test_report_reminder.py, R6)
 
@@ -638,6 +642,7 @@ Spec 5.6 D1 single-key `allowlist: []` (B2 clean break — `exempt_paths` + `all
 | 2026-08-25 | SCR-037 v0.4.1 pre-registration (docs-only): `docs/scr-037-plan.md` (merged feedback/09 + scanner block + allowlist command, 0.4.1去Dashboard), spec 5.6/5.7 v2.5 ACTIVE, engineering-constraints red line (four literals), feedback/09 errata (二*), ADR-0008 (D1-D4). Testing-standards §2 gains `test_release_hygiene.py`, new classes TestReleaseHygiene / TestAllowlistCommand / TestPluginEnablementPrecheck with method-name examples, acceptance matrix §7.8 (9 rows, all Pending, mapped to tasks 37.3-37.7). Rows flip to Done as impl tasks complete | SCR-037 (2026-08-25) |
 | 2026-08-25 | v0.4.2 B2 single-key allowlist (BREAKING, spec v2.6): `exempt_paths` + `allowed_root_files` removed as config keys (no backward compat, B2 clean break per user 2026-08-25); single key `allowlist: []` with discriminated `file:<basename>` | `prefix:<abs-path>` (prefix may end with `/`; bare no-slash -> `file:`, bare with slash -> `prefix:`). Testing-standards header v0.4.1->v0.4.2, spec source v2.5->v2.6; §2 test_config comment `TestAllowlistUnified`, §3 v0.4.1->v0.4.2 TestAllowlistUnified (file:/prefix: discrimination, Files/Prefixes list, invalid prefix handling, cache refresh for both tiers), fixture Guard config `allowlist`, §5 audit matrix `allowlist file` | `prefix:` split, §7.8 rows 1-9 revised to single allowlist (row 2: `allowlist: []`, rows 3-7: file/prefix discrimination, list Files/Prefixes, invalid prefix, mutation refresh) | SCR-037 amendment v2.6 B2 (2026-08-25 user decision) |
 | 2026-08-26 | v0.5.0 pre-registration (SCR-039, docs-only): spec EN/ZH v2.6->v2.7 ACTIVE (3.7/5.3/5.4/5.6/5.7/5.11/5.17/5.18 swept), `docs/scr-039-plan.md` (R1-R9), ADR-0009, feedback/10 sync, engineering-constraints/deployment/CONTEXT/AGENTS version sweep. Testing-standards header v0.4.2->v0.5.0; **requirement-split reorganization** (2026-08-26): test files split by REQ — `test_teaching_channel.py` (REQ-1) / `test_settle_selfheal.py` (REQ-2) / `test_report_reminder.py` (REQ-3) / `test_allowlist_commands.py` (REQ-5) + shared `scr039_helpers.py` (replaces monolithic `tests/test_scr039.py`, 60 cases across 8 classes);  v0.5.0 exception clause (requirement-split over one-file-per-module for cross-cutting features);  classes registered per-REQ; acceptance matrices §7.9.1-7.9.5 (13 rows, all Pending, mapped to tasks 39.R1.*-39.R5.*). Rows flip to Done as impl tasks complete | SCR-039 (2026-08-26 user decisions + requirement-split ruling) |
+| 2026-08-27 | v0.6.0 pre-registration (SCR-040, docs-only): spec EN/ZH v2.7->v2.8 ACTIVE (5.18/5.13/5.7 rewritten + 5.6 three-key removal + 3.7/5.4 terminology sweep), `docs/scr-040-plan.md` (R1-R8), feedback/11 (config-surface evaluation), spec-changes SCR-040 row, CONTEXT/AGENTS/deployment version sweep. Testing-standards header v0.5.0->v0.6.0; §2 gains `test_observability.py` (R4 stats records + R6 report rework) and `test_config_surface.py` (R5 logsetup + R7 three-key de-configuration); test_settle_selfheal.py extended (settle-first message + session cap); test_report_reminder.py marked SUPERSEDED (Reminder line removed; surviving cases migrate); §7.9.3 marked superseded; §7.6 A13 rewritten (three-key removal); acceptance matrix §7.10 (7 rows, all Pending, mapped to tasks 40.R1.*-40.R5.*). Rows flip to Done as impl tasks complete | SCR-040 (2026-08-27 user decisions: unified SCR-040 / Plan A four records / log absolute paths / report rework + Health last + Allowlist multi-line / three-key de-configuration + leftovers completely ignored / version target 0.6.0) |
 
 ---
 
@@ -666,6 +671,11 @@ Requirement-split acceptance: 7.9.1-7.9.5 map 1:1 to tasks.md Phase 8
 
 ### 7.9.3 REQ-3 报告可观测 (R6) — test_report_reminder.py, tasks 39.R3.*
 
+> **SUPERSEDED v0.6.0 (SCR-040 R6)**: the report Reminder line is REMOVED
+> (five-state observability moves to the `session-reminder` stats record);
+> TestReportReminderLine migrates into test_observability.py's report-rework
+> cases (§7.10 rows 4-6). Rows below kept for history.
+
 | # | Criterion (spec ref) | Mapped tests | Task | Status |
 |---|----------------------|--------------|------|--------|
 | 1 | Report Reminder status line renders all states (5.7 R6) | TestReportReminderLine | 39.R3.1 | Pending |
@@ -684,6 +694,24 @@ Requirement-split acceptance: 7.9.1-7.9.5 map 1:1 to tasks.md Phase 8
 | 2 | Commands unified (R1-R8 + input layer v2.1): continuous numbering; bare allow enumerates Files/Dirs candidates (excluding session dirs + .hermes + covered subtrees) with Add hint; number maps file vs dir; path tokens relative/absolute — existing disk-aware; outside-root/ancestor guided rejection; non-existent confirm-create protocol (message + --create file/dir/nested forms, idempotent); all-or-nothing batch (5.7 R9) | TestCommandsUnified | 39.R5.1/39.R5.2 | Pending |
 | 3 | bare remove enumerates current entries two-section numbered with Remove hint; remove by number/name mutates (name matches BOTH sets); list aligned with remove numbering + ignored-legacy hint (5.7 R9) | TestCommandsUnified | 39.R5.1/39.R5.2 | Pending |
 | 4 | Scripts + migration: audit_workspace.py parses the mapping form; parity vectors extended; TestReleaseHygiene / TestAllowlistUnified / _configure helper migrated (4.2/5.6 R9) | TestReleaseHygiene / TestAllowlistUnified (migrated) / parity | 39.R5.3 | Pending |
+
+---
+
+## 7.10 v0.6.0 — SCR-040 acceptance matrix (spec v2.8)
+
+Maps 1:1 to tasks.md Phase 9 (40.R1.* .. 40.R6.*) and the test files
+test_settle_selfheal.py (extended) / test_observability.py /
+test_config_surface.py.
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | Nudge message verbatim lock: settle-first wording, exact `dir_whip_settle(paths=[...])` call form with absolute forward-slash paths, allow_path never mentioned; shares the L1 remediation sentence helper (5.18 R1) | TestPreVerifyHook (extended) | 40.R1.1/40.R1.2 | Done (2026-08-28) |
+| 2 | Session-cumulative cap: 3 nudges per session lifetime, 4th returns None; counter resets at `_audit_session_start`; child/disabled/no-pending still None; each firing records stats `pre-verify-nudge` with attempt ordinal (5.18 R2, 5.13) | TestPreVerifyHook (extended) | 40.R1.1/40.R1.2 | Done (2026-08-28) |
+| 3 | Four stats records: `runtime-allowlist-add` (relativized target, symmetric with bus allowlisted), `session-reminder` five states, `write-audit-settle-rejected` category codes without raw paths; emits stay at 7 (5.13 R4) | TestObservabilityStats | 40.R2.1 | Done (2026-08-28) |
+| 4 | logsetup: attach idempotent at register(); three-tier degradation (CLH -> stdlib -> console-only, injectable import failure); profile-aware path both layouts; maxBytes/backupCount/delay/utf-8 parameters (5.13 R5) | TestLogsetup | 40.R3.1 | Done (2026-08-28) |
+| 5 | Report rework: State enabled/disabled two states; Terminal Guard and Reminder lines absent; Allowlist multi-line block (header + Files/Dirs lines indented 2 spaces, valued sections; strict-empty single line; legacy hint as indented block line) (5.7 R6) | TestReportRework | 40.R4.1 | Done (2026-08-28) |
+| 6 | Report tail: Stats File before Debug Log; Debug Log three states (path / +no records yet / +unavailable); Health LAST (Good, or `N issue(s)` + indented problem lines) (5.7 R6) | TestReportRework | 40.R4.1 | Done (2026-08-28) |
+| 7 | Three-key de-configuration: parser stops reading terminal_guard/write_audit/write_audit_entry_cap; interception and audit always on; entry guardrail internal constant 2000; leftover keys completely ignored (no hint, no log); TestWriteAuditConfig legacy cases migrated/removed (5.6 R7) | TestConfigSurface | 40.R5.1 | Done (2026-08-28) |
 
 ---
 

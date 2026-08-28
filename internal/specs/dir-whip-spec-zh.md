@@ -1,12 +1,8 @@
 # dir-whip — 完整规范
 
-- 版本：2.7
-- 日期：2026-08-26（SCR-039 修正 v2.7——提示通道重排 + 同轮自愈 + 结构化 allowlist；上次冻结 v2.6 2026-08-25）
-- 状态：冻结（FROZEN，v2.7，2026-08-27 实施完毕状态 re-freeze；2026-08-26 激活）——SCR-039 修正 v2.7（feedback/10，用户 2026-08-26 决策）：(1) 提示通道重排——常驻纪律提示（register_system_prompt_section，每轮计费）移除，改为条件化会话开始纪律块（5.4，≤280 chars 锁定）；(2) 同轮自愈——`dir_whip_settle` 工具（懒注册）+ L1 通告升级使违规闭环在用户一轮对话内完成；新增 pre_verify 续轮兜底；(3) 结构化 allowlist（BREAKING v2.7）——`allowlist` 改为映射 `{files: [...], dirs: [...]}`，条目为相对 working_dir_root 的路径（dirs 递归豁免子树；根自身与根外条目拒绝）；v2.6 平铺标签列表（`file:` / `prefix:` 字符串）彻底删除不兼容，遗留格式 fail-closed 忽略；`/dir-whip allow|remove|list` 统一为 Files/Dirs 两段式编号呈现。R7 项目模式注入豁免（`skipped-project`，5.4/5.7）随实施落地（39.R4.1，2026-08-27）。历史：v0.3.0 权威基线（SCR-024
-  根基），取代 v1.4 基线。v0.2.0 已于 2026-08-14 实施并验证完毕（验收矩阵
-  全部 Done，testing-standards.md；真机阶段 27.1-27.6 含 WSL POSIX 覆盖；
-  SCR-025 已登记——原生安装待上游 hermes update；SCR-032 验证范围决策已
-  应用）。此前各轮激活：2026-08-22——SCR-033 terminal 误报修复（v2.1）、
+- 版本：2.8
+- 日期：2026-08-27（SCR-040 修正 v2.8——续推兜底优化 + 可观测性包 + 配置面/报告面重构；上次冻结 v2.7 2026-08-27）
+- 状态：冻结（FROZEN，v2.8，2026-08-28 实施批完成 re-freeze）——SCR-040 修正 v2.8（scr-040-plan.md / feedback/11，用户 2026-08-27 决策）：(1) 续推兜底优化——nudge 消息 settle-first（与 L1 共享 remediation 句式、精确 `dir_whip_settle(paths=[...])` 调用形态、全文不提 allow_path）+ 插件侧会话累计 cap=3（`PRE_VERIFY_NUDGE_CAP` 硬编码，推翻 v2.7"钩子不自加"句）；(2) 可观测性包——四条新 stats rule_key（`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`；emits 保持 7）+ 新模块 logsetup.py 装配专用诊断日志 dir-whip.log（profile-aware、DEBUG 全量、CLH→stdlib→console 三级降级、5MiB×3+delay+utf-8、绝对路径口径）；(3) 报告面重构——State 值改 enabled/disabled、删 Terminal Guard 与 Reminder 行、Allowlist 多行化（头行+Files/Dirs 各一行、有值段首缩进 2 空格、严格空保留单行）、Health 置末尾 Good/简要问题两态、末段新增 Debug Log 行；(4) 三键去配置化（BREAKING）——`terminal_guard` / `write_audit` / `write_audit_entry_cap` 停止作为用户配置（内部常量化：拦截/审计恒开、cap=2000），遗留键完全无视；shipped 模板注释修正为 v2.7 结构化教程；(5) 放置措辞去歧义（R9，2026-08-27 真机误读事故后并入）——block 消息（5.3）与会话开始纪律块（3.7/5.4）箭头简写改为显式 `Outputs/<filename>` / `.tmp/<filename>` 句式，create_session_dir.py stdout 增加放置提示行（4.1 输出契约）。术语统一：对外「dir-whip 续推兜底」/"dir-whip continuation nudge"，宿主钩子标识 `pre_verify` 仅存实现语境。session_dir_pattern 值得开发已登记 feedback/11 待独立 SCR。历史：SCR-039 v2.7（2026-08-26 激活：提示通道重排 + 同轮自愈 + 结构化 allowlist；2026-08-27 实施完毕 re-freeze）。此前各轮激活：2026-08-22——SCR-033 terminal 误报修复（v2.1）、
   SCR-034 根目录写入审计新特性（v2.2）、SCR-034 验收条款 7.6（v2.3），均
   完成后再冻结。变更重新走 SCR 流程（spec-changes.md）。
 - 变更策略：活文档（方案 C）。变更通过 git commit message 记录。
@@ -293,11 +289,11 @@ agent 应理解 plugin 的分类，以便正确应对 block / allow 结果并如
 
 1. **会话开始纪律块** —— 每个顶层会话经 `ctx.inject_message()` 注入一次，
    且为条件化注入（仅当会话位于 Working Directory 内；机制与 fail-open
-   矩阵见 5.4）。锁定文本（逐字；`len ≤ 280` 字符，约 70 token，测试按
+   矩阵见 5.4）。锁定文本（逐字；`len ≤ 280` 字符，约 78 token，测试按
    字符数锁定，与 tokenizer 无关）：
 
 ```
-[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (write the deliverable to Outputs/<filename>, or scratch to .tmp/<filename>). Root forbidden. User path -> dir_whip_allow_path first.
 ```
 
    相对旧提示删减的要素及各自兜底：写前分类框架句（SKILL.md 加载时 +
@@ -305,7 +301,8 @@ agent 应理解 plugin 的分类，以便正确应对 block / allow 结果并如
    （block 消息）、`[Reason]/[Next]` 模板指引（block 消息自带完整模板）、
    时间戳格式（create_session_dir.py 强制校验）。
 2. **block 消息补全** —— 守卫 block 消息现携带放置意图规则
-   （交付物->Outputs/ 其余->.tmp/）与 `dir_whip_allow_path` 指引（5.3），
+   （交付物写 Outputs/<文件名>，其余写 .tmp/<文件名>）与
+   `dir_whip_allow_path` 指引（5.3），
    使每次拦截都是完整教学点。
 
 不使用常驻指针微提示（用户决策 2026-08-26）：守卫 block 消息即确定性
@@ -372,6 +369,11 @@ python create_session_dir.py [task_name] --workspace <path>
   1 = 参数错误（workspace 目录不存在；此检查先于边界校验执行）
   2 = 目标已存在 或 --workspace 与解析出的 Working Directory 不相等
 ```
+
+输出（stdout，R9）：exit 0 与 exit 2 的"目标已存在"分支均输出恰好两行——
+第 1 行为会话目录绝对路径（正斜杠），第 2 行为放置提示：
+`Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>.`
+其余失败路径（exit 1；exit-2 边界不匹配）stdout 保持静默（错误走 stderr）。
 
 ### 4.2 audit_workspace.py
 
@@ -463,7 +465,7 @@ v0.2.0 包含 SCR-030 项目改名 workspace-guard → dir-whip（代码标识�
 `guard.py` → `dir_whip.py`、配置 `guard-config.yaml` → `dir-whip-config.yaml`、
 运行时目录、logger）。`--workspace` 参数保持不变。术语决策 G 仍管辖展示层
 术语。改名的不改项（勿扫改）：`stats.jsonl`、`config.py` 模块名、
-`workspace-organization` 技能名、guard 判定标识符（如 `terminal_guard`、
+`workspace-organization` 技能名、guard 判定标识符（如
 `load_guard_config`），以及历史面（archive、feedback、变更登记表）。
 前向注记（SCR-035，v0.4.0）：此处所指 `dir_whip.py` 模块在 5.1 的
 11 模块布局中消解；`config.py` 作为模块名保留。
@@ -630,7 +632,7 @@ def guard(tool_name: str, args: dict, task_id: str, **kwargs):
     "Fix: Create a session directory first:\n"
     "  python <scripts_path>/create_session_dir.py <task_name> "
     "--workspace <working_dir_root>\n"
-    "Then write there: deliverable -> Outputs/, scratch -> .tmp/.\n"
+    "Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).\n"
     "User-specified path -> dir_whip_allow_path first.\n"
     "If this is a project directory, add it to the allowlist dirs in "
     "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
@@ -657,7 +659,7 @@ def on_start(session_id: str, model: str, platform: str, **kwargs):
 （`ctx.inject_message()`）：
 
 ```
-[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. User path -> dir_whip_allow_path first.
+[dir-whip] Active. WD writes need a session dir first: python scripts/create_session_dir.py <task> --workspace <root> (write the deliverable to Outputs/<filename>, or scratch to .tmp/<filename>). Root forbidden. User path -> dir_whip_allow_path first.
 ```
 
 **条件化注入（v2.7）。** 仅当会话位于 Working Directory 内时注入：
@@ -754,15 +756,15 @@ allowlist:
 
 # 可选覆盖：working_dir_root（设置时具权威性；缺省回退当前档案 terminal.cwd）
 # working_dir_root: E:/HermesWorkspace/learn
-
-# 可选：启用/禁用 terminal 写入拦截（默认启用）
-# terminal_guard: enabled
-
-# 可选：启用/禁用根目录写入审计（5.18；默认启用）。根目录条目数超过
-# write_audit_entry_cap 时跳过审计。
-# write_audit: true
-# write_audit_entry_cap: 2000
 ```
+
+**v2.8 BREAKING——三键去配置化。** `terminal_guard` / `write_audit` /
+`write_audit_entry_cap` 不再是用户配置键（v2.7 及之前版本曾支持）：解析层
+停读，行为内部常量化——terminal 写入拦截恒启用（5.10）、写入审计恒启用
+（5.18）、审计条目护栏为内部常量 2000。预留键 `write_audit_autofix`
+（L4 自动搬移）一并删除（5.18 L4 转为无键预留方向）。runtime 配置中
+残留的这些键被**完全无视**（无提示行、无 hint、无日志）。升级说明见
+deployment.md。
 
 匹配规则（v2.7 结构化映射）：`files` 条目为 Working Directory 根目录允许存在的
 根文件（basename 精确匹配，Windows 下不区分大小写）。`dirs` 条目为**相对**
@@ -892,46 +894,55 @@ flow 风格**（`files: ["a", "b"]`，整行替换、键上方注释保留）—
 
 ```
 [dir-whip] v<version>
-State: ACTIVE
+State: enabled|disabled
 Working Directory: <value>  (source: <source>)
-Terminal Guard: enabled|disabled
-Allowlist: Files: (none)|<comma-joined file basenames>  Dirs: (none)|<comma-joined relative dir paths>  | (strict empty allowlist) [| ignored legacy entries: N]
-Reminder: injected|skipped-outside|skipped-child|skipped-project|unavailable
-Health: OK|PROBLEM
-- resolution: FAIL-OPEN              # 仅 PROBLEM 时逐行列出问题
-- stats.jsonl: NOT WRITABLE (<err>)
-WARNING: ...                         # 仅 override != terminal.cwd 时出现
+Allowlist:                              # 多行块（有任一条目时，见下）
+  Files: (none)|<comma-joined file basenames>
+  Dirs: (none)|<comma-joined relative dir paths>
+  [!] ignored legacy entries: N -- re-add via /dir-whip allow   # 仅遗留值时
+WARNING: ...                            # 仅 override != terminal.cwd 时出现
 Stats File: <absolute stats.jsonl path>
+Debug Log: <absolute dir-whip.log path> [(no records yet)|(unavailable)]
+Health: Good                            # 置于末尾；无问题时单行 Good
+# 有问题时 Health 改为简要问题列表：
+# Health: N issue(s)
+#   - resolution: FAIL-OPEN
+#   - stats.jsonl: NOT WRITABLE (<err>)
 ```
 
-字段规则（SCR-029 方案 A；标签按 SCR-031 / B2 重设计；v2.7）：
+字段规则（SCR-029 方案 A；标签按 SCR-031 / B2 重设计；v2.8 重构）：
 - 首行 `[dir-whip] v<version>`：版本取自包根的 plugin.yaml
   （唯一版本源；简单文本解析，无 PyYAML）。任何失败（文件缺失/不可读/
   无匹配）-> `unknown`；绝不抛出。
-- 第 2 行 `State`：`ACTIVE`，或解析链（5.5）未解析出根时的
-  `FAIL-OPEN`（fail-open 语义不变，5.12）。
+- 第 2 行 `State`：`enabled`（working_dir_root 解析成功），或解析链（5.5）
+  未解析出根时的 `disabled`（fail-open 语义不变，5.12）。v2.8 起值词汇
+  由 ACTIVE/FAIL-OPEN 改为 enabled/disabled。
 - 第 3 行 `Working Directory`：解析值 + 两个空格 + 解析来源——
   `guard-config`（dir-whip-config.yaml 覆盖）/ `profile-config`
   （档案 terminal.cwd）/ `fail-open`，与 5.5 链三步对应；无值时输出
   `Working Directory: (unresolved)`。显示层术语用 "Working Directory"
   （G1）；代码标识符 working_dir_root 不改。
-- 第 4-5 行（显示标签）：
-  `Terminal Guard`（= terminal_guard，默认 enabled）；
-  `Allowlist`（= allowlist，结构化映射 v2.7）：`Files: (none)` 或逗号连接的
-  文件 basename，`Dirs: (none)` 或逗号连接的相对目录路径；旧键 `exempt_paths` /
-  `allowed_root_files` 不再显示（已删除，B2）。`allowlist` 键在
-  dir-whip-config.yaml 中**缺失**时也显示 `Allowlist: (strict empty allowlist)`
-  （fail-closed 提示），键存在但为空时显示 `Files: (none)  Dirs: (none)`；
-  遗留平铺值被忽略时追加 `ignored legacy entries: N`。
-  `Reminder`（= 会话开始纪律块注入结果，5.4：`injected` | `skipped-outside` |
-  `skipped-child` | `skipped-project` | `unavailable`）。
-- 第 6 行 `Health`：`OK`，或 `PROBLEM` 并逐行列出问题：
-  `- resolution: FAIL-OPEN` 和/或 `- stats.jsonl: NOT WRITABLE (<err>)`。
+- **Allowlist 多行块（v2.8）**：原单行 `Allowlist: Files: X  Dirs: Y` 改为
+  块状——`Allowlist:` 头行 + `Files:` / `Dirs:` 各占一行、段首缩进 2 空格；
+  完全无条目（无 files/dirs/legacy）时保留既有单行
+  `Allowlist: (strict empty allowlist)`（键缺失同样如此，fail-closed 提示）；
+  遗留平铺值被忽略时块内附加缩进行
+  `[!] ignored legacy entries: N -- re-add via /dir-whip allow`。
+  旧键 `exempt_paths` / `allowed_root_files` 不再显示（已删除，B2）。
+- **已删除行（v2.8）**：`Terminal Guard:`（随三键去配置化失去意义，R7）、
+  `Reminder:`（五态观测职责移交 5.13 的 `session-reminder` stats 记录；
+  `state.session.reminder_status` 内部状态保留供 stats reason 使用）。
+- **Debug Log 行（v2.8 新增）**：倒数第二行（Health 之前）；专用诊断日志
+  dir-whip.log 的绝对路径（5.13，profile-aware）；文件尚不存在附
+  `(no records yet)`；日志装配失败附 `(unavailable)`。
+- **Health 置于末尾（v2.8）**：无问题时单行 `Health: Good`（值词汇由 OK
+  改为 Good）；有问题时改为简要问题列表（`Health: N issue(s)` + 缩进问题
+  行）：`- resolution: FAIL-OPEN` 和/或 `- stats.jsonl: NOT WRITABLE (<err>)`。
   dir-whip-config.yaml 缺失属设计内默认值，**不算问题**。
 - 仅异常时出现的 WARNING 行：显式 `working_dir_root` 覆盖值与当前档案
   `terminal.cwd` 不一致时输出（Q6 footgun：桌面版设置被覆盖值遮蔽）。
-- 末行（恒显示）`Stats File`：会话档案 home 的 stats.jsonl 绝对路径
-  （5.13，SCR-027）。
+- `Stats File`：会话档案 home 的 stats.jsonl 绝对路径（5.13，SCR-027），
+  位于 Debug Log 之前。
 
 已删除（memo 已删，B4）：`/dir-whip workspace_status` 与
 `/dir-whip workspace_update` 命令；工具
@@ -999,8 +1010,8 @@ def is_inside_session_dir(path, working_dir_root):
 
 相对目标以 `args["workdir"]` 为基准，缺省 `get_session_cwd(task_id)`，
 会话 CWD 未记录时再缺省 `working_dir_root`（绝不用 `os.getcwd()`）。
-多目标命令最严者生效（任一拦截 -> 拦截；否则放行）。由 `terminal_guard`
-配置控制（5.6）。
+多目标命令最严者生效（任一拦截 -> 拦截；否则放行）。恒启用（v2.8 起
+`terminal_guard` 配置键已删除，无开关）。
 
 统计 rule_key：`terminal-redirect`、`terminal-touch`、`terminal-cp-mv`、
 `terminal-write-uncertain`。
@@ -1058,6 +1069,17 @@ external-write / fail-open）、`reason`、`tool`、`target`（相对 working_di
 - `transform_tool_result` / 写入审计观察（5.18）：记录根目录写入审计违规与
   清偿闸门拦截（rule_key `write-audit-violation` / `write-audit-gate-block`）；
   L1 通告本身不产生事件。
+- 续推兜底观察（5.18，v2.8）：记录续推触发（rule_key `pre-verify-nudge`，
+  reason 带 attempt 累计序号；target=None——路径已由 violation 事件承载）。
+- `allow_path` 工具调用观察（v2.8）：记录运行期豁免添加（rule_key
+  `runtime-allowlist-add`，target 相对化路径；与总线事件
+  `dir-whip:allowlisted` 对称）。
+- 会话开始观察（5.4，v2.8）：记录开场纪律块注入五态（rule_key
+  `session-reminder`，reason=状态字面量 injected | skipped-outside |
+  skipped-child | skipped-project | unavailable；每顶层会话一行）。
+- settle 拒绝观察（5.18 R4，v2.8）：记录清偿拒绝/失败类别（rule_key
+  `write-audit-settle-rejected`，reason=类别码 subagent-rejected /
+  invalid-paths / not-in-pending / move-failed，不带原始路径）。
 
 **持久化（D3）。** 每个事件向 `HERMES_HOME/dir-whip/stats.jsonl`
 追加一行 JSON：
@@ -1071,6 +1093,19 @@ external-write / fail-open）、`reason`、`tool`、`target`（相对 working_di
 
 `/dir-whip` 命令不再展示统计（SCR-029）；记录后端不变——累计数据可通过
 `/dir-whip` 报告的 Stats File 路径自行查看。
+
+**诊断日志文件（v2.8 R5）。** 插件在 register() 时经新模块 logsetup.py
+装配专用 DEBUG 全量日志 `<HERMES_HOME>/dir-whip/dir-whip.log`
+（profile-aware 落位，镜像 stats 路径模式）：捕获全部 `dir-whip` logger 行
+——含宿主 agent.log（INFO+）阈值之下的 DEBUG breadcrumb（allow 类 verdict、
+fail-open 处理路径等）。三级 fail-open 降级链：`concurrent_log_handler.
+ConcurrentRotatingFileHandler`（跨进程安全轮转，宿主 venv 已装；第三方包
+导入不违 ADR-0007）→ stdlib `RotatingFileHandler` → 仅 console。参数：
+maxBytes=5 MiB、backupCount=3、delay=True（首条写入才建文件）、
+encoding=utf-8。隐私口径：**允许绝对路径**（本机诊断文件，定位价值优先；
+消息面无密钥类内容）。已知限制：桌面单进程服务多档案时 log 文件落
+register 时档案目录、跨档案行混写（verdict JSON 自带 session_id 可归属）；
+stdlib 兜底场景 Windows 多进程轮转存在 WinError 32 已知风险。
 
 ### 5.14 事件总线事件（D5）
 
@@ -1173,9 +1208,10 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
   （child_session_ids 门，5.4/5.16）。注（v2.7）：锁存期间**一切**写入类调用
   被拦——包括清偿性的 `mv`/`rm`——因此 agent 自愈走 `dir_whip_settle`
   工具通道（见下），不走终端命令。
-- **L4 自动搬移**：可选，**默认关闭**（`write_audit_autofix`，预留）。插件将
-  违规文件移入会话 `.tmp/`。默认关闭原因：自动搬移与"删除=仅报告"安全原则
-  相抵，且可能割裂 agent 后续对该路径的引用。
+- **L4 自动搬移**：预留方向，**无配置键**（v2.8 起 `write_audit_autofix`
+  预留键已删除——配置面去配置化裁决的延伸；未来若立项经独立 SCR 重议）。
+  设想为插件将违规文件移入会话 `.tmp/`。搁置原因：自动搬移与"删除=仅报告"
+  安全原则相抵，且可能割裂 agent 后续对该路径的引用。
 
 **同轮自愈（v2.7，R4/R5）。** 目标：检测 -> 通告 -> 清偿闭环在触发违规的
 用户一轮对话内完成。
@@ -1197,14 +1233,23 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 - **L3 闸门消息（深化裁决 2026-08-26，修订原"消息不动"）**：追加
   `"Remediate now: call dir_whip_settle(paths=[...])"` 行（闸门拦截清偿性
   mv/rm，消息必须指明工具通道；子代理变体保持仅上报父代）。
-- `pre_verify` 续轮兜底（R5）：插件注册 Hermes 的 `pre_verify` 钩子；当本会话
-  存在未清偿 pending 违规且宿主报告本回合有文件改动（`changed_paths` 非空）
-  时，钩子返回 `{"action": "continue", "message": "[dir-whip] N unresolved
-  root writes: <paths>. Call dir_whip_settle or move them into a Session
-  Directory before finishing."}` 使宿主维持回合继续；其他返回值放行回合结束。
-  子代理会话 no-op（清偿是父代职责）；限流依赖宿主 verify-nudge 预算
-  （`max_verify_nudges()`），钩子不自加。
-  已知限制（明示接受）：纯终端违规轮永远不会到达 `pre_verify`（宿主
+- **续推兜底（v2.8 R1/R2 重写；宿主钩子标识 `pre_verify`，对外术语
+  「dir-whip 续推兜底」/"dir-whip continuation nudge"）**：插件注册 Hermes 的
+  `pre_verify` 钩子；当本会话存在未清偿 pending 违规且宿主报告本回合有文件
+  改动（`changed_paths` 非空）时，钩子返回 continue 指令使宿主维持回合继续；
+  其他返回值放行回合结束。子代理会话 no-op（清偿是父代职责）。
+  - **文案（verbatim 锁，与 L1 共享 remediation 句式 helper）**：
+    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Finish only after settlement.`
+    路径为绝对正斜杠形态（与 settle 参数规范输入契约一致）；全文不提
+    allow_path（不提供豁免选项、不负面点名）。
+  - **会话累计上限（v2.8，推翻 v2.7"限流依赖宿主预算、钩子不自加"句）**：
+    插件侧常量 `PRE_VERIFY_NUDGE_CAP = 3`（硬编码）——同一会话生命周期内
+    至多续推 3 次（计数随 `_audit_session_start` 重置），达到上限后返回
+    None 放行回合自然收尾；宿主每轮 verify-nudge 预算
+    （`max_verify_nudges()`）保留为外层边界。
+  - 触发即记 stats（rule_key `pre-verify-nudge`，reason 带 attempt 累计
+    序号，5.13）。
+  已知限制（明示接受）：纯终端违规轮永远不会到达续推兜底（宿主
   `_turn_file_mutation_paths` 只记 write_file / patch 落地）——该场景由 L1
   通告中 settle 工具的可发现性承载闭环；"terminal 写入计入 mutation ledger"
   的 upstream 建议已登记（9 / feedback/10 #6）。
@@ -1215,9 +1260,9 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 
 **性能（实测，Windows 10 / NTFS / Python 3.11）。** 单次快照：15 条目（典型
 工作区根）0.04ms、95 条目 0.15ms、~4900 条目（病态）6.3ms。一轮审计
-（pre+post+diff）典型 ~0.1-0.3ms，低于命令执行时间的 1%。护栏：
-`write_audit_entry_cap`（默认 2000）——根条目超限时跳过审计并一次性 WARNING；
-`write_audit: false` 关闭；扫描 OSError → 静默跳过（fail-open）。验收：
+（pre+post+diff）典型 ~0.1-0.3ms，低于命令执行时间的 1%。护栏：审计条目
+内部常量 2000（v2.8 起不可配置）——根条目超限时跳过审计并一次性 WARNING；
+扫描 OSError → 静默跳过（fail-open）。验收：
 ≤500 条目 p95 < 10ms。
 
 **已知限制。** 后台进程（`cmd &`）在 post 钩子之后落盘 → 落在审计窗口外——
@@ -1273,7 +1318,8 @@ Session Directory 之外的写入（白名单文件豁免）。外部路径放�
 **工具**：dir_whip_allow_path —— 本会话放行用户指定路径。
 
 **配置**（可选）：编辑 HERMES_HOME/dir-whip/dir-whip-config.yaml
-（allowlist 结构化 files/dirs 相对 Working Directory 根、working_dir_root 覆盖、terminal_guard）。
+（allowlist 结构化 files/dirs 相对 Working Directory 根、working_dir_root 覆盖；
+v2.8 起 terminal_guard/write_audit/write_audit_entry_cap 三键已删除）。
 
 **验证**：启动新的 Hermes 会话。尝试向 Working Directory 根目录写文件
 ——应该被拦截并显示修复指引。
@@ -1363,7 +1409,7 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --force      # 更新
       落盘观察；post_approval_response 批准/拒绝分布
 - [ ] stats.jsonl 追加含会话字段；target 相对 working_dir_root；5MB 滚动
       到 `.1`；写失败不影响判定
-- [ ] `/dir-whip` 合并报告已实现（allow|remove|list 子命令，统一 Files/Dirs 两段式编号呈现；其它参数 -> `Usage: /dir-whip [allow|remove|list]`）；报告单行 Allowlist 分 Files/Dirs + Reminder 状态行
+- [ ] `/dir-whip` 合并报告已实现（allow|remove|list 子命令，统一 Files/Dirs 两段式编号呈现；其它参数 -> `Usage: /dir-whip [allow|remove|list]`）；报告 Allowlist 多行块（头行 + Files/Dirs 各一行、有值段首缩进 2 空格；严格空单行）
 - [ ] `dir_whip_allow_path` 保留（会话级，会话起始清空）；
       `dir_whip_settle` 新增（懒注册、pending 集合约束、隔离区搬移）
 - [ ] 已删除：workspace_status / workspace_update 命令；
@@ -1436,9 +1482,10 @@ testing-standards.md v0.3.0；v2.6 allowlist 单键，A7 描述已更新）。
 - [ ] [A11] 会话隔离：违规锁存会话级、顶层会话起始清空；子代理根级写入归入
       父会话锁存（child_session_ids 门）；父代委托的目标目录保持豁免
 - [ ] [A12] 性能：≤500 条目根目录审计单轮 p95 < 10ms；根条目数超过
-      `write_audit_entry_cap`（默认 2000）跳过审计并一次性 WARNING
-- [ ] [A13] 配置接线：`write_audit` 关闭即停用审计（无快照/diff、无事件、
-      无闸门）；扫描 OSError 静默 fail-open；entry cap 可配置
+      审计条目内部常量 2000（v2.8 起不可配置）跳过审计并一次性 WARNING
+- [ ] [A13] 配置接线（v2.8 重写）：三键 terminal_guard / write_audit /
+      write_audit_entry_cap 已删除——解析层停读、遗留键完全无视（无提示/
+      无日志）、拦截与审计恒开；扫描 OSError 静默 fail-open
 - [ ] [A14] 统计/事件：verdict 事件 `write-audit-violation` /
       `write-audit-gate-block` 流入 5.13 记录与 5.14 事件总线
       （`dir-whip:write-audit-*`），隐私规则不变；L1 通告本身不产生事件
@@ -1570,3 +1617,4 @@ v0.2.0 不实现。设计决策不应阻塞这些方向：
 | 2026-08-25 | v2.5 已激活——SCR-037 v0.4.1：5.6 D1 模板默认值 `["AGENTS.md"]`→`[]`（宿主 agent_config_mod 扫描器 skills_guard.py:462→dangerous 拦截，发布物零字面量红线）、5.7 `/dir-whip allow|remove|list` 子命令（回退 SCR-029 单命令）、4.2 audit 白名单措辞。规范 2026-08-25 激活，待 37.7 验证后再次冻结 | 用户决策 2026-08-25 |
 | 2026-08-25 | v2.6 已激活——SCR-037 修正 v2.6 B2 单键 allowlist（BREAKING）：`exempt_paths` + `allowed_root_files` 作为配置键已删除，不向后兼容（用户 2026-08-25 B2 决策，feedback/09）；单一统一 `allowlist: []` 且条目区分为 `file:<basename>` | `prefix:<abs-path>`（prefix 可带末尾 /）。5.6 模板替换，5.3 Tier0 = allowlist prefix 或 runtime-allowlist / 根文件 = allowlist file，5.7 `/dir-whip allow <file|prefix:PATH|PATH/>` 智能区分（无斜杠→file，含斜杠/prefix:→prefix），报告单行 `Allowlist: Files: ...  Prefixes: ...`，5.18 审计对齐单键，5.11/5.13/5.14/6.2/7.x/8.4 已扫改。旧键已删除。规范 2026-08-25 激活，待冻结 | 用户决策 2026-08-25（B2 彻底切换） |
 | 2026-08-26 | v2.7 已激活——SCR-039 v0.5.0（feedback/10）：(1) 提示通道重排——常驻纪律提示移除（3.7/5.17），新增条件化会话开始纪律块（5.4：`discipline_applies` 谓词 + `agent_cwd_fn` 注入槽接宿主 `resolve_agent_cwd`；≤280 chars 锁定；报告 Reminder 状态行 injected/skipped-outside/skipped-child/unavailable）；(2) 同轮自愈——`dir_whip_settle` 工具（懒注册、pending 集合硬约束、`.hermes/audit-quarantine/<ts>/` 搬移、子代理拒绝），L1 通告升级附 settle 指引，L3 锁存注记（锁存期间清偿 mv/rm 亦被拦 -> 走工具通道），注册 `pre_verify` 续轮兜底（混合轮次硬保证；纯终端轮=明示接受限制 + upstream 建议登记于 9）；(3) 结构化 allowlist（BREAKING）——`allowlist` 改为 `{files: [...], dirs: [...]}` 映射、条目相对 working_dir_root（dirs 多级递归子树豁免；根自身与根外条目拒绝；v2.6 平铺 `file:`/`prefix:` 标签列表删除 clean-break，遗留 fail-closed 忽略 + `/dir-whip list` 提示）；`/dir-whip allow|remove|list` 统一 Files/Dirs 两段式编号呈现（bare remove 枚举当前条目；裸名磁盘感知判别）；block 消息新增放置意图规则 + allow_path 指引。2/3/4/5/6/7/8 全扫描。完成后 re-freeze | 用户决策 2026-08-26（feedback/10） |
+| 2026-08-27 | v2.8 已激活——SCR-040 v0.6.0（scr-040-plan.md / feedback/11，发布后讨论两轮裁决）：(1) 续推兜底优化——nudge 文案 settle-first 重写（与 L1 共享 remediation 句式 helper、精确 `dir_whip_settle(paths=[...])` 调用形态、全文不提 allow_path）+ 插件侧会话累计 cap=3（`PRE_VERIFY_NUDGE_CAP` 硬编码、会话起始重置、宿主每轮预算保留为外层边界——推翻 v2.7"钩子不自加"句）；依据真机实验 A（nudge 一次转化硬证据 + agent 绕 allow_path 偏差）；(2) 可观测性包——5.13 新增四条 stats rule_key（`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`；emits 保持 7）+ 诊断日志文件 dir-whip.log 小节（新模块 logsetup.py、profile-aware、DEBUG 全量、CLH→stdlib→console 三级降级、5MiB×3+delay+utf-8、绝对路径口径）；(3) 报告面重构（5.15→5.7 布局重写）——State 值改 enabled/disabled、删 Terminal Guard 与 Reminder 行、Allowlist 多行化（头行+Files/Dirs 各一行、有值段首缩进 2 空格、严格空保留单行）、Health 置末尾 Good/简要问题两态、末段新增 Debug Log 行；(4) 三键去配置化（BREAKING，5.6）——terminal_guard/write_audit/write_audit_entry_cap 停止用户配置、内部常量化（拦截/审计恒开、cap=2000）、遗留键完全无视，`write_audit_autofix` 预留键一并删除（L4 转为无键预留方向）；(5) shipped 模板注释修正为 v2.7 结构化教程。术语统一：对外「dir-whip 续推兜底」/"dir-whip continuation nudge"，宿主钩子标识 pre_verify 仅存实现语境。(6) 放置措辞去歧义（R9，2026-08-27 并入；真机事故会话 20260827_222411_245249：block 消息箭头简写 `deliverable -> Outputs/` 被误读为字面路径模板，文件落 <session>/deliverable/Outputs/）——block 消息行改述为 `Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).`（5.3），会话开始纪律块括号句同步改述（3.7/5.4；251 字符 ≤ 280 锁定），create_session_dir.py stdout 增加放置提示行（4.1 输出契约新增）；文档先行，代码/测试随 SCR-040 实施批落地（40.R9.1）。session_dir_pattern 值得开发登记 feedback/11 待独立 SCR。2026-08-28 实施批完成 re-freeze（套件 644 passed / 5 skipped / 0 failed） | 用户决策 2026-08-27（scr-040-plan.md 两轮裁决：方案 A 四条记录 / 日志绝对路径 / 报告重构+Health 置末尾+Allowlist 多行 / 三键去配置化+遗留完全无视 / 版本目标 0.6.0） |

@@ -188,6 +188,30 @@ test_report_reminder / test_allowlist_commands）及 scr-039-plan 五节一一�
 
 ---
 
+## Phase 9 — SCR-040 v0.6.0 续推兜底重构 + 可观测性包 + 配置/报告面重构 (40.x)
+
+TDD per task: write the mapped tests FIRST (red), then implement (green).
+Acceptance = mapped testing-standards §7.10 matrix (v2.8) all green + KPI
+column. Active branch: `0.6.0_dev` (from `main@ad3fc73`).
+Design source: feedback/11 + `docs/scr-040-plan.md`（R1-R9 定稿设计；
+R9 放置措辞去歧义 2026-08-27 并入，文档先行、代码随实施批）。
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 40.1 | **文档批**：spec-changes 登记更新 + `scr-040-plan.md` + spec EN/ZH v2.8 ACTIVE + changelog + CONTEXT.md 词条 + AGENTS.md 模块清单（+logsetup.py）+ **shipped 模板修正（R8）** | - | Docs batch done | Done (2026-08-28) |
+| 40.R1.1 | **red**：TestPreVerifyHook 扩矩阵（verbatim 文案锁 / call 形态含路径 / 无 allow_path 断言 / cap=3 序列第 4 次 None / 会话重启重置 / child·disabled·no-pending 仍 None） | 40.1 | 红灯确认 | Done (2026-08-28) |
+| 40.R1.2 | **green**：audit.py（`_remediation_instruction` helper + nudge 文案 + cap 计数）+ state.py（nudge_counts） | 40.R1.1 | REQ 全绿 | Done (2026-08-28) |
+| 40.R2.1 | **red+green**：四条 stats 记录（nudge 行含 attempt 序号 / allow-path 行相对化 target / reminder 五态行 / settle-rejected 类别码无路径） | 40.R1.2 | 全绿 | Done (2026-08-28) |
+| 40.R3.1 | **red+green**：logsetup（attach 幂等 / 三级降级注入模拟 / profile-aware 路径两形态 / CLH 优先选择 / delay+utf-8+轮转参数断言） | 40.1 | 全绿 | Done (2026-08-28) |
+| 40.R4.1 | **red+green**：报告面重构（State enabled/disabled 两态 / Terminal Guard 与 Reminder 行消失断言 / Allowlist 多行块与严格空单行两形态 / Health 置末尾 Good 与问题列表两态 / Debug Log 行三态：正常+no records yet+unavailable） | 40.1 | 全绿 | Done (2026-08-28) |
+| 40.R5.1 | **red+green**：三键去配置化（loader 停读断言 / 内部常量语义 / 遗留键完全无视 / TestWriteAuditConfig 迁移删除 / TestReleaseHygiene 模板默认断言迁移至映射形态 / verdict terminal_guard 分支删除） | 40.1 | 全绿 | Done (2026-08-28) |
+| 40.R6.1 | 术语扫描：README EN/ZH + spec 正文 + testing-standards/tasks 措辞统一（pre_verify 收敛到实现语境）+ after-install.md 清扫（三键移除 + Debug Log 说明） | 40.R1.2 | 扫描完成 | Done (2026-08-28) |
+| 40.R9.1 | **red+green**：放置措辞去歧义（5.3 block 行 + 3.7/5.4 纪律块括号句 verbatim 锁更新 / 子代理变体负断言迁移至新放置短语 / `len<=280` 保持 / create_session_dir 两行输出契约：路径行+提示行、失败路径 stdout 静默） | 40.1 | 全绿 | Done (2026-08-28) |
+| 40.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.0、发布说明（三键行为变更提示） | 40.R1.2/40.R3.1/40.R4.1/40.R5.1/40.R9.1 | 基线全绿 | Done (2026-08-28: plugin.yaml 0.6.0 hooks 9/emits 7 不变；spec EN/ZH v2.8 re-frozen + changelog/AGENTS/testing-standards 同步；全量 644 passed / 5 skipped / 0 failed；版本断言 test_version_is_050→060 迁移) |
+| 40.10 | 发布 + 真机抽验：tag v0.6.0 + GitHub Release；六场景（见 scr-040-plan.md 六） | 40.9 | 用户门禁 | Pending |
+
+---
+
 _Note: testing-standards.md v0.3.0 rebuild (listed in the earlier backlog) is
 already DONE (2026-08-22) — it is the acceptance source for this phase, not a
 pending task. Version bump (30.13) was deferred per user until SCR review
