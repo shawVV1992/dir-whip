@@ -1072,10 +1072,12 @@ v2.9 两步用户确认（SCR-041 R3）：添加条目**必须**经用户显式�
 
 - 首调（`confirm` 缺省或 false）：**不添加任何条目**；handler 返回确认载荷
   （verbatim 见下）并将该路径记入会话内存 `confirmation-issued` 集合。
-  载荷签发与未签发直接 `confirm=true` 被拒，仅记 dir-whip.log DEBUG 行——
+  载荷签发与未签发直接 `confirm=true` 的重发，仅记 dir-whip.log DEBUG 行——
   无 stats 行、无总线事件（用户裁决 2026-08-28）。
 - 重调（`confirm=true`）：仅当该路径已在 `confirmation-issued` 集合时被接受；
-  未签发载荷而直接 `confirm=true` → 拒绝并指示先走首调（两步不可跳过）。
+  未签发载荷而直接 `confirm=true` → **不添加、重发确认载荷并记入
+  confirmation-issued**（等效首调——`confirm=true` 永不独立添加，两步不可
+  跳过；2026-08-28 二审裁决，替代原"拒绝"设计免设新 verbatim）。
   成功后正常添加条目，常规 `runtime-allowlist-add` stats 行 / 总线事件照发
   （5.13/5.14）。
 - 确认载荷（verbatim）：
@@ -1091,6 +1093,12 @@ dir-whip-config.yaml
 Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
 ```
+
+- 闩锁上下文条件行（2026-08-28 二审采纳）：pending 非空（闩锁活跃）时，
+  载荷末尾追加一行——`NOTE: a settlement block is currently active — writes
+  stay frozen until the recorded violation is remediated (settle or a
+  user-authored config entry).`——避免"用户批准豁免后写入仍被拦"的无效往返
+  （闩锁冻结一切写类调用；豁免只过 Tier 0，不开闸）。
 
 - 去除方法（仅文档化——无撤销能力，用户裁决 2026-08-28）：runtime 条目在
   会话结束自动失效（`on_session_start` 清空 + `reset_cache`）；持久豁免属

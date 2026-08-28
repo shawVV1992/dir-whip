@@ -223,7 +223,7 @@ patch，用户逐项拍板）。
 |---|------|-----------|-------------------|--------|
 | 41.1 | **文档批**：`scr-041-plan.md` + spec EN/ZH v2.9 ACTIVE（5.11 工具契约重写：入口门禁+确认协议 verbatim / 5.18 重扫语义 + L1/L3 文案 verbatim / changelog v2.9）+ tasks Phase 10 + testing-standards 7.11 + AGENTS.md 同步 | - | 文档落盘 | Done (2026-08-28) |
 | 41.R1.1 | **red**：重扫不因 runtime 豁免销案（豁免后 pending 保留 / nudge attempt 序号持续断言） | 41.1 | red 确认 | Pending |
-| 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类） | 41.R1.1 | 全绿 | Pending |
+| 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类；含既有"豁免即销案"断言迁移） | 41.R1.1 | 全绿 | Pending |
 | 41.R2.1 | **red+green**：allow_path 入口门禁（子代理拒绝 + 父代指引 verbatim / 整根拒绝 verbatim / stats `allow-path-subagent-rejected` 行 + bus-skip） | 41.1 | 全绿 | Pending |
 | 41.R3.1 | **red+green**：两步确认协议（schema confirm 参数 / 首调确认载荷 verbatim 且不添加 / confirmation-issued 强制两步 / 未签发 confirm 拒绝 / 成功后常规 stats+bus / SKILL.md 措辞同步） | 41.1 | 全绿 | Pending |
 | 41.R4.1 | **red+green**：L1/L3 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 / 子代理变体与 settle 行不变） | 41.1 | 全绿 | Pending |

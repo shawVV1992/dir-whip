@@ -1241,15 +1241,18 @@ explicit user approval via a mandatory two-step protocol.
 
 - First call (`confirm` absent or false): NOTHING is added; the handler
   returns the confirmation payload (verbatim below) and records the path in
-  a session-memory `confirmation-issued` set. The payload issuance and a
-  rejected unbriefed `confirm=true` are recorded in the diagnostic log
+  a session-memory `confirmation-issued` set. The payload issuance and an
+  unbriefed `confirm=true` re-issue are recorded in the diagnostic log
   (dir-whip.log, DEBUG) only — no stats row, no bus event (user ruling
   2026-08-28).
 - Second call (`confirm=true`): honored ONLY for a path already in the
-  `confirmation-issued` set; a `confirm=true` without a prior issued
-  payload is rejected with an instruction to call without `confirm` first
-  (the two-step cannot be skipped). On success the entry is added and the
-  regular `runtime-allowlist-add` stats row / bus event fire (5.13/5.14).
+  `confirmation-issued` set; a `confirm=true` without a prior issued payload
+  adds NOTHING and RE-ISSUES the confirmation payload, marking the path as
+  briefed (equivalent to a first call — `confirm=true` never adds on its
+  own, so the two-step cannot be skipped; 2026-08-28 second-review ruling,
+  replacing the earlier rejection design to avoid a new verbatim). On
+  success the entry is added and the regular `runtime-allowlist-add` stats
+  row / bus event fire (5.13/5.14).
 - Payload (verbatim):
 
 ```
@@ -1263,6 +1266,14 @@ dir-whip-config.yaml
 Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
 ```
+
+- Latch-context conditional line (2026-08-28 second review): when the
+  pending set is non-empty (latch active), the payload gains one trailing
+  line — `NOTE: a settlement block is currently active — writes stay frozen
+  until the recorded violation is remediated (settle or a user-authored
+  config entry).` — preventing the wasted approval round-trip (the latch
+  freezes ALL write-class calls; the exemption only passes Tier 0 and does
+  not open the gate).
 
 - Removal method (documented only — no revoke capability, user ruling
   2026-08-28): runtime entries expire automatically at session end
