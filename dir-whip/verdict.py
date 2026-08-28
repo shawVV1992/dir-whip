@@ -36,7 +36,6 @@ try:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
-        terminal_guard_enabled,
     )
 except ImportError:
     from config import (
@@ -44,7 +43,6 @@ except ImportError:
         is_inside_session_dir,
         is_runtime_allowlisted,
         load_guard_config,
-        terminal_guard_enabled,
     )
 
 try:
@@ -507,7 +505,8 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
                     is_subagent=False, session_id=None):
     """Terminal write interception (spec 5.10 coarse tiers, v2.6 B2).
 
-    - terminal_guard disabled -> terminal never blocked (DEBUG log).
+    - Always on (5.10 v2.8 R7: the terminal_guard config key is removed;
+      enforcement is unconditional, no switch).
     - Heredoc (`<<`) blanket demotion (4.4): the WHOLE command is judged
       uncertain (allow + log), no body parsing, no block extraction.
     - Block tier: redirect / touch / cp-mv targets classify through the
@@ -522,11 +521,6 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
     try:
         command = args.get("command") if isinstance(args, dict) else None
         if not isinstance(command, str) or not command:
-            return None
-        if not terminal_guard_enabled():
-            logger.debug(
-                "dir-whip: terminal guard disabled via terminal_guard config"
-            )
             return None
 
         tokens = _tokenize_command(command)

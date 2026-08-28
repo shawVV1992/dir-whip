@@ -104,76 +104,36 @@ def parse_terminal_cwd(config_path):
     return None
 
 
-def _parse_terminal_guard_value(value):
-    """Parse a terminal_guard config value; default enabled (fail toward
-    enforcement: a missing/unreadable value keeps interception on)."""
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in ("disabled", "false", "0", "off")
-    # PyYAML parses the YAML 1.1 integer forms 0/1 as int; treat numeric 0
-    # as disabled per the switch semantics (spec 5.6).
-    if isinstance(value, (int, float)):
-        return value != 0
-    return True
-
-
 def terminal_guard_enabled(config_path=None):
-    """Return True when terminal write interception is enabled (default enabled)."""
-    try:
-        cfg = load_guard_config(config_path)
-        return bool(cfg.get("terminal_guard", True))
-    except Exception:
-        return True
+    """Terminal write interception is ALWAYS on (spec 5.6/5.10 v2.8 R7).
 
-
-def _parse_write_audit_value(value):
-    """Parse a write_audit config value (spec 5.18); default enabled (a
-    missing/unreadable value keeps the audit on)."""
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in ("disabled", "false", "0", "off")
-    # PyYAML parses the YAML 1.1 integer forms 0/1 as int; treat numeric 0
-    # as disabled per the switch semantics (spec 5.18).
-    if isinstance(value, (int, float)):
-        return value != 0
+    The terminal_guard config key is removed (three-key de-configuration,
+    BREAKING): interception is an internal constant with no switch. The
+    config_path parameter is kept for call-site compatibility only.
+    """
     return True
-
-
-def _parse_entry_cap_value(value):
-    """Parse a write_audit_entry_cap config value; default 2000 on
-    missing/unparseable/non-positive input (a bad value must not weaken
-    the guardrail; spec 5.18)."""
-    if isinstance(value, bool):
-        return 2000
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 2000
-    return parsed if parsed > 0 else 2000
 
 
 def write_audit_enabled(config_path=None):
-    """True when the root write audit is enabled (spec 5.18; default on)."""
-    try:
-        cfg = load_guard_config(config_path)
-        return bool(cfg.get("write_audit", True))
-    except Exception:
-        return True
+    """The root write audit is ALWAYS on (spec 5.6/5.18 v2.8 R7).
+
+    The write_audit config key is removed (three-key de-configuration,
+    BREAKING): the audit is an internal constant with no switch. The
+    config_path parameter is kept for call-site compatibility only.
+    """
+    return True
 
 
 def write_audit_entry_cap(config_path=None):
-    """The root-entry cap for the write audit (spec 5.18; default 2000)."""
-    try:
-        cfg = load_guard_config(config_path)
-        return _parse_entry_cap_value(cfg.get("write_audit_entry_cap", 2000))
-    except Exception:
-        return 2000
+    """The audit entry guardrail: internal constant 2000 (spec 5.6/5.18
+    v2.8 R7).
+
+    The write_audit_entry_cap config key is removed (three-key
+    de-configuration, BREAKING): the DoS guardrail is kept but is no
+    longer adjustable. The config_path parameter is kept for call-site
+    compatibility only.
+    """
+    return 2000
 
 
 def _parse_allowlist(value):
@@ -223,12 +183,17 @@ def _get_guard_config_path():
 def load_guard_config(config_path=None):
     """Load dir-whip-config.yaml exemptions and overrides.
 
-    Returns a dict with at least 'allowlist' (list of discriminated
-    strings; STRICT fallback [] when the key is absent or not a list),
-    'terminal_guard' (bool, default True), 'write_audit' (bool, default True),
-    'write_audit_entry_cap' (int, default 2000) and optionally
-    'working_dir_root' (str). Old keys exempt_paths / allowed_root_files are
-    removed (B2 clean break, no backward compat).
+    Returns a dict with at least 'allowlist' (RAW value: structured
+    mapping dict, legacy flat list, or STRICT fallback [] when the key
+    is absent or not a list/dict) and optionally 'working_dir_root'
+    (str). v2.8 BREAKING (R7 three-key de-configuration): terminal_guard
+    / write_audit / write_audit_entry_cap (and the reserved
+    write_audit_autofix) are NO LONGER read — behavior is internally
+    constant (see terminal_guard_enabled / write_audit_enabled /
+    write_audit_entry_cap) and leftover occurrences of these keys in
+    runtime configs are COMPLETELY ignored (no hint, no log entry).
+    Old keys exempt_paths / allowed_root_files stay removed (B2 clean
+    break, no backward compat).
     """
     if config_path is None:
         config_path = _get_guard_config_path()
@@ -236,9 +201,6 @@ def load_guard_config(config_path=None):
 
     result = {
         "allowlist": [],
-        "terminal_guard": True,
-        "write_audit": True,
-        "write_audit_entry_cap": 2000,
     }
 
     if not config_path.is_file():
@@ -250,12 +212,7 @@ def load_guard_config(config_path=None):
         if data and isinstance(data, dict):
             if data.get("working_dir_root"):
                 result["working_dir_root"] = data["working_dir_root"]
-            result["terminal_guard"] = _parse_terminal_guard_value(data.get("terminal_guard"))
             result["allowlist"] = _parse_allowlist(data.get("allowlist"))
-            result["write_audit"] = _parse_write_audit_value(data.get("write_audit"))
-            result["write_audit_entry_cap"] = _parse_entry_cap_value(
-                data.get("write_audit_entry_cap", 2000)
-            )
     except Exception as exc:
         logger.debug("dir-whip: failed to load dir-whip-config.yaml: %s", exc)
 
