@@ -38,11 +38,12 @@ except ImportError:
     _projects_get_active_id = None
 
 try:
-    from . import audit, config, events, report, sessions, state, stats, verdict
+    from . import audit, config, events, logsetup, report, sessions, state, stats, verdict
 except ImportError:
     import audit
     import config
     import events
+    import logsetup
     import report
     import sessions
     import state
@@ -130,6 +131,11 @@ def register(ctx):
     """
     try:
         state.session.registered_ctx = ctx
+        # SCR-040 R5: dedicated diagnostic log dir-whip.log — attach FIRST
+        # so every later register-time breadcrumb is captured (fail-open:
+        # setup() runs its own three-tier degradation chain and never
+        # raises; a log failure must not break registration).
+        logsetup.setup()
         # P6 (31.13): precompute plugin paths/version once at register;
         # message building and report rendering read state instead of
         # __file__ (always the bundled copies inside the plugin package).
