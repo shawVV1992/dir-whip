@@ -1,8 +1,8 @@
-# dir-whip — Complete Specification
+﻿# dir-whip — Complete Specification
 
-- Version: 2.8
-- Date: 2026-08-27 (SCR-040 amendment v2.8 — continuation-nudge rework + observability pack + config/report surface rework; previous freeze v2.7 2026-08-27)
-- Status: FROZEN (v2.8, implemented and re-frozen 2026-08-28; SCR-040 implementation batch complete) — SCR-040 amendment v2.8 (scr-040-plan.md / feedback/11, user decisions 2026-08-27): (1) continuation-nudge rework — nudge message settle-first (shares the L1 remediation sentence helper, exact `dir_whip_settle(paths=[...])` call form, allow_path never mentioned) + plugin-side session-cumulative cap=3 (`PRE_VERIFY_NUDGE_CAP` hardcoded, overturning the v2.7 "hook adds no throttling" clause); (2) observability pack — four new stats rule_keys (`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`; emits stay at 7) + new module logsetup.py attaching a dedicated diagnostic log dir-whip.log (profile-aware, DEBUG-full, CLH→stdlib→console three-tier degradation, 5MiB×3+delay+utf-8, absolute-path policy); (3) report surface rework — State values become enabled/disabled, Terminal Guard and Reminder lines removed, Allowlist rendered as a multi-line block (header line + one line each for Files/Dirs, valued sections indented 2 spaces, strict-empty keeps the single line), Health moved last with Good/brief-problem-list two states, a Debug Log line added near the end; (4) three-key de-configuration (BREAKING) — `terminal_guard` / `write_audit` / `write_audit_entry_cap` stop being user config (internal constants: interception/audit always on, cap=2000), leftover keys completely ignored; shipped template comments corrected to the v2.7 structured tutorial; (5) placement-wording de-ambiguation (R9, folded in 2026-08-27 after a realhost misread incident) — block message (5.3) and session-start reminder (3.7/5.4) arrow shorthand replaced with explicit `Outputs/<filename>` / `.tmp/<filename>` sentences, create_session_dir.py stdout gains a placement hint line (4.1 output contract). Terminology unified: external-facing 「dir-whip 续推兜底」/"dir-whip continuation nudge"; the host hook identifier `pre_verify` survives only in implementation contexts. session_dir_pattern judged worth developing, registered in feedback/11 for a separate SCR. Historical: SCR-039 v2.7 (activated 2026-08-26: prompt-channel rework + same-turn self-heal + structured allowlist; re-frozen 2026-08-27 at implementation-complete state). Earlier activations: 2026-08-22 — SCR-033 terminal false-positive fix (v2.1),
+- Version: 2.9
+- Date: 2026-08-28 (SCR-041 amendment v2.9 — audit-escape closure + allow_path user-confirmation protocol; previous freeze v2.8 2026-08-28)
+- Status: ACTIVE (v2.9, activated 2026-08-28; re-freeze on implementation completion) — SCR-041 amendment v2.9 (scr-041-plan.md, user decisions 2026-08-28): (1) re-scan semantics tightened (R1) — the L3 settlement re-scan classifies pending paths by the CONFIG allowlist only (allowlist files/dirs + session-dir); a runtime-allowlist entry no longer settles a recorded violation (runtime exemption = prospective-only: future writes pass Tier 0, past violations stay pending); the pre-write sanction flow is unaffected (the audit diff classifies at write time, so a path exempted BEFORE the write never creates a violation); (2) allow_path entry gating (R2) — subagent calls rejected with a parent-guidance variant + stats rule_key allow-path-subagent-rejected (bus-skipped), and the Working Directory root itself is rejected as a path argument (workspace-wide exemptions belong in config allowlist dirs authored by the user); (3) two-step user-confirmation protocol (R3) — dir_whip_allow_path gains an optional confirm parameter: the first call (no confirm) returns a confirmation payload (risk + removal method + relay instruction) WITHOUT adding, and confirm=true is honored only for a path whose confirmation payload was already issued this session (mandatory two-step, session-memory state); (4) L1/L3 message rewording (R4) — the config-allowlist remediation option is re-attributed to the USER (ask the user to add) with the latch-period freeze made explicit (all writes frozen incl. config edits), removing the false affordance that cost two gate-blocked turns in realhost. Version target v0.6.1 (patch — enforcement hardening: no config surface change, confirm is a new optional parameter). Historical: SCR-040 v2.8 (activated 2026-08-27: continuation-nudge rework + observability pack + config/report surface rework incl. three-key de-configuration BREAKING; re-frozen 2026-08-28 after the implementation batch). Historical: SCR-039 v2.7 (activated 2026-08-26: prompt-channel rework + same-turn self-heal + structured allowlist; re-frozen 2026-08-27 at implementation-complete state). Earlier activations: 2026-08-22 — SCR-033 terminal false-positive fix (v2.1),
   SCR-034 root write audit feature (v2.2), SCR-034 acceptance clauses 7.6 (v2.3), all
   re-frozen after completion. Changes go through the SCR process again (spec-changes.md).
   (SCR-024 root), superseding the v1.4 baseline. v0.2.0 implemented and
@@ -1173,7 +1173,7 @@ rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 
 ### 5.11 Runtime Allowlist (retained, Q2)
 
-The plugin registers the tool `dir_whip_allow_path(path)` at
+The plugin registers the tool `dir_whip_allow_path(path, confirm=false)` at
 `register()` (via `ctx.register_tool`) -- this is the plugin's eager,
 resident tool; the `dir_whip_settle` self-heal tool (5.18) is lazily
 registered on the first L1 audit notice instead. Its handler adds `path`
@@ -1184,19 +1184,89 @@ register/re-register) also clears it, so entries never leak into the next
 session. The tool's description tells the agent the entry is "exempt for this
 session".
 
+v2.9 semantics (SCR-041 R1): a runtime entry is PROSPECTIVE-ONLY — future
+writes under the path pass Tier 0, but a runtime entry never settles a
+recorded root-write violation: the L3 settlement re-scan (5.18) classifies
+pending paths by the CONFIG allowlist only (allowlist `files`/`dirs`
+entries + session directories). The pre-write sanction flow is unaffected:
+a path exempted BEFORE the write never creates a violation (the audit diff
+classifies at write time through the same chain).
+
 Matching semantics: entries prefix-match like allowlist `dirs` entries — forward-slash
 normalized and casefolded on Windows; a directory entry exempts its entire
 subtree. (Runtime entries stay absolute-path based — they are user-specified
 per session, unlike the persistent relative `allowlist`.)
 
 Tool registration: the schema follows the OpenAI function format
-(name/description/parameters); the handler signature is `(args, **kwargs)`
-and reads `path` from the args dict, remaining compatible with callers that
-pass a bare string.
+(name/description/parameters) with parameters `path` (string, required)
+and `confirm` (boolean, optional, default false); the handler signature is
+`(args, **kwargs)` and reads `path`/`confirm` from the args dict, remaining
+compatible with callers that pass a bare string.
+
+v2.9 entry gating (SCR-041 R2), checked in order before any state change:
+
+- Subagent calls are REJECTED — the tool is a user-sanction surface and the
+  sanction flows top-down only (user -> main agent -> delegated scope); a
+  subagent that needs an exemption fails and reports back so the parent can
+  ask the user. Response (parent-guidance variant, mirroring the 5.3
+  subagent block variant):
+
+```
+[dir-whip] BLOCKED: dir_whip_allow_path is not available to subagents.
+Exemptions are granted by the user via the main agent. Write to the target
+directory passed by the parent agent, or report back so the parent can ask
+the user.
+```
+
+- The Working Directory root itself is REJECTED as a path argument (one
+  call must not exempt everything; workspace-wide exemptions belong in
+  config allowlist `dirs` authored by the user):
+
+```
+[dir-whip] BLOCKED: the Working Directory root itself cannot be allowlisted.
+Allow a specific file or subdirectory path instead; workspace-wide
+exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user.
+```
+
+- A subagent-rejected call records a stats row `block / allow-path /
+  allow-path-subagent-rejected` — bus-skipped (no generic blocked fanout),
+  mirroring the write-audit-violation precedent (5.13/5.14).
+
+v2.9 two-step user confirmation (SCR-041 R3): adding an entry REQUIRES
+explicit user approval via a mandatory two-step protocol.
+
+- First call (`confirm` absent or false): NOTHING is added; the handler
+  returns the confirmation payload (verbatim below) and records the path in
+  a session-memory `confirmation-issued` set.
+- Second call (`confirm=true`): honored ONLY for a path already in the
+  `confirmation-issued` set; a `confirm=true` without a prior issued
+  payload is rejected with an instruction to call without `confirm` first
+  (the two-step cannot be skipped). On success the entry is added and the
+  regular `runtime-allowlist-add` stats row / bus event fire (5.13/5.14).
+- Payload (verbatim):
+
+```
+[dir-whip] CONFIRMATION REQUIRED: adding "<path>" to the runtime allowlist
+exempts ALL file operations under it from the guard for the rest of this
+session. Root writes under it are NOT remediated by this exemption (they
+stay flagged by the write audit). The entry expires automatically when the
+session ends; persistent exemptions belong in dir-whip-config.yaml
+(allowlist files/dirs, removable via /dir-whip remove).
+Present this to the user and ask for explicit approval. Re-call
+dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
+```
+
+- Removal method (documented only — no revoke capability, user ruling
+  2026-08-28): runtime entries expire automatically at session end
+  (`on_session_start` clear + `reset_cache`); persistent exemptions belong
+  in dir-whip-config.yaml allowlist (`files`/`dirs`), removable via
+  `/dir-whip remove`.
 
 The SKILL.md instructs the agent to call this tool when the user explicitly
 specifies a target path in the conversation, so the user's intent is honored
-without weakening the guard for other paths. The plugin's own tool call is
+without weakening the guard for other paths; under the v2.9 protocol the
+agent relays the confirmation payload to the user and re-calls with
+`confirm=true` only after explicit approval. The plugin's own tool call is
 never intercepted.
 
 ### 5.12 Fail-Open Warning (retained, SCR-004 mechanics)
@@ -1362,7 +1432,7 @@ it lands, the hook only observes.
   Discipline Prompt channel is gone; teaching = session-start discipline
   block (5.4) + block-message completion (5.3) + SKILL.md opt-in load).
 
-### 5.18 Root Write Audit (SCR-034; v2.7 same-turn self-heal)
+### 5.18 Root Write Audit (SCR-034; v2.7 same-turn self-heal; v2.9 re-scan semantics)
 
 The ROOT WRITE AUDIT is the second detection backbone for terminal
 discipline: it OBSERVES what the filesystem actually changed instead of
@@ -1390,10 +1460,17 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   (Hermes first-party precedent: the security-guidance plugin appends a
   warning to the tool result; returning a string replaces the result the
   model sees). When the diff FIRST finds a violation, the terminal result
-  gets one appended notice naming the path and the remediation. v2.7 text:
-  "Remediate now: call `dir_whip_settle` to move it into quarantine, or move
-  it manually into a Session Directory" + the standing warning that further
-  Working Directory writes stay blocked until resolved. HARD CONSTRAINT: one
+  gets one appended notice naming the path and the remediation. v2.9 text
+  (shares the `_remediation_instruction` helper with the continuation nudge —
+  single source of truth; v2.9 R4 rewording re-attributes the
+  config-allowlist option to the USER and makes the latch-period freeze
+  explicit): "Remediate now: call dir_whip_settle(paths=[...]) to move the
+  file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them
+  manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/).
+  To keep the file(s) at the root, ask the user to add them to the allowlist
+  files entries in dir-whip-config.yaml (files: [notes.txt]) — while the
+  block is active all writes are frozen (config edits included). Further
+  writes to the Working Directory are blocked until then." HARD CONSTRAINT: one
   notice per violation, never re-appended on later results (context
   hygiene); error results are not decorated. ORDERING (live-verified
   2026-08-22, 30.12): Hermes fires `transform_tool_result` BEFORE
@@ -1410,7 +1487,13 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   terminal), `pre_tool_call` re-scans the root; the file still present →
   BLOCK the write via the standard block channel (message lists the
   unresolved paths and the remediation). The latch opens when a re-scan
-  finds the path gone or moved to an allowed location. First write cannot be
+  finds the path gone, moved outside the root, or legalized under the CONFIG
+  allowlist (allowlist `files`/`dirs` entries or a session directory).
+  v2.9 (SCR-041 R1): the settlement re-scan classifies by the CONFIG
+  allowlist only — a runtime-allowlist entry (5.11) does NOT settle a
+  recorded violation (runtime exemption is prospective-only: future writes
+  pass Tier 0, past violations stay pending until physical remediation or a
+  user-authored config entry). First write cannot be
   prevented; all FURTHER writes are frozen until remediation. The latch is
   session-scoped and cleared at session start; subagent sessions inherit
   the parent's latch (child_session_ids gate, 5.4/5.16). NOTE (v2.7): while
@@ -1450,7 +1533,14 @@ loop completes within the user turn that triggered the violation.
 - The L3 gate block message (both variants base) appends
   `"Remediate now: call dir_whip_settle(paths=[...])"` (2026-08-26 ruling —
   the gate blocks remediation mv/rm, so the message must name the tool
-  channel; subagent variant stays report-to-parent only).
+  channel; subagent variant stays report-to-parent only). v2.9 (R4): the
+  main-agent Fix sentence re-attributes the config-allowlist option to the
+  USER — "or ask the user to add them to the allowlist files entries in
+  dir-whip-config.yaml (files: [notes.txt]) — while the block is active all
+  writes are frozen (config edits included)" — removing the false
+  affordance of agent-side config edits during the latch (realhost: two
+  gate-blocked turns wasted); the subagent variant and the settle line are
+  unchanged.
 - **Continuation nudge (v2.8 R1/R2 rewrite; host hook identifier `pre_verify`,
   external-facing term 「dir-whip 续推兜底」/"dir-whip continuation nudge")**:
   the plugin registers Hermes' `pre_verify` hook; when this session has
@@ -1472,6 +1562,10 @@ loop completes within the user turn that triggered the violation.
     as the outer bound.
   - Each firing records stats (rule_key `pre-verify-nudge`, reason carries
     the attempt ordinal, 5.13).
+  - v2.9 (SCR-041 R1): a runtime-allowlist entry added after a nudge does
+    NOT clear the pending set — the nudge keeps firing until physical
+    settlement (the allow_path escape observed in v0.6.0 realhost is
+    closed; the cap then bounds the loop as designed).
   KNOWN LIMIT (accepted): pure-terminal violation turns never reach the
   continuation nudge (the host's `_turn_file_mutation_paths` only records
   write_file / patch landings) — there the settle tool's discoverability in
@@ -1902,3 +1996,4 @@ Not implemented in v0.2.0. Design decisions should not block these:
 | 2026-08-25 | v2.6 ACTIVE — SCR-037 amendment v2.6 B2 single-key allowlist (BREAKING): `exempt_paths` + `allowed_root_files` removed as config keys, no backward compat (user 2026-08-25 B2 decision, feedback/09); single unified `allowlist: []` with discriminated `file:<basename>` | `prefix:<abs-path>` (prefix may end with /). 5.6 template replaced, 5.3 Tier0 = allowlist prefix OR runtime-allowlist / root-file = allowlist file, 5.7 `/dir-whip allow <file|prefix:PATH|PATH/>` intelligently discriminates (no slash→file, slash/prefix:→prefix), report single `Allowlist: Files: ...  Prefixes: ...` line, 5.18 audit aligned to single key, 5.11/5.13/5.14/6.2/7.x/8.4 swept. Old keys deleted. Spec activated 2026-08-25, re-freeze pending | User decision 2026-08-25 (B2 clean break) |
 | 2026-08-26 | v2.7 ACTIVE — SCR-039 v0.5.0 (feedback/10): (1) prompt-channel rework — Always-on Discipline Prompt removed (3.7/5.17), conditional session-start discipline block added (5.4: `discipline_applies` predicate + `agent_cwd_fn` slot wired to host `resolve_agent_cwd`; <=280 chars lock; report Reminder status line injected/skipped-outside/skipped-child/unavailable); (2) same-turn self-heal — `dir_whip_settle` tool (lazily registered, pending-set constrained, `.hermes/audit-quarantine/<ts>/` move, subagent-rejected), L1 notice upgraded with settle instruction, L3 latch note (remediation mv/rm blocked while latched -> tool channel), `pre_verify` continuation fallback (mixed-turn hard guarantee; pure-terminal turns = accepted limit + upstream suggestion registered in 9); (3) structured allowlist (BREAKING) — `allowlist` becomes `{files: [...], dirs: [...]}` mapping of working_dir_root-relative paths (dirs multi-level recursive subtree exemption; root itself and outside-root entries rejected; v2.6 flat `file:`/`prefix:` tagged list removed clean-break, legacy ignored fail-closed + `/dir-whip list` hint); `/dir-whip allow|remove|list` unified Files/Dirs two-section numbered presentation (bare remove enumerates current entries; disk-aware bare-name discrimination); block message gains placement-intent rule + allow_path hint. 2/3/4/5/6/7/8 swept. Re-freeze on completion | User decisions 2026-08-26 (feedback/10) |
 | 2026-08-27 | v2.8 ACTIVE — SCR-040 v0.6.0 (scr-040-plan.md / feedback/11, two ruling rounds after the v0.5.0 release): (1) continuation-nudge rework — nudge message rewritten settle-first (shares the L1 remediation sentence helper, exact `dir_whip_settle(paths=[...])` call form, allow_path never mentioned) + plugin-side session-cumulative cap=3 (`PRE_VERIFY_NUDGE_CAP` hardcoded, reset at session start, host per-turn budget kept as outer bound — overturns the v2.7 "hook adds no throttling" clause); grounded in realhost experiment A (one-nudge conversion hard evidence + the agent's allow_path detour); (2) observability pack — 5.13 adds four stats rule_keys (`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`; emits stay at 7) + a diagnostic log file dir-whip.log subsection (new module logsetup.py, profile-aware, DEBUG-full, CLH→stdlib→console three-tier degradation, 5MiB×3+delay+utf-8, absolute-path policy); (3) report surface rework (5.7 layout rewrite) — State values become enabled/disabled, Terminal Guard and Reminder lines removed, Allowlist multi-lined (header line + Files/Dirs one line each, valued sections indented 2 spaces, strict-empty keeps the single line), Health moved last with Good/brief-problem-list two states, a Debug Log line added near the end; (4) three-key de-configuration (BREAKING, 5.6) — terminal_guard/write_audit/write_audit_entry_cap stop being user config, internal constants (interception/audit always on, cap=2000), leftover keys completely ignored, and the `write_audit_autofix` reservation key is removed too (L4 becomes a keyless reserved direction); (5) shipped template comments corrected to the v2.7 structured tutorial. Terminology unified: external-facing 「dir-whip 续推兜底」/"dir-whip continuation nudge", host hook identifier pre_verify only in implementation contexts. (6) placement-wording de-ambiguation (R9, folded in 2026-08-27; realhost incident session 20260827_222411_245249: the block message arrow shorthand `deliverable -> Outputs/` was misread as a literal path template and the file landed at <session>/deliverable/Outputs/) — block message line reworded to `Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).` (5.3), session-start reminder parenthetical reworded accordingly (3.7/5.4; 251 chars <= 280 lock), create_session_dir.py stdout gains a placement hint line (4.1 output contract added); docs first, code/tests land with the SCR-040 implementation batch (40.R9.1). session_dir_pattern judged worth developing, registered in feedback/11 for a separate SCR. Implemented and re-frozen 2026-08-28 (implementation batch 40.x complete; suite 644 passed / 5 skipped / 0 failed) | User decisions 2026-08-27 (scr-040-plan.md rulings: Plan A four records / log absolute paths / report rework + Health last + Allowlist multi-line / three-key de-configuration + leftovers completely ignored / version target 0.6.0) |
+| 2026-08-28 | v2.9 ACTIVE — SCR-041 v0.6.1 (scr-041-plan.md, user decisions 2026-08-28 after the v0.6.0 realhost six-scenario verification): (1) re-scan semantics tightened (R1, 5.18) — the L3 settlement re-scan classifies pending paths by the CONFIG allowlist only (allowlist files/dirs + session-dir); a runtime-allowlist entry no longer settles a recorded violation (runtime exemption = prospective-only: future writes pass Tier 0, past violations stay pending); grounded in the v0.6.0 realhost escape (sessions 20260828_135518_31b5d6 / 20260828_135546_abff8d: the agent self-served allow_path after the nudge, pending cleared, cap=3 unreachable); (2) allow_path entry gating (R2, 5.11) — subagent calls rejected with a parent-guidance variant + stats rule_key allow-path-subagent-rejected (bus-skipped; sanction flows top-down only, user ruling), and the Working Directory root itself rejected as a path argument; (3) two-step user-confirmation protocol (R3, 5.11) — dir_whip_allow_path gains an optional confirm parameter: the first call returns a confirmation payload (risk + removal method + relay instruction) WITHOUT adding and records the path in a session-memory confirmation-issued set; confirm=true is honored only for an already-briefed path (mandatory two-step); removal method documented only (session-end auto-expiry; persistent exemptions via config, /dir-whip remove) — no revoke capability per user ruling; (4) L1/L3 message rewording (R4, 5.18) — the config-allowlist remediation option re-attributed to the USER (ask the user to add) with the latch-period freeze made explicit (all writes frozen incl. config edits), removing the false affordance that cost two gate-blocked turns in realhost. Version target v0.6.1 (patch — enforcement hardening). Re-freeze on completion | User decisions 2026-08-28 (Plan A + subagent policy A + documented-removal-only + v0.6.1 patch) |

@@ -208,7 +208,27 @@ R9 放置措辞去歧义 2026-08-27 并入，文档先行、代码随实施批�
 | 40.R6.1 | 术语扫描：README EN/ZH + spec 正文 + testing-standards/tasks 措辞统一（pre_verify 收敛到实现语境）+ after-install.md 清扫（三键移除 + Debug Log 说明） | 40.R1.2 | 扫描完成 | Done (2026-08-28) |
 | 40.R9.1 | **red+green**：放置措辞去歧义（5.3 block 行 + 3.7/5.4 纪律块括号句 verbatim 锁更新 / 子代理变体负断言迁移至新放置短语 / `len<=280` 保持 / create_session_dir 两行输出契约：路径行+提示行、失败路径 stdout 静默） | 40.1 | 全绿 | Done (2026-08-28) |
 | 40.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.0、发布说明（三键行为变更提示） | 40.R1.2/40.R3.1/40.R4.1/40.R5.1/40.R9.1 | 基线全绿 | Done (2026-08-28: plugin.yaml 0.6.0 hooks 9/emits 7 不变；spec EN/ZH v2.8 re-frozen + changelog/AGENTS/testing-standards 同步；全量 644 passed / 5 skipped / 0 failed；版本断言 test_version_is_050→060 迁移) |
-| 40.10 | 发布 + 真机抽验：tag v0.6.0 + GitHub Release；六场景（见 scr-040-plan.md 六） | 40.9 | 用户门禁 | Pending |
+| 40.10 | 发布 + 真机抽验：tag v0.6.0 + GitHub Release；六场景（见 scr-040-plan.md 六） | 40.9 | Done (2026-08-28: Release Done（main=0d3dcfe + tag v0.6.0 + GitHub Release Latest 已推送，0.6.0_dev 已删）；真机六场景整体 PASS 无 FAIL（报告=realhost-verification-report.md）：场景 2/3/4/5/6 全 PASS，场景 1 机制链 PASS + 转化偏差归因记录（allow_path 逃逸系用户意图冲突所致，文案假设证伪，登记观察项待用户裁决后续 SCR）；config 还原哈希一致、根测试文件已清) |
+
+## Phase 10 — SCR-041 v0.6.1 审计逃逸闭合 + allow_path 用户确认制 (41.x)
+
+Acceptance = mapped testing-standards §7.11 matrix (v2.9) all green + KPI
+column. Active branch: `0.6.1_dev` (from `main@0d3dcfe` v0.6.0).
+Design source: v0.6.0 真机六场景验证（场景 1/4 逃逸实证 + cap 未达）+ 观察项
+①②③ 立项裁决 2026-08-28 + `docs/scr-041-plan.md`——R1-R4 定稿设计
+（方案A 重扫语义收紧 + 子代理策略A 禁止调用 + 去除方法仅文档化 + v0.6.1
+patch，用户逐项拍板）。
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 41.1 | **文档批**：`scr-041-plan.md` + spec EN/ZH v2.9 ACTIVE（5.11 工具契约重写：入口门禁+确认协议 verbatim / 5.18 重扫语义 + L1/L3 文案 verbatim / changelog v2.9）+ tasks Phase 10 + testing-standards 7.11 + AGENTS.md 同步 | - | 文档落盘 | Done (2026-08-28) |
+| 41.R1.1 | **red**：重扫不因 runtime 豁免销案（豁免后 pending 保留 / nudge attempt 序号持续断言） | 41.1 | red 确认 | Pending |
+| 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类） | 41.R1.1 | 全绿 | Pending |
+| 41.R2.1 | **red+green**：allow_path 入口门禁（子代理拒绝 + 父代指引 verbatim / 整根拒绝 verbatim / stats `allow-path-subagent-rejected` 行 + bus-skip） | 41.1 | 全绿 | Pending |
+| 41.R3.1 | **red+green**：两步确认协议（schema confirm 参数 / 首调确认载荷 verbatim 且不添加 / confirmation-issued 强制两步 / 未签发 confirm 拒绝 / 成功后常规 stats+bus / SKILL.md 措辞同步） | 41.1 | 全绿 | Pending |
+| 41.R4.1 | **red+green**：L1/L3 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 / 子代理变体与 settle 行不变） | 41.1 | 全绿 | Pending |
+| 41.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.1、spec re-freeze（v2.9 FROZEN）、发布说明（重扫语义行为变更提示） | 41.R1.2/41.R2.1/41.R3.1/41.R4.1 | 基线全绿 | Pending |
+| 41.10 | 真机复验：六检查点（逃逸闭合 / 子代理拒绝 / 整根拒绝 / 确认流 / 预授权回归 / 新文案渲染，见 scr-041-plan.md 六） | 41.9 | 报告落盘 | Pending |
 
 ---
 

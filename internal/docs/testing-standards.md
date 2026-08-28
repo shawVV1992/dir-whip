@@ -713,6 +713,23 @@ test_config_surface.py.
 | 6 | Report tail: Stats File before Debug Log; Debug Log three states (path / +no records yet / +unavailable); Health LAST (Good, or `N issue(s)` + indented problem lines) (5.7 R6) | TestReportRework | 40.R4.1 | Done (2026-08-28) |
 | 7 | Three-key de-configuration: parser stops reading terminal_guard/write_audit/write_audit_entry_cap; interception and audit always on; entry guardrail internal constant 2000; leftover keys completely ignored (no hint, no log); TestWriteAuditConfig legacy cases migrated/removed (5.6 R7) | TestConfigSurface | 40.R5.1 | Done (2026-08-28) |
 
+## 7.11 v0.6.1 — SCR-041 acceptance matrix (spec v2.9)
+
+Maps 1:1 to tasks.md Phase 10 (41.R1.* .. 41.R4.*) and the test files
+test_allowlist_commands.py (extended: entry gating + confirmation protocol) /
+test_settle_selfheal.py (extended: re-scan semantics) / test_config_surface.py
+(message verbatim locks).
+
+| # | Criterion (spec ref) | Mapped tests | Task | Status |
+|---|----------------------|--------------|------|--------|
+| 1 | Re-scan semantics: a runtime-allowlist entry does NOT settle a recorded violation — pending stays, nudge keeps firing (attempt ordinals continue); config allowlist files/dirs + session-dir still settle (5.18 R1) | TestSettleSelfheal (re-scan cases) | 41.R1.2 | Pending |
+| 2 | Pre-write sanction regression: a path exempted BEFORE the write creates no violation (audit diff classifies at write time) — legitimate flow unchanged (5.11/5.18 R1) | TestSettleSelfheal / TestAllowlistCommands | 41.R1.2 | Pending |
+| 3 | Subagent rejection: allow_path from a subagent session returns the parent-guidance variant verbatim; stats row `block/allow-path/allow-path-subagent-rejected` recorded; bus-skipped (no generic blocked fanout) (5.11 R2) | TestAllowlistCommands | 41.R2.1 | Pending |
+| 4 | Root rejection: allow_path(working_dir_root) returns the root-rejection message verbatim; no state change (5.11 R2) | TestAllowlistCommands | 41.R2.1 | Pending |
+| 5 | Two-step confirmation: first call (no confirm) returns the confirmation payload verbatim WITHOUT adding + records confirmation-issued; confirm=true honored only for an already-briefed path; unbriefed confirm=true rejected with re-issue instruction; success fires the regular runtime-allowlist-add stats/bus (5.11 R3) | TestAllowlistCommands | 41.R3.1 | Pending |
+| 6 | L1/L3 message verbatim locks: config option re-attributed to the USER ("ask the user to add") + latch-period freeze explicit sentence; subagent variants and settle lines unchanged (5.18 R4) | TestConfigSurface / TestSettleSelfheal | 41.R4.1 | Pending |
+| 7 | Full suite green at baseline (644 passed / 5 skipped re-measured at 40.9; SCR-041 additions on top) | full suite | 41.9 | Pending |
+
 ---
 
 _Test-standards history: v0.1.0 archived at `archive/v0.1.0/` (test-evaluation-cases.md);

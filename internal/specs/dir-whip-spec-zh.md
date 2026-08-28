@@ -1,8 +1,8 @@
-# dir-whip — 完整规范
+﻿# dir-whip — 完整规范
 
-- 版本：2.8
-- 日期：2026-08-27（SCR-040 修正 v2.8——续推兜底优化 + 可观测性包 + 配置面/报告面重构；上次冻结 v2.7 2026-08-27）
-- 状态：冻结（FROZEN，v2.8，2026-08-28 实施批完成 re-freeze）——SCR-040 修正 v2.8（scr-040-plan.md / feedback/11，用户 2026-08-27 决策）：(1) 续推兜底优化——nudge 消息 settle-first（与 L1 共享 remediation 句式、精确 `dir_whip_settle(paths=[...])` 调用形态、全文不提 allow_path）+ 插件侧会话累计 cap=3（`PRE_VERIFY_NUDGE_CAP` 硬编码，推翻 v2.7"钩子不自加"句）；(2) 可观测性包——四条新 stats rule_key（`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`；emits 保持 7）+ 新模块 logsetup.py 装配专用诊断日志 dir-whip.log（profile-aware、DEBUG 全量、CLH→stdlib→console 三级降级、5MiB×3+delay+utf-8、绝对路径口径）；(3) 报告面重构——State 值改 enabled/disabled、删 Terminal Guard 与 Reminder 行、Allowlist 多行化（头行+Files/Dirs 各一行、有值段首缩进 2 空格、严格空保留单行）、Health 置末尾 Good/简要问题两态、末段新增 Debug Log 行；(4) 三键去配置化（BREAKING）——`terminal_guard` / `write_audit` / `write_audit_entry_cap` 停止作为用户配置（内部常量化：拦截/审计恒开、cap=2000），遗留键完全无视；shipped 模板注释修正为 v2.7 结构化教程；(5) 放置措辞去歧义（R9，2026-08-27 真机误读事故后并入）——block 消息（5.3）与会话开始纪律块（3.7/5.4）箭头简写改为显式 `Outputs/<filename>` / `.tmp/<filename>` 句式，create_session_dir.py stdout 增加放置提示行（4.1 输出契约）。术语统一：对外「dir-whip 续推兜底」/"dir-whip continuation nudge"，宿主钩子标识 `pre_verify` 仅存实现语境。session_dir_pattern 值得开发已登记 feedback/11 待独立 SCR。历史：SCR-039 v2.7（2026-08-26 激活：提示通道重排 + 同轮自愈 + 结构化 allowlist；2026-08-27 实施完毕 re-freeze）。此前各轮激活：2026-08-22——SCR-033 terminal 误报修复（v2.1）、
+- 版本：2.9
+- 日期：2026-08-28（SCR-041 修正 v2.9 — 审计逃逸闭合 + allow_path 用户确认协议；上次冻结 v2.8 2026-08-28）
+- 状态：激活（ACTIVE，v2.9，2026-08-28；待实施完成后 re-freeze） — SCR-041 修正 v2.9（scr-041-plan.md，用户 2026-08-28 决策）：(1) 重扫语义收紧（R1） — L3 清偿重扫按 config 口径分类 pending 路径（allowlist files/dirs + session-dir）；runtime 豁免条目不再销案已记录违规（runtime 豁免 = 前瞻放行：未来写入过 Tier 0，历史违规保持 pending）；预授权流程不受影响（审计 diff 在写入时分类，写入前豁免的路径不产生违规）；(2) allow_path 入口门禁（R2） — 子代理调用拒绝（父代指引变体 + stats rule_key allow-path-subagent-rejected，bus-skip；制裁只能自上而下流动），working_dir_root 自身拒绝作为 path 参数（全工作区豁免属 config allowlist dirs，用户亲笔）；(3) 两步用户确认协议（R3） — dir_whip_allow_path 增加可选 confirm 参数：首调（无 confirm）返回确认载荷（风险 + 去除方法 + 转述指令）且不添加，confirm=true 仅在该路径本会话已签发确认载荷后被接受（强制两步，会话内存态）；(4) L1/L3 文案改述（R4） — config 白名单清偿选项改归属用户（ask the user to add），闩锁期写类全冻结显式化（含 config 编辑），消除真机白耗两轮的假可供性；版本目标 v0.6.1（patch — 执法加固：无配置面变化， confirm 为新增可选参数）。历史：SCR-040 v2.8（2026-08-27 激活：续推兜底优化 + 可观测性包 + 配置面/报告面重构含三键去配置化 BREAKING；2026-08-28 实施批完成 re-freeze）。历史：SCR-039 v2.7（2026-08-26 激活：提示通道重排 + 同轮自愈 + 结构化 allowlist；2026-08-27 实施完毕 re-freeze）。此前各轮激活：2026-08-22——SCR-033 terminal 误报修复（v2.1）、
   SCR-034 根目录写入审计新特性（v2.2）、SCR-034 验收条款 7.6（v2.3），均
   完成后再冻结。变更重新走 SCR 流程（spec-changes.md）。
 - 变更策略：活文档（方案 C）。变更通过 git commit message 记录。
@@ -1018,23 +1018,85 @@ def is_inside_session_dir(path, working_dir_root):
 
 ### 5.11 运行时豁免表（保留，Q2）
 
-plugin 在 `register()` 时注册工具 `dir_whip_allow_path(path)`
+plugin 在 `register()` 时注册工具 `dir_whip_allow_path(path, confirm=false)`
 （通过 `ctx.register_tool`）——这是插件的常驻急切注册工具；`dir_whip_settle`
 自愈工具（5.18）改为在首条 L1 审计通告时懒注册。其 handler 将 `path`
 加入**会话级**的内存豁免表，在 Tier 0（5.3 步骤 6）与 allowlist `dirs` 条目合并。豁免表在每个会话起始清空
 （`on_session_start`，5.4）；`reset_cache()`（插件注册/重注册时调用）也会清空
 ——条目不会泄漏到下一会话。工具描述向 agent 说明该条目"本会话豁免"。
 
+v2.9 语义（SCR-041 R1）：runtime 条目是**前瞻性**的——未来对该路径的写入过
+Tier 0，但 runtime 条目**不清偿**已记录的根目录写入违规：L3 清偿重扫（5.18）
+按 **config 口径**分类 pending 路径（allowlist `files`/`dirs` 条目 + 会话目录）。
+预授权流程不受影响：写入**之前**豁免的路径不产生违规（审计 diff 在写入时经
+同一分类链判定）。
+
 匹配语义：与 allowlist `dirs` 条目一致的前缀匹配——forward-slash 归一化 + Windows 下
 casefold；目录条目豁免其整个子树。（运行时条目保持绝对路径——它们是用户逐会话
 指定的，不同于持久化的相对 `allowlist`。）
 
-工具注册：schema 采用 OpenAI function 格式（name/description/parameters）；
-handler 签名为 `(args, **kwargs)`，从 args dict 读取 `path`，兼容以裸字符串
+工具注册：schema 采用 OpenAI function 格式（name/description/parameters），
+参数 `path`（string，必填）与 `confirm`（boolean，可选，默认 false）；
+handler 签名为 `(args, **kwargs)`，从 args dict 读取 `path`/`confirm`，兼容以裸字符串
 调用的调用方。
 
+v2.9 入口门禁（SCR-041 R2），在任何状态变更前按序检查：
+
+- **子代理调用拒绝**——本工具是用户制裁面，制裁只能自上而下流动
+  （用户 → 主代理 → 委派范围）；需要豁免的子代理失败并上报父代，
+  由父代询问用户。返回父代指引变体（与 5.3 子代理 block 变体同型）：
+
+```
+[dir-whip] BLOCKED: dir_whip_allow_path is not available to subagents.
+Exemptions are granted by the user via the main agent. Write to the target
+directory passed by the parent agent, or report back so the parent can ask
+the user.
+```
+
+- **working_dir_root 自身拒绝**作为 path 参数（一次调用不得豁免一切；
+  全工作区豁免属 config allowlist `dirs`，由用户亲笔）：
+
+```
+[dir-whip] BLOCKED: the Working Directory root itself cannot be allowlisted.
+Allow a specific file or subdirectory path instead; workspace-wide
+exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user.
+```
+
+- 子代理拒绝调用记录 stats 行 `block / allow-path /
+  allow-path-subagent-rejected`——bus-skip（无通用 blocked 扇出），
+  与 write-audit-violation 先例同型（5.13/5.14）。
+
+v2.9 两步用户确认（SCR-041 R3）：添加条目**必须**经用户显式批准，
+强制两步协议。
+
+- 首调（`confirm` 缺省或 false）：**不添加任何条目**；handler 返回确认载荷
+  （verbatim 见下）并将该路径记入会话内存 `confirmation-issued` 集合。
+- 重调（`confirm=true`）：仅当该路径已在 `confirmation-issued` 集合时被接受；
+  未签发载荷而直接 `confirm=true` → 拒绝并指示先走首调（两步不可跳过）。
+  成功后正常添加条目，常规 `runtime-allowlist-add` stats 行 / 总线事件照发
+  （5.13/5.14）。
+- 确认载荷（verbatim）：
+
+```
+[dir-whip] CONFIRMATION REQUIRED: adding "<path>" to the runtime allowlist
+exempts ALL file operations under it from the guard for the rest of this
+session. Root writes under it are NOT remediated by this exemption (they
+stay flagged by the write audit). The entry expires automatically when the
+session ends; persistent exemptions belong in dir-whip-config.yaml
+(allowlist files/dirs, removable via /dir-whip remove).
+Present this to the user and ask for explicit approval. Re-call
+dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
+```
+
+- 去除方法（仅文档化——无撤销能力，用户裁决 2026-08-28）：runtime 条目在
+  会话结束自动失效（`on_session_start` 清空 + `reset_cache`）；持久豁免属
+  dir-whip-config.yaml allowlist（`files`/`dirs`），可经 `/dir-whip remove`
+  移除。
+
 SKILL.md 指示 agent：当用户在对话中显式指定目标路径时调用此工具登记，
-从而尊重用户意图而不削弱对其他路径的约束。plugin 自身工具调用永不被拦截。
+从而尊重用户意图而不削弱对其他路径的约束；v2.9 协议下 agent 将确认载荷
+转述给用户，仅在获得显式批准后带 `confirm=true` 重调。plugin 自身工具调用
+永不被拦截。
 
 ### 5.12 fail-open 告警（保留，SCR-004 机制）
 
@@ -1167,7 +1229,7 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 - `register_system_prompt_section()`：v2.7 **移除**（常驻纪律提示通道取消；
   教导 = 会话开始纪律块（5.4）+ block 消息补全（5.3）+ SKILL.md opt-in 加载）。
 
-### 5.18 根目录写入审计（SCR-034；v2.7 同轮自愈）
+### 5.18 根目录写入审计（SCR-034；v2.7 同轮自愈；v2.9 重扫语义）
 
 根目录写入审计是 terminal 纪律的**第二条检测主干**：观察文件系统**实际
 发生了什么**，而非从命令字符串推断意图。命令解析拦截（5.10）保留为廉价事前
@@ -1189,9 +1251,15 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 - **L1 教学——fire-once 单次通告**：经 `transform_tool_result` 钩子（Hermes
   官方先例：security-guidance 插件向工具结果追加警告；返回字符串即替换模型
   所见结果）。diff **首次**发现违规时，terminal 结果末尾追加一次通告，写明
-  路径与处置。v2.7 文案："Remediate now: call `dir_whip_settle` to move it
-  into quarantine, or move it manually into a Session Directory" + 常设警告
-  （清偿前 Working Directory 写入持续被阻塞）。**硬约束**：同一违规只通告一次，
+  路径与处置。v2.9 文案（与续推兜底共享 `_remediation_instruction` helper——
+   单一事实源；v2.9 R4 改述把 config 白名单选项改归属**用户**并显式化闩锁期
+   冻结）："Remediate now: call dir_whip_settle(paths=[...]) to move the
+   file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them
+   manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/).
+   To keep the file(s) at the root, ask the user to add them to the allowlist
+   files entries in dir-whip-config.yaml (files: [notes.txt]) — while the
+   block is active all writes are frozen (config edits included). Further
+   writes to the Working Directory are blocked until then." **硬约束**：同一违规只通告一次，
   永不随后续结果重复追加（上下文卫生）；错误结果不加装饰。**时序（2026-08-22
   真机实测，30.12）**：Hermes 对 terminal 工具先触发 `transform_tool_result`
   后触发 `post_tool_call`，故审计重扫在 `transform_tool_result` 内先行（通告
@@ -1203,7 +1271,11 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 - **L3 清偿闸门（关键）**：未清偿违规按会话**锁存**。下一次**写入类工具**
   （write_file / patch / terminal）调用时，`pre_tool_call` 重扫根目录；文件仍在
   → 经标准 block 通道**拦截**该次写入（消息列举未清偿路径与处置指引）。重扫
-  发现路径已消失或已移入合法位置 → 闸门打开。第一笔写入拦不住；**清偿之前
+   发现路径已消失、已移出根目录、或已按 **config 口径**合法化（allowlist
+   `files`/`dirs` 条目或会话目录）→ 闸门打开。v2.9（SCR-041 R1）：清偿重扫
+   按 **config 口径**分类——runtime 豁免条目（5.11）**不清偿**已记录违规
+   （runtime 豁免=前瞻放行：未来写入过 Tier 0，历史违规保持 pending，直至
+   物理清偿或用户亲笔 config 条目）。第一笔写入拦不住；**清偿之前
   后续写入全部冻结**。锁存会话级、会话起始清空；子会话继承父会话锁存
   （child_session_ids 门，5.4/5.16）。注（v2.7）：锁存期间**一切**写入类调用
   被拦——包括清偿性的 `mv`/`rm`——因此 agent 自愈走 `dir_whip_settle`
@@ -1231,8 +1303,13 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
   以 JSON 字符串呈现。统计仅 `allow/settle/write-audit-settle` 入
   stats/log——**不发 bus 事件**（emits 保持 7 不变）。
 - **L3 闸门消息（深化裁决 2026-08-26，修订原"消息不动"）**：追加
-  `"Remediate now: call dir_whip_settle(paths=[...])"` 行（闸门拦截清偿性
-  mv/rm，消息必须指明工具通道；子代理变体保持仅上报父代）。
+   `"Remediate now: call dir_whip_settle(paths=[...])"` 行（闸门拦截清偿性
+   mv/rm，消息必须指明工具通道；子代理变体保持仅上报父代）。v2.9（R4）：
+   主代理 Fix 句把 config 白名单选项改归属**用户**——"or ask the user to add
+   them to the allowlist files entries in dir-whip-config.yaml (files:
+   [notes.txt]) — while the block is active all writes are frozen (config
+   edits included)"——消除"agent 闩锁期自己改 config 清偿"的假可供性
+   （真机：两轮被闸门白拦）；子代理变体与 settle 行不变。
 - **续推兜底（v2.8 R1/R2 重写；宿主钩子标识 `pre_verify`，对外术语
   「dir-whip 续推兜底」/"dir-whip continuation nudge"）**：插件注册 Hermes 的
   `pre_verify` 钩子；当本会话存在未清偿 pending 违规且宿主报告本回合有文件
@@ -1248,7 +1325,10 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
     None 放行回合自然收尾；宿主每轮 verify-nudge 预算
     （`max_verify_nudges()`）保留为外层边界。
   - 触发即记 stats（rule_key `pre-verify-nudge`，reason 带 attempt 累计
-    序号，5.13）。
+     序号，5.13）。
+   - v2.9（SCR-041 R1）：nudge 之后添加的 runtime 豁免条目**不清空** pending
+     集——续推持续到物理清偿为止（v0.6.0 真机观测到的 allow_path 逃逸就此
+     关闭；cap 随后按设计约束循环）。
   已知限制（明示接受）：纯终端违规轮永远不会到达续推兜底（宿主
   `_turn_file_mutation_paths` 只记 write_file / patch 落地）——该场景由 L1
   通告中 settle 工具的可发现性承载闭环；"terminal 写入计入 mutation ledger"
@@ -1266,8 +1346,9 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
 ≤500 条目 p95 < 10ms。
 
 **已知限制。** 后台进程（`cmd &`）在 post 钩子之后落盘 → 落在审计窗口外——
-由 cron audit_workspace.py 兜底（同一 diff 逻辑可复用）。网络盘 stat 可能
-偏慢 → 可配置关闭。同任务并行 terminal 为 last-snapshot-wins（Hermes 每轮
+   由 cron audit_workspace.py 兜底（同一 diff 逻辑可复用）。网络盘 stat 可能
+   偏慢 → v2.8 起 `write_audit` 配置出口已删除（审计恒开）；受影响用户只能
+   经宿主 `plugins.enabled` 白名单停用该档案的插件。同任务并行 terminal 为 last-snapshot-wins（Hermes 每轮
 顺序执行工具，风险可接受）。深层子目录内容不审（根级纪律是范围，与 5.10
 root-file 语义对齐）。
 
@@ -1618,3 +1699,4 @@ v0.2.0 不实现。设计决策不应阻塞这些方向：
 | 2026-08-25 | v2.6 已激活——SCR-037 修正 v2.6 B2 单键 allowlist（BREAKING）：`exempt_paths` + `allowed_root_files` 作为配置键已删除，不向后兼容（用户 2026-08-25 B2 决策，feedback/09）；单一统一 `allowlist: []` 且条目区分为 `file:<basename>` | `prefix:<abs-path>`（prefix 可带末尾 /）。5.6 模板替换，5.3 Tier0 = allowlist prefix 或 runtime-allowlist / 根文件 = allowlist file，5.7 `/dir-whip allow <file|prefix:PATH|PATH/>` 智能区分（无斜杠→file，含斜杠/prefix:→prefix），报告单行 `Allowlist: Files: ...  Prefixes: ...`，5.18 审计对齐单键，5.11/5.13/5.14/6.2/7.x/8.4 已扫改。旧键已删除。规范 2026-08-25 激活，待冻结 | 用户决策 2026-08-25（B2 彻底切换） |
 | 2026-08-26 | v2.7 已激活——SCR-039 v0.5.0（feedback/10）：(1) 提示通道重排——常驻纪律提示移除（3.7/5.17），新增条件化会话开始纪律块（5.4：`discipline_applies` 谓词 + `agent_cwd_fn` 注入槽接宿主 `resolve_agent_cwd`；≤280 chars 锁定；报告 Reminder 状态行 injected/skipped-outside/skipped-child/unavailable）；(2) 同轮自愈——`dir_whip_settle` 工具（懒注册、pending 集合硬约束、`.hermes/audit-quarantine/<ts>/` 搬移、子代理拒绝），L1 通告升级附 settle 指引，L3 锁存注记（锁存期间清偿 mv/rm 亦被拦 -> 走工具通道），注册 `pre_verify` 续轮兜底（混合轮次硬保证；纯终端轮=明示接受限制 + upstream 建议登记于 9）；(3) 结构化 allowlist（BREAKING）——`allowlist` 改为 `{files: [...], dirs: [...]}` 映射、条目相对 working_dir_root（dirs 多级递归子树豁免；根自身与根外条目拒绝；v2.6 平铺 `file:`/`prefix:` 标签列表删除 clean-break，遗留 fail-closed 忽略 + `/dir-whip list` 提示）；`/dir-whip allow|remove|list` 统一 Files/Dirs 两段式编号呈现（bare remove 枚举当前条目；裸名磁盘感知判别）；block 消息新增放置意图规则 + allow_path 指引。2/3/4/5/6/7/8 全扫描。完成后 re-freeze | 用户决策 2026-08-26（feedback/10） |
 | 2026-08-27 | v2.8 已激活——SCR-040 v0.6.0（scr-040-plan.md / feedback/11，发布后讨论两轮裁决）：(1) 续推兜底优化——nudge 文案 settle-first 重写（与 L1 共享 remediation 句式 helper、精确 `dir_whip_settle(paths=[...])` 调用形态、全文不提 allow_path）+ 插件侧会话累计 cap=3（`PRE_VERIFY_NUDGE_CAP` 硬编码、会话起始重置、宿主每轮预算保留为外层边界——推翻 v2.7"钩子不自加"句）；依据真机实验 A（nudge 一次转化硬证据 + agent 绕 allow_path 偏差）；(2) 可观测性包——5.13 新增四条 stats rule_key（`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`；emits 保持 7）+ 诊断日志文件 dir-whip.log 小节（新模块 logsetup.py、profile-aware、DEBUG 全量、CLH→stdlib→console 三级降级、5MiB×3+delay+utf-8、绝对路径口径）；(3) 报告面重构（5.15→5.7 布局重写）——State 值改 enabled/disabled、删 Terminal Guard 与 Reminder 行、Allowlist 多行化（头行+Files/Dirs 各一行、有值段首缩进 2 空格、严格空保留单行）、Health 置末尾 Good/简要问题两态、末段新增 Debug Log 行；(4) 三键去配置化（BREAKING，5.6）——terminal_guard/write_audit/write_audit_entry_cap 停止用户配置、内部常量化（拦截/审计恒开、cap=2000）、遗留键完全无视，`write_audit_autofix` 预留键一并删除（L4 转为无键预留方向）；(5) shipped 模板注释修正为 v2.7 结构化教程。术语统一：对外「dir-whip 续推兜底」/"dir-whip continuation nudge"，宿主钩子标识 pre_verify 仅存实现语境。(6) 放置措辞去歧义（R9，2026-08-27 并入；真机事故会话 20260827_222411_245249：block 消息箭头简写 `deliverable -> Outputs/` 被误读为字面路径模板，文件落 <session>/deliverable/Outputs/）——block 消息行改述为 `Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).`（5.3），会话开始纪律块括号句同步改述（3.7/5.4；251 字符 ≤ 280 锁定），create_session_dir.py stdout 增加放置提示行（4.1 输出契约新增）；文档先行，代码/测试随 SCR-040 实施批落地（40.R9.1）。session_dir_pattern 值得开发登记 feedback/11 待独立 SCR。2026-08-28 实施批完成 re-freeze（套件 644 passed / 5 skipped / 0 failed） | 用户决策 2026-08-27（scr-040-plan.md 两轮裁决：方案 A 四条记录 / 日志绝对路径 / 报告重构+Health 置末尾+Allowlist 多行 / 三键去配置化+遗留完全无视 / 版本目标 0.6.0） |
+| 2026-08-28 | v2.9 激活 — SCR-041 v0.6.1（scr-041-plan.md，用户 2026-08-28 决策，v0.6.0 真机六场景验证后立项）：(1) 重扫语义收紧（R1，5.18）——L3 清偿重扫按 config 口径分类 pending 路径（allowlist files/dirs + session-dir）；runtime 豁免条目不再销案已记录违规（runtime 豁免=前瞻放行：未来写入过 Tier 0，历史违规保持 pending）；立项证据=v0.6.0 真机逃逸（会话 20260828_135518_31b5d6 / 20260828_135546_abff8d：agent 在 nudge 后自助 allow_path，pending 清空，cap=3 无法自然到达）；(2) allow_path 入口门禁（R2，5.11）——子代理调用拒绝（父代指引变体 + stats rule_key allow-path-subagent-rejected，bus-skip；制裁只能自上而下流动，用户裁决），working_dir_root 自身拒绝作为 path 参数；(3) 两步用户确认协议（R3，5.11）——dir_whip_allow_path 增加可选 confirm 参数：首调返回确认载荷（风险 + 去除方法 + 转述指令）且不添加、路径记入会话内存 confirmation-issued 集合；confirm=true 仅对已签发路径接受（强制两步）；去除方法仅文档化（会话结束自动失效；持久豁免走 config，/dir-whip remove 可移除）——无撤销能力（用户裁决）；(4) L1/L3 文案改述（R4，5.18）——config 白名单清偿选项改归属用户（ask the user to add），闩锁期写类全冻结显式化（含 config 编辑），消除真机白耗两轮的假可供性。版本目标 v0.6.1（patch——执法加固）。完成后 re-freeze | 用户决策 2026-08-28（方案A + 子代理策略A + 仅文档化去除 + v0.6.1 patch） |
