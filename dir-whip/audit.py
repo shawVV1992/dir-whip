@@ -257,11 +257,40 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
         return sorted(audit_pending_snapshot(session_id))
 
 
+def _remediation_instruction(paths_display):
+    """Shared remediation sentence (5.18 v2.8 R1, single source of truth):
+    the exact dir_whip_settle(paths=[...]) call form with absolute
+    forward-slash paths and the quarantine location under the RESOLVED
+    working_dir_root. Used by BOTH the L1 notice and the continuation
+    nudge; the L3 gate message keeps its 2026-08-26 short form.
+    allow_path is never mentioned (settle-first ruling 2026-08-27).
+    Fail-open: root unresolved -> the literal <root> placeholder."""
+    try:
+        root, _allowlist = get_cached_config(state.session.registered_ctx)
+    except Exception:
+        root = None
+    quarantine = "%s/.hermes/audit-quarantine/" % (
+        str(root).replace("\\", "/") if root else "<root>"
+    )
+    return (
+        "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
+        "file(s) into quarantine (%s), or move them manually into a "
+        "Session Directory" % (
+            ", ".join(
+                '"%s"' % str(path).replace("\\", "/")
+                for path in paths_display
+            ),
+            quarantine,
+        )
+    )
+
+
 def _audit_notice_message(paths):
-    """The single L1 notice text (5.18, v2.7 R4): the paths and the
-    remediation, leading with the dir_whip_settle self-heal channel.
-    One notice per result listing every unannounced violation; only this
-    notice ever enters the conversation (context hygiene)."""
+    """The single L1 notice text (5.18, v2.8 R1): the paths and the
+    remediation via the shared _remediation_instruction helper (single
+    source of truth with the continuation nudge). One notice per result
+    listing every unannounced violation; only this notice ever enters
+    the conversation (context hygiene)."""
     lines = [
         "[dir-whip] Write audit: the following file(s) were written to the "
         "Working Directory root outside any Session Directory:"
@@ -269,15 +298,11 @@ def _audit_notice_message(paths):
     for path in paths:
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
-        "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
-        "file(s) into quarantine (<root>/.hermes/audit-quarantine/), or "
-        "move them manually into a Session Directory "
-        "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to "
+        _remediation_instruction(paths)
+        + " (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to "
         "the allowlist files entries in dir-whip-config.yaml "
         "(files: [notes.txt]). Further writes to the Working Directory are "
-        "blocked until then." % ", ".join(
-            '"%s"' % str(path).replace("\\", "/") for path in paths
-        )
+        "blocked until then."
     )
     return "\n".join(lines)
 
@@ -670,15 +695,25 @@ def audit_settle_paths(session_id, paths):
         return {"error": "settle failed: %s" % exc}
 
 
+# SCR-040 R2: session-cumulative continuation-nudge cap (hardcoded, no
+# config key). At most 3 nudges per session lifetime; the host's per-turn
+# verify-nudge budget (max_verify_nudges) remains the outer bound.
+PRE_VERIFY_NUDGE_CAP = 3
+
+
 def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
-    """pre_verify continuation fallback decision (5.18 R5).
+    """pre_verify continuation fallback decision (5.18 v2.8 R1/R2).
 
     Nudge ({"action": "continue", ...}) only when the host reports file
     mutations this turn (changed_paths non-empty) AND this session still
     has unresolved pending violations; any other case returns None so the
     turn finishes naturally. Subagent sessions no-op (remediation is the
-    parent's job); throttling relies on the host's verify-nudge budget,
-    this hook adds none. Fail-open: any exception -> None.
+    parent's job). Session-cumulative cap: at most PRE_VERIFY_NUDGE_CAP
+    nudges per session lifetime (counter in state.audit.nudge_counts,
+    reset at session start); after the cap the hook returns None and the
+    turn finishes naturally. The host's per-turn verify-nudge budget
+    remains the outer bound; the host `attempt` kwarg is ignored.
+    Fail-open: any exception -> None.
     """
     try:
         if not changed_paths:
@@ -690,13 +725,18 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         unresolved = audit_unresolved_paths(session_id)
         if not unresolved:
             return None
+        with state.audit.lock:
+            count = state.audit.nudge_counts.get(session_id, 0)
+            if count >= PRE_VERIFY_NUDGE_CAP:
+                return None
+            state.audit.nudge_counts[session_id] = count + 1
         display = [str(path).replace("\\", "/") for path in unresolved]
         return {
             "action": "continue",
             "message": (
-                "[dir-whip] %d unresolved root writes: %s. Call "
-                "dir_whip_settle or move them into a Session Directory "
-                "before finishing." % (len(display), ", ".join(display))
+                "[dir-whip] %d unresolved root write(s) remain at the "
+                "Working Directory root. %s. Finish only after settlement."
+                % (len(display), _remediation_instruction(display))
             ),
         }
     except Exception as exc:
@@ -732,14 +772,18 @@ __all__ = [
 
 def _audit_session_start(session_id):
     """Top-level session start: clear this session's pending violations
-    and leftover pre snapshots, reset the one-time cap warning, and record
-    the current top-level session (child-inheritance fallback)."""
+    and leftover pre snapshots, reset the one-time cap warning and the
+    continuation-nudge cap counter (SCR-040 R2), and record the current
+    top-level session (child-inheritance fallback)."""
     try:
         audit_pending_clear(session_id)
         with state.audit.lock:
             stale = [k for k in state.audit.pre_snapshots if k[0] == session_id]
             for k in stale:
                 state.audit.pre_snapshots.pop(k, None)
+            # SCR-040 R2: the nudge cap counter resets at session start
+            # (same place session-start clears pending).
+            state.audit.nudge_counts.pop(session_id, None)
             # Lock strengthening (31.13, Controller addition #4): the
             # top_session / cap_warned writes share the pending lock per
             # the state.py skeleton intent.

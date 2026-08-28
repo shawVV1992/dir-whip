@@ -29,6 +29,7 @@ class _SessionState:
         self.agent_cwd_fn = None         # 宿主 API 注入槽（ADR-0007；R2 条件注入 agent CWD）
         self.project_active_fn = None    # 宿主 API 注入槽（ADR-0007；R7 项目豁免探针，on_start 时调用）
         self.reminder_status = None      # R2/R6: injected|skipped-outside|skipped-child|unavailable
+        self.log_handler_installed = False  # SCR-040 R5: dir-whip.log attach 幂等标志（logsetup.setup）
         self.child_session_ids = set()   # 受 self.lock 保护
         # P6 precomputed plugin paths/version (31.13): filled once at
         # register(); None until then (direct-call fallbacks keep the
@@ -50,6 +51,7 @@ class _AuditState:
         self.session_parents = {}
         self.top_session = None          # 与 pending 同锁（修复现状双锁竞态）
         self.cap_warned = False
+        self.nudge_counts = {}           # SCR-040 R2: 续推兜底会话累计计数（owner session_id 键控，cap=3）
 
 
 class _StatsState:
