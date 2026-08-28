@@ -105,13 +105,16 @@ FAIL_OPEN_WARNING_MESSAGE = (
     "(terminal.cwd) and restart the session."
 )
 
-# Spec 5.4 (v2.7 R1): session-start discipline reminder (top-level
-# sessions only). Candidate A merged discipline block; verbatim-locked
-# + len<=280 chars cap (tokenizer-independent).
+# Spec 5.4 (v2.8 R9): session-start discipline reminder (top-level
+# sessions only). Placement parenthetical de-ambiguated (R9, realhost
+# incident 20260827_222411_245249: the arrow shorthand was misread as a
+# literal path template); verbatim-locked + len<=280 chars cap
+# (tokenizer-independent; new length 251).
 REMINDER_MESSAGE = (
     "[dir-whip] Active. WD writes need a session dir first: python "
     "scripts/create_session_dir.py <task> --workspace <root> "
-    "(deliverables -> Outputs/, scratch -> .tmp/). Root forbidden. "
+    "(write the deliverable to Outputs/<filename>, or scratch to "
+    ".tmp/<filename>). Root forbidden. "
     "User path -> dir_whip_allow_path first."
 )
 
@@ -464,7 +467,8 @@ def _block_message(target, working_dir_root, is_subagent=False):
         fix_line = (
             "Fix: Create a session directory first:\n"
             "  python %s/create_session_dir.py <task_name> --workspace %s\n"
-            "Then write there: deliverable -> Outputs/, scratch -> .tmp/.\n"
+            "Then write the deliverable to Outputs/<filename> "
+            "(or scratch to .tmp/<filename>).\n"
             "User-specified path -> dir_whip_allow_path first."
             % (scripts_path, wdr_fwd)
         )

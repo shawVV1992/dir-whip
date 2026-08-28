@@ -3,7 +3,9 @@
 
 Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly Outputs/ and .tmp/.
 Prints the absolute path of the created directory (forward slashes) as
-a single stdout line.
+stdout line 1, followed by a placement hint line (spec 4.1 R9): the hint
+is emitted on success (exit 0) and on the "target already exists" branch
+of exit 2; all other failure paths stay silent on stdout.
 
 Boundary validation (SCR-011, spec 4.4): the --workspace target must EXACTLY
 EQUAL the resolved Working Directory (dir-whip-config working_dir_root ->
@@ -41,6 +43,13 @@ MAX_TASK_NAME_LEN = 80
 EXIT_OK = 0
 EXIT_PARAM_ERROR = 1
 EXIT_BOUNDARY_ERROR = 2
+
+# Placement hint (spec 4.1 R9 output contract): stdout line 2 on exit 0
+# and on the exit-2 "target already exists" branch. Other failure paths
+# (exit 1; exit-2 boundary mismatch) stay silent on stdout.
+PLACEMENT_HINT = (
+    "Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>."
+)
 
 
 def sanitize_task_name(name):
@@ -105,12 +114,14 @@ def main(argv=None):
     target = os.path.join(workspace, dir_name)
     if os.path.exists(target):
         sys.stdout.write(target.replace(os.sep, "/") + "\n")
+        sys.stdout.write(PLACEMENT_HINT + "\n")
         return EXIT_BOUNDARY_ERROR
 
     os.makedirs(os.path.join(target, "Outputs"))
     os.makedirs(os.path.join(target, ".tmp"))
 
     sys.stdout.write(target.replace(os.sep, "/") + "\n")
+    sys.stdout.write(PLACEMENT_HINT + "\n")
     return EXIT_OK
 
 
