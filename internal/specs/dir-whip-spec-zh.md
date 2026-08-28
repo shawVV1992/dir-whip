@@ -1094,11 +1094,13 @@ Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
 ```
 
-- 闩锁上下文条件行（2026-08-28 二审采纳）：pending 非空（闩锁活跃）时，
-  载荷末尾追加一行——`NOTE: a settlement block is currently active — writes
-  stay frozen until the recorded violation is remediated (settle or a
-  user-authored config entry).`——避免"用户批准豁免后写入仍被拦"的无效往返
-  （闩锁冻结一切写类调用；豁免只过 Tier 0，不开闸）。
+- 闩锁上下文条件行（2026-08-28 二审采纳；三审升级为选择呈现）：pending 非空
+  （闩锁活跃）时，载荷末尾追加一行——`NOTE: a settlement block is currently
+  active — present the resolution choice to the user: move the file(s)
+  (settle), or keep them at the root (give the user the exact command:
+  /dir-whip allow <path>). Writes stay frozen until then.`——避免"用户批准
+  豁免后写入仍被拦"的无效往返（闩锁冻结一切写类调用；豁免只过 Tier 0，
+  不开闸）。
 
 - 去除方法（仅文档化——无撤销能力，用户裁决 2026-08-28）：runtime 条目在
   会话结束自动失效（`on_session_start` 清空 + `reset_cache`）；持久豁免属
@@ -1269,13 +1271,15 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
   所见结果）。diff **首次**发现违规时，terminal 结果末尾追加一次通告，写明
   路径与处置。v2.9 文案（与续推兜底共享 `_remediation_instruction` helper——
    单一事实源；v2.9 R4 改述把 config 白名单选项改归属**用户**并显式化闩锁期
-   冻结）："Remediate now: call dir_whip_settle(paths=[...]) to move the
-   file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them
-   manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/).
-   To keep the file(s) at the root, ask the user to add them to the allowlist
-   files entries in dir-whip-config.yaml (files: [notes.txt]) — while the
-   block is active all writes are frozen (config edits included). Further
-   writes to the Working Directory are blocked until then." **硬约束**：同一违规只通告一次，
+   冻结；三审 2026-08-28 增加完整命令指令）："Remediate now: call
+   dir_whip_settle(paths=[...]) to move the file(s) into quarantine
+   (<root>/.hermes/audit-quarantine/), or move them manually into a Session
+   Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s)
+   at the root, ask the user to add them to the allowlist files entries in
+   dir-whip-config.yaml (files: [notes.txt]) — give them the exact command
+   to run: /dir-whip allow <path> — while the block is active all writes
+   are frozen (config edits included). Further writes to the Working
+   Directory are blocked until then." **硬约束**：同一违规只通告一次，
   永不随后续结果重复追加（上下文卫生）；错误结果不加装饰。**时序（2026-08-22
   真机实测，30.12）**：Hermes 对 terminal 工具先触发 `transform_tool_result`
   后触发 `post_tool_call`，故审计重扫在 `transform_tool_result` 内先行（通告
@@ -1323,7 +1327,8 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
    mv/rm，消息必须指明工具通道；子代理变体保持仅上报父代）。v2.9（R4）：
    主代理 Fix 句把 config 白名单选项改归属**用户**——"or ask the user to add
    them to the allowlist files entries in dir-whip-config.yaml (files:
-   [notes.txt]) — while the block is active all writes are frozen (config
+   [notes.txt]) — give them the exact command: /dir-whip allow <path> —
+   while the block is active all writes are frozen (config
    edits included)"——消除"agent 闩锁期自己改 config 清偿"的假可供性
    （真机：两轮被闸门白拦）；子代理变体与 settle 行不变。
 - **续推兜底（v2.8 R1/R2 重写；宿主钩子标识 `pre_verify`，对外术语
@@ -1331,10 +1336,15 @@ plugin 注册 `pre_command` hook（当前 Hermes 为 observer-only）：记录 s
   `pre_verify` 钩子；当本会话存在未清偿 pending 违规且宿主报告本回合有文件
   改动（`changed_paths` 非空）时，钩子返回 continue 指令使宿主维持回合继续；
   其他返回值放行回合结束。子代理会话 no-op（清偿是父代职责）。
-  - **文案（verbatim 锁，与 L1 共享 remediation 句式 helper）**：
-    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Finish only after settlement.`
-    路径为绝对正斜杠形态（与 settle 参数规范输入契约一致）；全文不提
-    allow_path（不提供豁免选项、不负面点名）。
+  - **文案（verbatim 锁，与 L1 共享 remediation 句式 helper；v2.9 三审尾句
+    增加选择呈现）**：
+    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Present the resolution choice to the user: move the file(s) (settle), or keep them at the root — for the keep-at-root choice, give the user the exact command to run: /dir-whip allow <path>. Finish only after settlement or the user's decision.`
+    路径为绝对正斜杠形态（与 settle 参数规范输入契约一致）；全文不提**运行时
+    豁免工具** `dir_whip_allow_path`（不提供豁免选项、不负面点名——v2.9 三审
+    精确化：用户 config 命令 `/dir-whip allow` 明确提及，指向用户亲笔销案
+    通道；用户裁决 2026-08-28：清偿由用户选择搬走或加白名单，加白名单显示
+    可直接复制的完整命令；`--create` 协议核实不矛盾——违规文件必然存在，
+    plain 形式正确）。
   - **会话累计上限（v2.8，推翻 v2.7"限流依赖宿主预算、钩子不自加"句）**：
     插件侧常量 `PRE_VERIFY_NUDGE_CAP = 3`（硬编码）——同一会话生命周期内
     至多续推 3 次（计数随 `_audit_session_start` 重置），达到上限后返回

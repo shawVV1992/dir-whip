@@ -1267,13 +1267,15 @@ Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
 ```
 
-- Latch-context conditional line (2026-08-28 second review): when the
-  pending set is non-empty (latch active), the payload gains one trailing
-  line — `NOTE: a settlement block is currently active — writes stay frozen
-  until the recorded violation is remediated (settle or a user-authored
-  config entry).` — preventing the wasted approval round-trip (the latch
-  freezes ALL write-class calls; the exemption only passes Tier 0 and does
-  not open the gate).
+- Latch-context conditional line (2026-08-28 second review; third-review
+  upgrade to choice presentation): when the pending set is non-empty (latch
+  active), the payload gains one trailing line — `NOTE: a settlement block
+  is currently active — present the resolution choice to the user: move the
+  file(s) (settle), or keep them at the root (give the user the exact
+  command: /dir-whip allow <path>). Writes stay frozen until then.` —
+  preventing the wasted approval round-trip (the latch freezes ALL
+  write-class calls; the exemption only passes Tier 0 and does not open the
+  gate).
 
 - Removal method (documented only — no revoke capability, user ruling
   2026-08-28): runtime entries expire automatically at session end
@@ -1488,13 +1490,15 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   (shares the `_remediation_instruction` helper with the continuation nudge —
   single source of truth; v2.9 R4 rewording re-attributes the
   config-allowlist option to the USER and makes the latch-period freeze
-  explicit): "Remediate now: call dir_whip_settle(paths=[...]) to move the
-  file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them
-  manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/).
-  To keep the file(s) at the root, ask the user to add them to the allowlist
-  files entries in dir-whip-config.yaml (files: [notes.txt]) — while the
-  block is active all writes are frozen (config edits included). Further
-  writes to the Working Directory are blocked until then." HARD CONSTRAINT: one
+  explicit; third-review 2026-08-28 adds the exact-command instruction):
+  "Remediate now: call dir_whip_settle(paths=[...]) to move the file(s) into
+  quarantine (<root>/.hermes/audit-quarantine/), or move them manually into
+  a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the
+  file(s) at the root, ask the user to add them to the allowlist files
+  entries in dir-whip-config.yaml (files: [notes.txt]) — give them the
+  exact command to run: /dir-whip allow <path> — while the block is active
+  all writes are frozen (config edits included). Further writes to the
+  Working Directory are blocked until then." HARD CONSTRAINT: one
   notice per violation, never re-appended on later results (context
   hygiene); error results are not decorated. ORDERING (live-verified
   2026-08-22, 30.12): Hermes fires `transform_tool_result` BEFORE
@@ -1560,8 +1564,9 @@ loop completes within the user turn that triggered the violation.
   channel; subagent variant stays report-to-parent only). v2.9 (R4): the
   main-agent Fix sentence re-attributes the config-allowlist option to the
   USER — "or ask the user to add them to the allowlist files entries in
-  dir-whip-config.yaml (files: [notes.txt]) — while the block is active all
-  writes are frozen (config edits included)" — removing the false
+  dir-whip-config.yaml (files: [notes.txt]) — give them the exact command:
+  /dir-whip allow <path> — while the block is active all writes are frozen
+  (config edits included)" — removing the false
   affordance of agent-side config edits during the latch (realhost: two
   gate-blocked turns wasted); the subagent variant and the settle line are
   unchanged.
@@ -1572,11 +1577,17 @@ loop completes within the user turn that triggered the violation.
   (`changed_paths` non-empty), the hook returns a continue directive so the
   host keeps the turn going; any other return lets the turn finish. Subagent
   sessions no-op (remediation is the parent's job).
-  - **Message (verbatim lock, shares the L1 remediation sentence helper)**:
-    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Finish only after settlement.`
+  - **Message (verbatim lock, shares the L1 remediation sentence helper;
+    v2.9 third-review tail adds the resolution-choice presentation)**:
+    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Present the resolution choice to the user: move the file(s) (settle), or keep them at the root — for the keep-at-root choice, give the user the exact command to run: /dir-whip allow <path>. Finish only after settlement or the user's decision.`
     Paths are absolute forward-slash form (matching the settle canonical
-    input contract); allow_path is never mentioned (no exemption option
-    offered, no negative call-out).
+    input contract); the runtime exemption TOOL `dir_whip_allow_path` is
+    never mentioned (no exemption option offered, no negative call-out —
+    v2.9 third-review precision: the USER config command `/dir-whip allow`
+    IS explicitly mentioned, pointing at the user-authored settlement
+    channel; user ruling 2026-08-28: the user chooses move-vs-keep and gets
+    the exact copy-paste command; `--create` verified non-contradictory —
+    the violating file always exists, so the plain form is correct).
   - **Session-cumulative cap (v2.8, overturning the v2.7 "throttling relies
     on the host budget, the hook adds none" clause)**: plugin-side constant
     `PRE_VERIFY_NUDGE_CAP = 3` (hardcoded) — at most 3 continuation nudges

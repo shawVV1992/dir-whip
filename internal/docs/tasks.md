@@ -226,7 +226,7 @@ patch，用户逐项拍板）。
 | 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类；含既有"豁免即销案"断言迁移） | 41.R1.1 | 全绿 | Pending |
 | 41.R2.1 | **red+green**：allow_path 入口门禁（子代理拒绝 + 父代指引 verbatim / 整根拒绝 verbatim / stats `allow-path-subagent-rejected` 行 + bus-skip） | 41.1 | 全绿 | Pending |
 | 41.R3.1 | **red+green**：两步确认协议（schema confirm 参数 / 首调确认载荷 verbatim 且不添加 / confirmation-issued 强制两步 / 未签发 confirm 拒绝 / 成功后常规 stats+bus / SKILL.md 措辞同步） | 41.1 | 全绿 | Pending |
-| 41.R4.1 | **red+green**：L1/L3 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 / 子代理变体与 settle 行不变） | 41.1 | 全绿 | Pending |
+| 41.R4.1 | **red+green**：L1/L3/nudge 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 + 完整命令指令 /dir-whip allow <path> / nudge 尾句选择呈现 + "or the user's decision" / 子代理变体与 settle 行不变） | 41.1 | 全绿 | Pending |
 | 41.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.1、spec re-freeze（v2.9 FROZEN）、发布说明（重扫语义行为变更提示） | 41.R1.2/41.R2.1/41.R3.1/41.R4.1 | 基线全绿 | Pending |
 | 41.10 | 真机复验：六检查点（逃逸闭合 / 子代理拒绝 / 整根拒绝 / 确认流 / 预授权回归 / 新文案渲染，见 scr-041-plan.md 六） | 41.9 | 报告落盘 | Pending |
 
