@@ -1171,7 +1171,7 @@ precedence (any block -> block; else allow). Always on (as of v2.8 the
 rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 `terminal-cp-mv`, `terminal-write-uncertain`.
 
-### 5.11 Runtime Allowlist (retained, Q2)
+### 5.11 Runtime Allowlist (retained, Q2; v2.9 entry gating + user confirmation)
 
 The plugin registers the tool `dir_whip_allow_path(path, confirm=false)` at
 `register()` (via `ctx.register_tool`) -- this is the plugin's eager,
@@ -1201,7 +1201,10 @@ Tool registration: the schema follows the OpenAI function format
 (name/description/parameters) with parameters `path` (string, required)
 and `confirm` (boolean, optional, default false); the handler signature is
 `(args, **kwargs)` and reads `path`/`confirm` from the args dict, remaining
-compatible with callers that pass a bare string.
+compatible with callers that pass a bare string. The schema `description`
+instructs the agent on the two-step flow (call without `confirm` to obtain
+the briefing, relay it to the user, re-call with `confirm=true` only after
+explicit user approval).
 
 v2.9 entry gating (SCR-041 R2), checked in order before any state change:
 
@@ -1228,16 +1231,20 @@ Allow a specific file or subdirectory path instead; workspace-wide
 exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user.
 ```
 
-- A subagent-rejected call records a stats row `block / allow-path /
-  allow-path-subagent-rejected` — bus-skipped (no generic blocked fanout),
-  mirroring the write-audit-violation precedent (5.13/5.14).
+- A rejected call records a stats row `block / allow-path / <rule_key>` —
+  bus-skipped (no generic blocked fanout), mirroring the write-audit-violation
+  precedent (5.13/5.14): subagent calls -> `allow-path-subagent-rejected`;
+  root-target calls -> `allow-path-root-rejected`.
 
 v2.9 two-step user confirmation (SCR-041 R3): adding an entry REQUIRES
 explicit user approval via a mandatory two-step protocol.
 
 - First call (`confirm` absent or false): NOTHING is added; the handler
   returns the confirmation payload (verbatim below) and records the path in
-  a session-memory `confirmation-issued` set.
+  a session-memory `confirmation-issued` set. The payload issuance and a
+  rejected unbriefed `confirm=true` are recorded in the diagnostic log
+  (dir-whip.log, DEBUG) only — no stats row, no bus event (user ruling
+  2026-08-28).
 - Second call (`confirm=true`): honored ONLY for a path already in the
   `confirmation-issued` set; a `confirm=true` without a prior issued
   payload is rejected with an instruction to call without `confirm` first
@@ -1248,9 +1255,10 @@ explicit user approval via a mandatory two-step protocol.
 ```
 [dir-whip] CONFIRMATION REQUIRED: adding "<path>" to the runtime allowlist
 exempts ALL file operations under it from the guard for the rest of this
-session. Root writes under it are NOT remediated by this exemption (they
-stay flagged by the write audit). The entry expires automatically when the
-session ends; persistent exemptions belong in dir-whip-config.yaml
+session. Previously recorded root writes under it are NOT remediated by
+this exemption (they stay pending until settled). The entry expires
+automatically when the session ends; persistent exemptions belong in
+dir-whip-config.yaml
 (allowlist files/dirs, removable via /dir-whip remove).
 Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
@@ -1311,7 +1319,12 @@ rule_key, split by `is_subagent`:
   target=None — paths are already carried by the violation events).
 - `allow_path` tool-call observation (v2.8): records runtime exemption adds
   (rule_key `runtime-allowlist-add`, target relativized; symmetric with the
-  `dir-whip:allowlisted` bus event).
+   `dir-whip:allowlisted` bus event).
+- Entry-gating observation (5.11, v2.9): records allow_path entry-gating
+   rejections (rule_keys `allow-path-subagent-rejected` for subagent calls /
+   `allow-path-root-rejected` for root-target calls; reason = category code
+   subagent-rejected | root-target, no raw paths; bus-skipped — no generic
+   blocked fanout, symmetric with the write-audit violations).
 - Session-start observation (5.4, v2.8): records the discipline-block
   injection five states (rule_key `session-reminder`, reason = the state
   literal injected | skipped-outside | skipped-child | skipped-project |

@@ -1016,7 +1016,7 @@ def is_inside_session_dir(path, working_dir_root):
 统计 rule_key：`terminal-redirect`、`terminal-touch`、`terminal-cp-mv`、
 `terminal-write-uncertain`。
 
-### 5.11 运行时豁免表（保留，Q2）
+### 5.11 运行时豁免表（保留，Q2；v2.9 入口门禁 + 用户确认）
 
 plugin 在 `register()` 时注册工具 `dir_whip_allow_path(path, confirm=false)`
 （通过 `ctx.register_tool`）——这是插件的常驻急切注册工具；`dir_whip_settle`
@@ -1038,7 +1038,8 @@ casefold；目录条目豁免其整个子树。（运行时条目保持绝对路
 工具注册：schema 采用 OpenAI function 格式（name/description/parameters），
 参数 `path`（string，必填）与 `confirm`（boolean，可选，默认 false）；
 handler 签名为 `(args, **kwargs)`，从 args dict 读取 `path`/`confirm`，兼容以裸字符串
-调用的调用方。
+调用的调用方。schema 的 `description` 向 agent 说明两步流程（先不带 `confirm`
+首调取载荷、转述用户、仅在显式批准后带 `confirm=true` 重调）。
 
 v2.9 入口门禁（SCR-041 R2），在任何状态变更前按序检查：
 
@@ -1062,15 +1063,17 @@ Allow a specific file or subdirectory path instead; workspace-wide
 exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user.
 ```
 
-- 子代理拒绝调用记录 stats 行 `block / allow-path /
-  allow-path-subagent-rejected`——bus-skip（无通用 blocked 扇出），
-  与 write-audit-violation 先例同型（5.13/5.14）。
+- 拒绝调用记录 stats 行 `block / allow-path / <rule_key>`——bus-skip（无通用
+  blocked 扇出），与 write-audit-violation 先例同型（5.13/5.14）：子代理调用
+  → `allow-path-subagent-rejected`；整根调用 → `allow-path-root-rejected`。
 
 v2.9 两步用户确认（SCR-041 R3）：添加条目**必须**经用户显式批准，
 强制两步协议。
 
 - 首调（`confirm` 缺省或 false）：**不添加任何条目**；handler 返回确认载荷
   （verbatim 见下）并将该路径记入会话内存 `confirmation-issued` 集合。
+  载荷签发与未签发直接 `confirm=true` 被拒，仅记 dir-whip.log DEBUG 行——
+  无 stats 行、无总线事件（用户裁决 2026-08-28）。
 - 重调（`confirm=true`）：仅当该路径已在 `confirmation-issued` 集合时被接受；
   未签发载荷而直接 `confirm=true` → 拒绝并指示先走首调（两步不可跳过）。
   成功后正常添加条目，常规 `runtime-allowlist-add` stats 行 / 总线事件照发
@@ -1080,9 +1083,10 @@ v2.9 两步用户确认（SCR-041 R3）：添加条目**必须**经用户显式�
 ```
 [dir-whip] CONFIRMATION REQUIRED: adding "<path>" to the runtime allowlist
 exempts ALL file operations under it from the guard for the rest of this
-session. Root writes under it are NOT remediated by this exemption (they
-stay flagged by the write audit). The entry expires automatically when the
-session ends; persistent exemptions belong in dir-whip-config.yaml
+session. Previously recorded root writes under it are NOT remediated by
+this exemption (they stay pending until settled). The entry expires
+automatically when the session ends; persistent exemptions belong in
+dir-whip-config.yaml
 (allowlist files/dirs, removable via /dir-whip remove).
 Present this to the user and ask for explicit approval. Re-call
 dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
@@ -1136,6 +1140,10 @@ external-write / fail-open）、`reason`、`tool`、`target`（相对 working_di
 - `allow_path` 工具调用观察（v2.8）：记录运行期豁免添加（rule_key
   `runtime-allowlist-add`，target 相对化路径；与总线事件
   `dir-whip:allowlisted` 对称）。
+- 入口门禁观察（5.11，v2.9）：记录 allow_path 入口门禁拒绝（rule_keys
+  `allow-path-subagent-rejected`（子代理调用）/ `allow-path-root-rejected`
+  （整根调用）；reason=类别码 subagent-rejected | root-target，无原始路径；
+  bus-skip——无通用 blocked 扇出，与 write-audit 违规同型）。
 - 会话开始观察（5.4，v2.8）：记录开场纪律块注入五态（rule_key
   `session-reminder`，reason=状态字面量 injected | skipped-outside |
   skipped-child | skipped-project | unavailable；每顶层会话一行）。
