@@ -7,8 +7,14 @@
 
 [中文版](./README-zh.md) | [English](./README.md)
 
-dir-whip provides three-layer Working Directory (Initial Project Directory)
-file discipline for [Hermes-agent](https://github.com/NousResearch/hermes-agent): the skill teaches rules, the plugin blocks violations with 9 hooks, and the audit layer catches what slips through. 
+Every session that produces files risks the same mess: reports, scratch
+files, and downloads all land wherever the agent happened to be standing.
+**dir-whip** gives every [Hermes-agent](https://github.com/NousResearch/hermes-agent)
+conversation one home for its output inside the Working Directory (Initial
+Project Directory) — a timestamped Session Directory — enforced in three
+layers: a bundled skill teaches the discipline, the plugin blocks violations
+before they land with 9 hooks, and the audit layer catches what slips
+through.
 
 **Note:** dir-whip only applies to the Working Directory (Initial Project
 Directory). Writes outside the Working Directory and newly created project
@@ -16,9 +22,9 @@ directories are not subject to enforcement.
 
 [Core Capabilities](#core-capabilities) ·
 [Installation & Quick Start](#installation--quick-start) ·
-[Architecture & Boundaries](#architecture--boundaries) · [Commands](#commands) ·
-[Advanced Usage](#advanced-usage) · [Security & Risk](#security--risk) ·
-[License](#license)
+[How It Works](#how-it-works) · [Commands](#commands) ·
+[See It In Action](#see-it-in-action) · [Advanced Usage](#advanced-usage) ·
+[Security & Risk](#security--risk) · [License](#license)
 
 ## Core Capabilities
 
@@ -58,6 +64,9 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 /dir-whip
 ```
 
+Expect `State: ACTIVE` — see [See It In Action](#see-it-in-action) for a
+full sample report.
+
 The plugin becomes active after the next Hermes restart. No installer script
 and no separate skill install are needed.
 
@@ -85,7 +94,7 @@ hermes plugins enable dir-whip
 hermes plugins disable dir-whip
 ```
 
-## Architecture & Boundaries
+## How It Works
 
 ### Design Principles
 
@@ -133,19 +142,26 @@ discipline:
 
 ![Write enforcement flow, including the terminal write observation path](assert/image/write-guard-flow-en.svg)
 
-**Front layer** (permissive, fast) — chain-aware extraction splits on `&&` /
-`;` / `|` / newlines and extracts targets only within each command segment.
-Redirect targets starting with `=` are excluded. Device paths (`/dev/null`,
-`/dev/stdout`, `/dev/stderr`) are exempt before normalization. Commands
-containing `<<` (heredoc) are blanket-demoted to the allow+log tier without
-parsing the body. This layer is designed to never block legitimate commands.
+**Front layer** (permissive, fast) — designed to never block legitimate
+commands:
 
-**Audit layer** (reliable backbone) — a pre/post snapshot diff of root
-entries catches any file the front layer let through. When a violation is
-detected, the L1 notice names the file and the remediation — including the
-`dir_whip_settle` self-heal tool, which moves flagged files into the audit
-quarantine and re-opens the gate within the same turn; the L3 gate freezes all
-further write-class tool calls until the file is moved or removed.
+- Chain-aware extraction splits on `&&` / `;` / `|` / newlines and extracts
+  targets only within each command segment.
+- Redirect targets starting with `=` are excluded.
+- Device paths (`/dev/null`, `/dev/stdout`, `/dev/stderr`) are exempt before
+  normalization.
+- Commands containing `<<` (heredoc) are blanket-demoted to the allow+log
+  tier without parsing the body.
+
+**Audit layer** (reliable backbone):
+
+- A pre/post snapshot diff of root entries catches any file the front layer
+  let through.
+- On detection, the L1 notice names the file and the remediation — including
+  the `dir_whip_settle` self-heal tool, which moves flagged files into the
+  audit quarantine and re-opens the gate within the same turn.
+- The L3 gate freezes all further write-class tool calls until the file is
+  moved or removed.
 
 > **Gate notes (verified on a live host).** While the gate is latched,
 > *every* write-class call is frozen — including `rm`, so in-session
@@ -219,6 +235,60 @@ lasts for the current session only and merges with `allowlist` `dirs`
 entries at Tier 0. A second tool, `dir_whip_settle(paths)`, is registered
 lazily on the first write-audit notice and moves flagged root files into the
 audit quarantine (same-turn self-heal).
+
+## See It In Action
+
+Plugin messages below are quoted verbatim from the source; only paths are
+abbreviated.
+
+### 1. The front layer blocks a root-level write
+
+```text
+You:   Summarize today's standup and save it as notes.txt.
+
+Agent: echo "Standup notes ..." > notes.txt        # root-level write
+
+BLOCKED: File writes in the Working Directory require a Session Directory or an allowed root file.
+Target: notes.txt
+Fix: Create a session directory first:
+  python <plugin>/skills/workspace-organization/scripts/create_session_dir.py <task_name> --workspace <Working Directory>
+Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
+User-specified path -> dir_whip_allow_path first.
+If this is a project directory, add it to the allowlist dirs in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
+Reply using the [Reason]/[Next] template.
+
+Agent: python .../scripts/create_session_dir.py StandupNotes --workspace <WD>
+       # creates 20260827_100000_StandupNotes/
+Agent: .../20260827_100000_StandupNotes/Outputs/notes.txt   # lands cleanly
+```
+
+### 2. The audit layer catches what slips through — and self-heals
+
+```text
+Agent: (a write slips past the front layer and lands at the root)
+
+[dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
+  - notes.txt
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]). Further writes to the Working Directory are blocked until then.
+
+Agent: dir_whip_settle(paths=["notes.txt"])
+       # file moves to .hermes/audit-quarantine/<timestamp>/, gate re-opens
+```
+
+### 3. `/dir-whip` reports the live state
+
+```text
+/dir-whip
+
+[dir-whip] v0.5.0
+State: ACTIVE
+Working Directory: E:/HermesWorkspace/default  (source: guard-config)
+Terminal Guard: enabled
+Allowlist: Files: README.md  Dirs: projects/foo
+Reminder: injected
+Health: OK
+Stats File: C:/Users/me/AppData/Local/hermes/dir-whip/stats.jsonl
+```
 
 ## Advanced Usage
 

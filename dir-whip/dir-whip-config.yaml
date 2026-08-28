@@ -7,19 +7,21 @@
 # POSIX: ~/.hermes/dir-whip/dir-whip-config.yaml). This file in the
 # plugin directory is ONLY the shipped template: forced plugin reinstalls
 # never touch the runtime copy, so user settings survive.
+#
+# Prefer the slash commands over hand-editing: /dir-whip allow|remove|list.
+
+# Structured allowlist (v2.7): entries are RELATIVE to working_dir_root.
+#   files -> root-level file basenames, e.g. ["README.md", "notes.txt"]
+#   dirs  -> relative dir paths under the root, recursive subtree
+#            exemption, e.g. ["projects/foo"] (multi-level allowed;
+#            no "..", no absolute/drive forms, not "." for the root itself)
+# Missing key -> strict empty allowlist (fail-closed).
+# Legacy flat tagged lists (file: / prefix: strings, v2.6) and the removed
+# keys exempt_paths / allowed_root_files are ignored (no backward compat).
+allowlist:
+  files: []
+  dirs: []
 
 # Optional override: working_dir_root (authoritative when set; fallback =
 # current profile's terminal.cwd). Remove the # to pin the Working Directory.
 # working_dir_root: E:/HermesWorkspace/default
-
-# Single unified allowlist (B2, v2.6): file:<basename> | prefix:<abs-path>
-# file:<basename>  -> root file allowed at Working Directory root
-# prefix:<abs-path> -> exempt prefix (project dir inside workspace, may end with /)
-# Use forward slashes for prefixes. Missing key -> strict empty allowlist (fail-closed).
-# Old keys exempt_paths / allowed_root_files are removed (no backward compat, B2).
-allowlist: []  # e.g. file:README.md , prefix:E:/HermesWorkspace/learn/projects/foo
-
-# Write audit (5.18): post-hoc snapshot diff catches root writes the front
-# guard lets through. Further writes frozen until remediation.
-# write_audit: enabled          # default when absent
-# write_audit_entry_cap: 2000   # root entries cap; round skipped + WARNING on exceed

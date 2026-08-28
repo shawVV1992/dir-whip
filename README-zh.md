@@ -9,14 +9,18 @@
 
 本文档与英文版 README 同步维护，两版结构镜像、内容一致。
 
-dir-whip 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent) 工作目录（Initial Project Directory）提供三层文件纪律保障：技能教导规则、插件以 9 个钩子拦截违规、审计层捕获漏网。
+每个产出文件的会话都可能把工作区搅乱：报告、草稿、临时文件散落在 agent
+当时所在的目录里。**dir-whip** 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent)
+的每次对话在工作目录（Initial Project Directory）内安一个唯一的家——带时间戳的
+会话目录——并以三层保障强制执行：捆绑技能教导纪律、插件以 9 个钩子在落地前
+拦截违规、审计层捕获漏网之鱼。
 
 注意：dir-whip 权限范围仅限于工作目录（Initial Project Directory），工作目录之外的写入不受管控，新建的项目目录不受管控。
 
-[核心能力](#核心能力) · [安装与快速上手](#安装与快速上手) ·
-[设计架构与能力边界](#设计架构与能力边界) · [命令](#命令) ·
-[高级用法](#高级用法) · [安全与风险](#安全与风险) ·
-[License](#license)
+[核心能力](#核心能力) ·
+[安装与快速上手](#安装与快速上手) · [工作原理](#工作原理) ·
+[命令](#命令) · [效果演示](#效果演示) · [高级用法](#高级用法) ·
+[安全与风险](#安全与风险) · [License](#license)
 
 ## 核心能力
 
@@ -49,6 +53,8 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 /dir-whip
 ```
 
+应看到 `State: ACTIVE` —— 完整样例见[效果演示](#效果演示)。
+
 插件在重启 Hermes 后生效。无需安装脚本，也无需单独安装技能。
 
 ### 更新
@@ -76,7 +82,7 @@ hermes plugins disable dir-whip
 
 ```
 
-## 设计架构与能力边界
+## 工作原理
 
 ### 设计思路
 
@@ -85,7 +91,6 @@ hermes plugins disable dir-whip
 - **允许误放、绝不误拦** —— 前置层fail-open策略，审计层可靠兜底。
 - **观察事实，而非推断意图** —— 审计层 diff 实际落盘的文件，而非解析
   命令字符串。
-
 
 ### 功能架构
 
@@ -119,16 +124,21 @@ hermes plugins disable dir-whip
 
 ![写入纪律流程（含终端写入观察路径）](assert/image/write-guard-flow.svg)
 
-**前置层（宽容快速）** —— 链感知提取按 `&&` / `;` / `|` /
-换行切分命令链，仅在每个命令段内提取写入目标。以 `=` 开头的重定向目标被排除。
-设备路径（`/dev/null`、`/dev/stdout`、`/dev/stderr`）在归一化前豁免。含 `<<`
-（heredoc）的命令整体降档至"放行并记入日志"，不解析正文。该层的设计原则是
-**允许误放、绝不误拦**。
+**前置层（宽容快速）** —— 设计原则是**允许误放、绝不误拦**：
 
-**审计层（可靠主干）** —— 对根目录文件条目做前后快照 diff，捕获前置层漏过的
-任何文件。检测到违规时，L1 通告写明路径与处置——包括 `dir_whip_settle`
-自愈工具，可将违规文件移入审计隔离区并在同轮重新开闸；L3 闸门冻结后续所有
-写入类工具调用，直至文件被移除或移入合法位置。
+- 链感知提取按 `&&` / `;` / `|` /
+  换行切分命令链，仅在每个命令段内提取写入目标。
+- 以 `=` 开头的重定向目标被排除。
+- 设备路径（`/dev/null`、`/dev/stdout`、`/dev/stderr`）在归一化前豁免。
+- 含 `<<`
+  （heredoc）的命令整体降档至"放行并记入日志"，不解析正文。
+
+**审计层（可靠主干）**：
+
+- 对根目录文件条目做前后快照 diff，捕获前置层漏过的任何文件。
+- 检测到违规时，L1 通告写明路径与处置——包括 `dir_whip_settle`
+  自愈工具，可将违规文件移入审计隔离区并在同轮重新开闸。
+- L3 闸门冻结后续所有写入类工具调用，直至文件被移除或移入合法位置。
 
 > **闸门须知（真机实测）。** 闩锁期间*所有*写入类调用都会被冻结——包括
 > `rm`，因此会话内删除无法解除闩锁。合规出路：调用 `dir_whip_settle`
@@ -193,6 +203,59 @@ hermes plugins disable dir-whip
 目标路径时，写入前调用它以注册该路径。该记录仅对当前会话有效，并与
 `allowlist` `dirs` 条目在 Tier 0 合并。第二个工具 `dir_whip_settle(paths)`
 在首次写入审计通告时懒注册，把违规的根文件移入审计隔离区（同轮自愈）。
+
+## 效果演示
+
+以下插件消息均为源码原文；仅长路径做了缩略。
+
+### 1. 前置层拦截根级写入
+
+```text
+你：   把今天的站会要点存成 notes.txt。
+
+Agent: echo "Standup notes ..." > notes.txt        # 根级写入
+
+BLOCKED: File writes in the Working Directory require a Session Directory or an allowed root file.
+Target: notes.txt
+Fix: Create a session directory first:
+  python <plugin>/skills/workspace-organization/scripts/create_session_dir.py <task_name> --workspace <Working Directory>
+Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
+User-specified path -> dir_whip_allow_path first.
+If this is a project directory, add it to the allowlist dirs in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
+Reply using the [Reason]/[Next] template.
+
+Agent: python .../scripts/create_session_dir.py StandupNotes --workspace <WD>
+       # 创建 20260827_100000_StandupNotes/
+Agent: .../20260827_100000_StandupNotes/Outputs/notes.txt   # 干净落盘
+```
+
+### 2. 审计层捕获漏网之鱼——并同轮自愈
+
+```text
+Agent: （一次写入绕过前置层，落在了根目录）
+
+[dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
+  - notes.txt
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]). Further writes to the Working Directory are blocked until then.
+
+Agent: dir_whip_settle(paths=["notes.txt"])
+       # 文件移入 .hermes/audit-quarantine/<timestamp>/，闸门重新打开
+```
+
+### 3. `/dir-whip` 报告实时状态
+
+```text
+/dir-whip
+
+[dir-whip] v0.5.0
+State: ACTIVE
+Working Directory: E:/HermesWorkspace/default  (source: guard-config)
+Terminal Guard: enabled
+Allowlist: Files: README.md  Dirs: projects/foo
+Reminder: injected
+Health: OK
+Stats File: C:/Users/me/AppData/Local/hermes/dir-whip/stats.jsonl
+```
 
 ## 高级用法
 
