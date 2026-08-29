@@ -229,7 +229,7 @@ patch，用户逐项拍板）。
 | 41.R4.1 | **red+green**：L1/L3/nudge 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 + 完整命令指令 /dir-whip allow <path> / nudge 尾句选择呈现 + "or the user's decision" / 子代理变体与 settle 行不变） | 41.1 | Done (2026-08-29, 18b313d: L1/L3/nudge v2.9 verbatim + 4 条 verbatim 锁) |
 | 41.R6.1 | 术语与语义扫描：README EN/ZH + after-install.md 对齐（豁免不清偿 / 两步确认 / 出路清单修正 / 工具签名 confirm 参数） | 41.1 | 文档落盘 | Done (2026-08-28) |
 | 41.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.1、spec re-freeze（v2.9 FROZEN）、发布说明（重扫语义行为变更提示） | 41.R1.2/41.R2.1/41.R3.1/41.R4.1 | Done (2026-08-29: 664 passed / 5 skipped / 0 failed；plugin.yaml 0.6.1；spec v2.9 FROZEN；顺带修复 scr039_helpers 夹具不清 dir-whip logger handler 的跨文件隔离缺陷——register→logsetup 接线（SCR-040 R3）起潜伏，全量字母序 c<s 掩蔽) |
-| 41.10 | 真机复验：六检查点（逃逸闭合 / 子代理拒绝 / 整根拒绝 / 确认流 / 预授权回归 / 新文案渲染，见 scr-041-plan.md 六） | 41.9 | Done (2026-08-29: 整体 PASS 无 FAIL（用户确认）；含 erratum-2 补充的 config 清偿路径检查点) |
+| 41.10 | 真机复验：六检查点（逃逸闭合 / 子代理拒绝 / 整根拒绝 / 确认流 / 预授权回归 / 新文案渲染，见 scr-041-plan.md 六） | 41.9 | Done (2026-08-29: 七检查点无 FAIL——orchestrator 驱动 -z oneshot + venv 直调探针 + state.db 转录取证；①逃逸闭合（自助豁免后闸门不重开 + cap=3 自然到达 + agent 被迫走 settle）②子代理拒绝（stats is_subagent=True）③整根拒绝（含变体）④确认流（未签发 confirm= 重发载荷不添加）⑤预授权回归（零违规）⑥v2.9 文案 verbatim 全中（含闩锁条件行真实追加）⑦config 清偿机制级三连 PASS（E2E 留桌面复核：-z 无 slash 通道）；报告=realhost-verification-report.md（v0.6.0 版移入 archive/）；**新观察项**：execute_code 执法缺口（内核 I/O 完全绕过守卫/审计/闸门）+ oneshot logging.disable 抑制 dir-whip.log（upstream, oneshot.py:232）) |
 
 ---
 
