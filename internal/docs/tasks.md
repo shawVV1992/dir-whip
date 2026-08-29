@@ -233,6 +233,29 @@ patch，用户逐项拍板）。
 
 ---
 
+## Phase 11 — SCR-042 v0.6.2 skill 脚本安全加固 (42.x)
+
+TDD per task: write the mapped tests FIRST (red), then implement (green).
+Acceptance = mapped testing-standards §7.12 matrix (v2.10) all green + KPI
+column. Active branch: `0.6.2_dev` (from `main@72fe148` v0.6.1).
+Design source: feedback/13（skill 脚本安全性与稳健性评审，1 高危/6 中危/9 低危）
++ `docs/scr-042-plan.md`——R1-R5 定稿设计（9 项：必修 2 + 建议 5 + 顺带 2，
+用户逐项过收益裁决 2026-08-29）。
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 42.1 | **文档批**：`scr-042-plan.md` + spec EN/ZH v2.10 ACTIVE（3.4 gate failure 扩展 / 4.2 wakeAgent 四键 + parity + symlink 边界 / 4.4 hermes home 回退 / 7.2 两行 + changelog）+ spec-changes 登记 + tasks Phase 11 + testing-standards 7.12 + AGENTS.md 同步 + feedback/13 处置注记 | - | 文档落盘 | Done (2026-08-29) |
+| 42.R1.1 | **red**：gate+解析失败零删除零输出（rc 2、无 wakeAgent）；symlink 会话目录 / symlink `.tmp` 零扫描零删除；交互 fail-open 回归 | 42.1 | red 确认 | Pending |
+| 42.R1.2 | **green**：main() gate 守卫（解析失败升格 gate failure）+ find_tmp_entries 双层 symlink 加固（follow_symlinks=False + islink(tmp_dir) 跳过） | 42.R1.1 | R1 全绿 | Pending |
+| 42.R2.1 | **red+green**：importlib 绝对路径加载捆绑 resolver（两脚本，sys.modules 注册）+ CWD 阴影防退化测试 | 42.1 | R2 全绿 | Pending |
+| 42.R3.1 | **red+green**：casefold parity（根文件白名单复用 `_ws_is_allowlist_file` / 黑名单 lower / `.hermes` Windows casefold）+ parity 测试 | 42.1 | R3 全绿 | Pending |
+| 42.R4.1 | **red+green**：wakeAgent 四键载荷（violations/removed/failed 恒在）+ gate+json 全行 JSON + 失败注入 failed=1 | 42.1 | R4 全绿 | Pending |
+| 42.R5.1 | **red+green**：三脚本 stdout/stderr reconfigure(errors=replace) + create 解析根 abspath + LOCALAPPDATA 回退用户主目录 | 42.1 | R5 全绿 | Pending |
+| 42.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.2、spec re-freeze（v2.10 FROZEN）、deployment.md 升级注记（--gate 解析失败行为变更提示） | 42.R1.2/42.R2.1/42.R3.1/42.R4.1/42.R5.1 | 基线全绿 | Pending |
+| 42.10 | 真机复验：五检查点（无注入 cron exit 2 零删除 / symlink 逃逸零删除 / gate+json 全解析+failed 可见 / cp936 非 ASCII 不崩 / 常规 gate 回归，见 scr-042-plan.md 六） | 42.9 | user-gated | Pending |
+
+---
+
 _Note: testing-standards.md v0.3.0 rebuild (listed in the earlier backlog) is
 already DONE (2026-08-22) — it is the acceptance source for this phase, not a
 pending task. Version bump (30.13) was deferred per user until SCR review
