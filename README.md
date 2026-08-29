@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.5.0](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.2](https://img.shields.io/badge/version-0.6.2-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -30,9 +30,11 @@ directories are not subject to enforcement.
 
 1. **Teach and enforce combined.** The skill teaches discipline, the plugin
    enforces it — reliable workspace management, no more file chaos.
-2. **Plugin dual-layer detection.** The front layer intercepts root-level
-   violations with a fix-it message; the audit layer catches what slips
-   past via snapshot diff — with same-turn self-heal (`dir_whip_settle`)
+2. **Dual-layer detection + backstop tools.** The front layer blocks,
+   before they land, writes outside the allowlist and Session Directories
+   (root-level files and non-session subdirectories alike) with a fix-it
+   message; the audit layer snapshot-diffs allowed terminal commands to
+   catch what slips past — with same-turn self-heal (`dir_whip_settle`)
    and a dir-whip continuation nudge.
 3. **Observable.** 7 `dir-whip:*` events recorded to stats.jsonl
    (5 MB rollover) for audit and diagnostics.
@@ -64,7 +66,7 @@ hermes plugins install shawVV1992/dir-whip/dir-whip --enable
 /dir-whip
 ```
 
-Expect `State: ACTIVE` — see [See It In Action](#see-it-in-action) for a
+Expect `State: enabled` — see [See It In Action](#see-it-in-action) for a
 full sample report.
 
 The plugin becomes active after the next Hermes restart. No installer script
@@ -107,13 +109,14 @@ hermes plugins disable dir-whip
 
 ### Architecture
 
+![dir-whip architecture overview — the Skill and Plugin layers joined by the shared config file](assert/image/architecture-overview-en.svg)
+
 | Layer | Role | Form |
 |-------|------|------|
-| **Skill (teaches)** | Discipline reference | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it) |
-| **Plugin (enforces)** | Blocks violations before they land | 9 hooks: `pre_tool_call` interception + write audit + session/subagent observation + dir-whip continuation nudge |
-| **Scripts (tools)** | CLI helpers for agents and cron | `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` |
-| **Config** | Sole configuration source | `dir-whip-config.yaml` |
-| **Observability** | Records and reports | stats.jsonl + `dir-whip:*` events + `/dir-whip` |
+| **Config** (`dir-whip-config.yaml`) | Sole configuration source; Skill and Plugin have zero runtime coupling and meet only at this file (teach / enforce split) | `allowlist` files/dirs + `working_dir_root` keys; hand-edited or row-level edited via `/dir-whip` |
+| **Skill (teaches, incl. Scripts tools)** | Discipline reference + CLI helpers | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it); scripts `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` (create · audit · resolve) |
+| **Plugin (enforces)** | Intercepts violations before they land and handles the backstop | 9 hooks in three groups (as drawn): **front-layer interception** (`pre_tool_call` pre-landing three-tier verdict), **audit-layer backstop** (snapshot diff + L1 notice + L3 gate), **backstop tools** (`dir_whip_allow_path` / `dir_whip_settle` / `/dir-whip`); plus the `pre_verify` continuation nudge and observe-only hooks |
+| **Observability** | Records and reports | stats.jsonl (5 MB rollover) + 7 `dir-whip:*` events + dir-whip.log + the `/dir-whip` merged report |
 
 Every Hermes conversation that produces files gets one Session Directory at
 the Working Directory root:
@@ -136,74 +139,77 @@ the Working Directory root:
 
 ### Enforcement
 
-Terminal writes are intercepted at the shell level: redirects (`>` `>>` `1>`
-`2>`), `touch`, and `cp`/`mv` destinations. Two layers enforce the
-discipline:
+The runtime flow is built on the four-level audit ladder of spec §5.18:
 
-![Write enforcement flow, including the terminal write observation path](assert/image/write-guard-flow-en.svg)
+| Level | Name | Mechanism & surface |
+|-------|------|---------------------|
+| **L1** | teach | The fire-once notice — the only in-conversation prompt naming violations and remedies (`transform_tool_result` hook, enters the conversation exactly once) |
+| **L2** | record | `write-audit-violation` / `write-audit-gate-block` stats rows and bus events — background observability only, never in the conversation, never blocking |
+| **L3** | gate | The unresolved-violation latch — freezes all write-class calls until settlement completes |
+| **L4** | remediate | Remedies and fallback — `dir_whip_settle` / move into a Session Directory / user `/dir-whip allow` / out-of-band removal |
 
-**Front layer** (permissive, fast) — designed to never block legitimate
-commands:
+![dir-whip runtime flow — the life of a write-class call, from interception to settlement](assert/image/runtime-flow-en.svg)
 
-- Chain-aware extraction splits on `&&` / `;` / `|` / newlines and extracts
-  targets only within each command segment.
-- Redirect targets starting with `=` are excluded.
-- Device paths (`/dev/null`, `/dev/stdout`, `/dev/stderr`) are exempt before
-  normalization.
-- Commands containing `<<` (heredoc) are blanket-demoted to the allow+log
-  tier without parsing the body.
+`write_file` / `patch` are judged by target path; terminal commands are
+lexically tiered at the shell level. Two layers, two responsibilities — the
+front layer owns pre-landing, the audit layer owns post-landing:
 
-**Audit layer** (reliable backbone):
+**Front layer (interception, permissive and fast)** — designed on **allow
+false passes, never false blocks**:
 
-- A pre/post snapshot diff of root entries catches any file the front layer
-  let through.
-- On detection, the L1 notice names the file and the remediation — including
-  the `dir_whip_settle` self-heal tool, which moves flagged files into the
-  audit quarantine and re-opens the gate within the same turn.
-- The L3 gate freezes all further write-class tool calls until the file is
-  moved or removed.
+- Only three write-class tools are judged: `write_file` / `patch` /
+  `terminal`; other tools and read-only commands never enter the chain.
+- **Three-tier verdict**: deterministic targets (tool paths, terminal
+  redirects / `touch` / `cp`·`mv` destinations) enter the unified classify
+  chain; uncertain write intent (heredoc, interpreter-led segments, nested
+  shells, `$`/backtick variables) is allowed + logged; device paths and
+  read-only commands are silently exempt.
+- **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
+  newlines, targets extracted per segment; `=`-leading targets excluded.
+- **Unified classify chain** (shared with the audit layer — the two can
+  never disagree): Tier 0 allowlist / runtime exemption → outside the
+  Working Directory allowed + logged → root-level allowlist file → Session
+  Directory → otherwise block (`root-file` / `non-session-dir`), with
+  fix-it guidance in the message.
 
-> **Gate notes (verified on a live host).** While the gate is latched,
-> *every* write-class call is frozen — including `rm`, so in-session
-> deletion cannot clear it. Sanctioned ways out: call `dir_whip_settle`
-> (moves the file into `.hermes/audit-quarantine/`), move the file into a
-> Session Directory, register it in `allowlist` (`files` / `dirs`
-> entries — the user runs `/dir-whip allow <path>`; a runtime exemption
-> does NOT clear a recorded violation), or remove it out-of-band. The latch
-> itself is session-scoped: once the file no longer sits at the root,
-> writes pass again. Note also that `AGENTS.md` writes are additionally
-> gated by Hermes itself (agent-instruction protection) and need
-> interactive approval regardless of dir-whip's verdict.
+**Audit layer (backstop, four-level ladder)** — observes only what allowed
+terminal commands actually landed:
 
-### Boundaries
+- **Snapshot diff**: pre/post root snapshots for allowed terminal commands
+  only; root-level **file** entries only — directory changes never violate,
+  deletions are record-only.
+- **Pending set**: session-scoped; subagent violations post to the parent's
+  set — the parent settles the latch.
+- The four-level ladder (defined in the table above): **L1** the fire-once
+  notice is the only in-conversation prompt; **L2** stats + events stay in
+  the background; **L3** the latch freezes every write-class call (incl.
+  `rm` and agent-driven config edits); **L4** four remedies — settle / move
+  into a session dir (out-of-band) / user `/dir-whip allow` / out-of-band
+  removal.
+- **Settlement is config-only**: a runtime exemption is prospective-only
+  and never clears a recorded violation.
+- **pre_verify continuation nudge**: one more reminder when a turn ends
+  with unresolved violations, capped at 3 per session.
 
-| Enforced | Not enforced |
-|----------|--------------|
-| Root-level non-allowlist writes (`write_file` / `patch` / `terminal`) | Writes inside a Session Directory |
-| Post-hoc root write audit + settlement gate | Root allowlist files (`allowlist` `files` entries) |
-| Session Directory structure compliance (audit script) | Dirs allowlist (`allowlist` `dirs` entries + runtime allowlist) |
-| | Everything outside the Working Directory (allowed + logged) |
-| | Read-only tools and commands |
-| | Deletions (report-only, never violations) |
-| | Arbitrary code execution (`execute_code` and similar) — file I/O inside an execution kernel bypasses the guard, the audit, and the gate entirely |
-
-> **Scope disclaimer**: dir-whip is behavioral monitoring, **not a security boundary**. It observes a specific set of host tool behaviors (`write_file` / `patch` / `terminal` interception, post-hoc root-write audit, session-dir discipline) and cannot see writes that bypass the tool layer entirely — e.g. code-execution kernels performing their own file I/O. Such channels carry inherent risk; treat dir-whip as a discipline helper, never as a sandbox or a security guarantee.
+> **Notes**
+>
+> - While latched, *every* write-class call is frozen — incl. `rm` and
+>   agent-driven config edits; the latch cannot be cleared in-session.
+> - A runtime exemption does **not** clear a recorded violation; the latch
+>   is session-scoped — once the file leaves the root, writes pass again.
 
 ## Commands
 
 ### Command List
 
-| Command | Action | Example |
-| ------- | ------ | ------- |
-| `/dir-whip` | Print the merged report (fields under "Report Fields") | `/dir-whip` |
-| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` |
-| `/dir-whip allow` | Enumerate root candidates (two-section numbered listing + Add hint) | `/dir-whip allow` |
-| `/dir-whip allow <number\|name\|path>` | Register entries, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` |
-| `/dir-whip remove` | Enumerate current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` |
-| `/dir-whip remove <number\|name>` | Remove entries; matched by name with no disk discrimination (a hand-edited double entry is removed from both sets) | `/dir-whip remove 2` · `/dir-whip remove notes.txt` |
-
-Subcommands `allow|remove|list` manage the allowlist via `config_writer`
-(row-level edit, comments preserved).
+| Command | Action | Example | Notes |
+| ------- | ------ | ------- | ----- |
+| `/dir-whip` | Print the merged report (fields under "Report Fields") | `/dir-whip` | |
+| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` | Files section first, Dirs second, one continuous numbering (the numbers used by allow / remove) |
+| `/dir-whip allow` | Enumerate allowlist candidates (two-section numbered listing + Add hint) | `/dir-whip allow` | numbering same as `list` |
+| `/dir-whip allow <number\|name\|path>` | Register entries into the allowlist, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | paths accept relative or absolute input; outside-root / root-itself inputs are rejected with guidance; `--create` decides the artifact by form: trailing slash or nested path → directory, bare name → root-level file |
+| `/dir-whip remove` | Enumerate the allowlist's current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` | numbering same as `list` |
+| `/dir-whip remove <number\|name>` | Remove entries from the allowlist; matched by name with no disk discrimination (a hand-edited double entry is removed from both sets) | `/dir-whip remove 2` · `/dir-whip remove notes.txt` | numbers are the continuous two-section numbering |
 
 ### Report Fields
 
@@ -212,38 +218,14 @@ Subcommands `allow|remove|list` manage the allowlist via `config_writer`
 | Field | Meaning |
 | ----- | ------- |
 | `[dir-whip] v<version>` | Plugin version from plugin.yaml (`unknown` if unreadable) |
-| `State` | `ACTIVE`, or `FAIL-OPEN` when the Working Directory could not be resolved |
-| `Working Directory` | Value + resolving source (see next row) |
+| `State` | `enabled`, or `disabled` when the Working Directory could not be resolved (fail-open; the guard is off) |
+| `Working Directory` | Value + resolving source (see next row); `(unresolved)` when none |
 | source | `guard-config` (dir-whip-config.yaml) · `profile-config` (profile `terminal.cwd`) · `fail-open` |
-| `Terminal Guard` | `enabled` / `disabled` (`terminal_guard`) |
-| `Allowlist` | `Files: (none)` or comma-joined root file basenames + `Dirs: (none)` or comma-joined relative dir paths, or `(strict empty allowlist)` if missing (`allowlist`); an ignored legacy flat value appends the count |
-| `Reminder` | Session-start discipline-block outcome: `injected` / `skipped-outside` / `skipped-child` / `skipped-project` / `unavailable` (`(not recorded)` before the first session start) |
-| `Health` | `OK`, or `PROBLEM` with one line per issue (resolution, stats.jsonl writability) |
+| `Allowlist` | Multi-line block: a header line plus one indented `Files:` / `Dirs:` line each; the single line `Allowlist: (strict empty allowlist)` when there is no entry at all; an ignored legacy flat value adds an indented count line |
+| `WARNING` | Anomaly-only: the `working_dir_root` override differs from the profile `terminal.cwd` |
 | `Stats File` | Absolute path to stats.jsonl |
-
-### Shared Semantics
-
-- Numbers map into the two-section numbered listing: Files then Dirs, one
-  continuous sequence.
-- Path arguments accept relative or absolute input; outside-root/root-itself
-  inputs are rejected with guidance.
-- `--create` decides the created artifact by form: trailing slash or nested
-  path → directory, bare name → root-level file.
-- Unknown args print `Usage: /dir-whip [allow|remove|list]`.
-
-### Agent Tools
-
-`dir_whip_allow_path(path, confirm=false)` is the plugin's eager tool: call
-it before writing when the user explicitly names a target path in the
-conversation. Two-step user confirmation: the first call returns a briefing
-payload (risk + removal method) without adding; re-call with `confirm=true`
-after the user approves. The entry is prospective-only — future writes pass
-the guard, but it never clears a recorded violation — lasts for the current
-session only, and merges with `allowlist` `dirs` entries at Tier 0.
-Subagent calls and the Working Directory root itself are rejected. A second
-tool, `dir_whip_settle(paths)`, is registered lazily on the first
-write-audit notice and moves flagged root files into the audit quarantine
-(same-turn self-heal).
+| `Debug Log` | Absolute path to dir-whip.log, suffixed `(no records yet)` or `(unavailable)` |
+| `Health` | `Good`, or `N issue(s)` with one indented line per issue (resolution FAIL-OPEN, stats.jsonl not writable) |
 
 ## See It In Action
 
@@ -278,7 +260,7 @@ Agent: (a write slips past the front layer and lands at the root)
 
 [dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
   - notes.txt
-Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]). Further writes to the Working Directory are blocked until then.
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
 
 Agent: dir_whip_settle(paths=["notes.txt"])
        # file moves to .hermes/audit-quarantine/<timestamp>/, gate re-opens
@@ -289,14 +271,15 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.5.0
-State: ACTIVE
+[dir-whip] v0.6.2
+State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
-Terminal Guard: enabled
-Allowlist: Files: README.md  Dirs: projects/foo
-Reminder: injected
-Health: OK
+Allowlist:
+  Files: README.md
+  Dirs: projects/foo
 Stats File: C:/Users/me/AppData/Local/hermes/dir-whip/stats.jsonl
+Debug Log: C:/Users/me/AppData/Local/hermes/dir-whip/dir-whip/dir-whip.log
+Health: Good
 ```
 
 ## Advanced Usage
@@ -310,19 +293,18 @@ Optional and user-managed, at `HERMES_HOME/dir-whip/dir-whip-config.yaml`
 | Key | Meaning |
 | --- | ------- |
 | `allowlist` | Structured mapping: `files` = root-level file basenames, `dirs` = Working-Directory-relative dir paths (recursive subtree exemption; multi-level allowed); strict empty fallback when the key is missing; legacy flat values are ignored fail-closed |
-| `working_dir_root` | Explicit Working Directory override; fallback = profile `terminal.cwd` |
-| `terminal_guard` | Enable/disable terminal write interception (default: enabled) |
-| `write_audit` | Enable/disable the post-hoc root write audit (default: enabled) |
-| `write_audit_entry_cap` | Maximum root entries before the audit skips the round (default: 2000) |
+| `working_dir_root` | Explicit Working Directory override; fallback = profile `terminal.cwd`; `/dir-whip` prints a WARNING when the override differs from the profile value |
+
+The `terminal_guard` / `write_audit` / `write_audit_entry_cap` keys were
+removed (BREAKING): interception and the audit are always on, the audit
+entry cap is a fixed 2000, and any leftover values in the config file are
+ignored at runtime.
 
 ```yaml
 allowlist:
   files: []   # root-level file basenames, e.g. ["README.md", "notes.txt"]
   dirs: []    # relative dir paths, recursive subtree, e.g. ["projects/foo"]
 # working_dir_root: E:/HermesWorkspace/default   # optional override
-# terminal_guard: enabled                        # default when absent
-# write_audit: enabled                           # default when absent
-# write_audit_entry_cap: 2000                    # default when absent
 ```
 
 > Configuration lives in `dir-whip-config.yaml` — edit by hand or via
@@ -330,11 +312,13 @@ allowlist:
 > config_writer, comments preserved). Bare `/dir-whip` without args is still a
 > read-only report.
 
-**Working Directory resolution.** Resolution follows three steps: explicit
-`working_dir_root` in dir-whip-config.yaml wins; otherwise the current profile's
-`terminal.cwd` is used; if both fail, dir-whip falls back to the current
-working directory with a WARNING. `/dir-whip` reports the value
-and its source.
+**Working Directory resolution.** The plugin resolves in three steps:
+explicit `working_dir_root` in dir-whip-config.yaml wins; otherwise the
+current profile's `terminal.cwd` is used; if both fail the plugin fails
+open (the guard is off — `/dir-whip` shows `State: disabled` and lists a
+Health issue). The CLI scripts use a longer chain: they additionally
+enumerate profiles and fall back to the current working directory with a
+stderr WARNING. `/dir-whip` reports the value and its source.
 
 ### Scheduled Governance
 
@@ -348,7 +332,7 @@ flowchart TD
     B -->|violations listed| D[wakeAgent: true - agent wakes]
     D --> E[classify and archive misplaced files]
     E --> F[report summary]
-    B -->|--workspace mismatch| G[exit 2 - no wakeAgent]
+    B -->|workspace mismatch or root unresolved| G[exit 2 - no wakeAgent]
 ```
 
 ```bash
@@ -358,11 +342,18 @@ flowchart TD
 #                    files. If no violations, respond with [SILENT]."
 ```
 
-- stdout "OK" → `{"wakeAgent": false}` → silent tick, no delivery
-- stdout lists violations → `{"wakeAgent": true}` → the agent wakes, classifies,
-  and moves files into Session Directories
-- `--workspace` mismatch → exit 2, no wakeAgent (a misconfigured boundary is a
-  system problem, not a governance situation)
+- stdout "OK" → `{"wakeAgent": false, "violations": 0, "removed": 0, "failed": 0}`
+  → silent tick, no delivery
+- stdout lists violations → `{"wakeAgent": true, "violations": 2, "removed": 1, "failed": 0}`
+  → the agent wakes, classifies, and moves files into Session Directories
+- `--workspace` mismatch or a failed root resolution in gate mode → exit 2, no
+  wakeAgent (a misconfigured boundary is a system problem, not a governance
+  situation)
+
+The gate payload always carries all four keys. `--gate` also auto-cleans
+expired `.tmp/` entries (older than 30 days): `removed` / `failed` make
+partial cleanup failures visible, failure details go to stderr, and the exit
+code stays violations-driven (1 when violations exist, else 0).
 
 ### Subagent Mode
 
@@ -406,20 +397,79 @@ cross-session totals.
 
 ## Security & Risk
 
-dir-whip is a discipline aid, not a security boundary.
+dir-whip is **behavioral monitoring and soft management**, **not a security
+boundary**: it observes and corrects file behavior through the host tool
+layer and cannot defend channels that bypass that layer (such as file I/O
+inside a code-execution kernel).
 
-**What can go wrong.** An agent may be prompted to write anywhere; a prompt
-injection can push writes to unexpected locations. Widening `allowlist`
-(`dirs` entries) or disabling the plugin leaves the workspace unmanaged.
-Misconfiguration is not always visible without a check.
+**Enforced.**
 
-**Built-in protections.** Enforcement happens in the `pre_tool_call` hook
-before a write lands. Root writes that slip past are caught by the write
-audit (post-hoc snapshot diff) and further writes are frozen until the file
-is moved or removed. Misconfiguration fails open with a WARNING, never in
-silence. External writes are allowed but logged. Stats are privacy-trimmed.
-The audit gate refuses to wake agents when `--workspace` mismatches, and
-`/dir-whip`'s Health verifies config and stats health.
+1. **Write-class interception** — in `write_file` / `patch` / `terminal`,
+   writes inside the Working Directory but outside the allowlist and
+   Session Directories are blocked before they land (root-level files and
+   non-session subdirectories alike; `root-file` / `non-session-dir`), with
+   fix-it guidance in the message.
+2. **Post-hoc root-file audit + settlement gate** — allowed terminal
+   commands are re-checked via snapshot diff; slipped-through violations
+   run the L1–L4 ladder until settled (see Enforcement).
+3. **Session Directory structure compliance** — `audit_workspace.py`
+   checks the Outputs/ and .tmp/ layout and cleans expired `.tmp` entries
+   (the cron governance entry).
+
+**Not enforced.**
+
+1. **Arbitrary code execution** — file I/O inside an execution kernel
+   (`execute_code` and similar) bypasses the guard, the audit, and the gate
+   entirely; this is the largest blind spot.
+2. **Uncertain write intent** — interpreter scripts, nested shells, variable
+   paths, heredoc: allowed + logged; may slip through (the audit is the
+   backstop).
+3. **Allowlists and exemptions** — `allowlist` files / dirs, the runtime
+   allowlist, and writes inside Session Directories: always allowed.
+4. **Everything outside the Working Directory** — allowed + logged.
+5. **Read-only tools and commands** — never enter the chain.
+6. **Deletions** — record-only, never a violation.
+
+**What can go wrong:**
+
+- **Prompt injection** — the agent may be talked into writing anywhere, and
+  the landing spot is not controllable. A hidden line in a web page or
+  document it was asked to read ("save the result to ~/xxx") is enough:
+  targets outside the Working Directory are allowed by design, leaving only
+  the log for after-the-fact tracing.
+- **Weakened defenses** — widening `allowlist` dirs or disabling the plugin
+  leaves the workspace unmanaged. `allowlist` dirs is a recursive subtree
+  exemption — one extra registered directory puts the whole subtree outside
+  the discipline; `hermes plugins disable dir-whip` turns off all
+  interception and auditing with one command.
+- **Misconfiguration** — not always visible at a glance. A typo in an
+  allowlist filename silently fails to exempt the file and shows up as a
+  puzzling block; edits to the wrong profile's `dir-whip-config.yaml` never
+  take effect. These hide in the behavior — hard to locate without reading
+  the `/dir-whip` report.
+
+**Built-in protections:**
+
+- **Pre-landing interception** — enforcement happens in the `pre_tool_call`
+  hook, before a write lands: violating targets are stopped with fix-it
+  guidance before execution, so no dirty file is created and there is no
+  "write first, clean up later" cost.
+- **Post-landing backstop** — uncertain-tier commands may still land files
+  via scripts; the audit layer snapshot-diffs the root and registers any
+  new or modified root-level violation as pending, freezing every write
+  until settlement completes.
+- **No silent failures** — a config anomaly (e.g. an unresolvable Working
+  Directory) fails open but also injects a WARNING instead of quietly doing
+  nothing; when the boundary cannot be verified (`--workspace` mismatch or
+  a failed root resolution) the gate refuses to wake the agent.
+- **Minimal capability surface** — external writes are allowed but logged
+  for after-the-fact auditing; `dir_whip_settle` accepts only paths in the
+  current pending set, all-or-nothing, so even a manipulated agent has no
+  arbitrary file-moving ability.
+- **Verifiable** — every verdict appends one line to stats.jsonl
+  (privacy-trimmed: no file contents, no absolute paths); `/dir-whip`'s
+  Health and the Debug Log expose config source and stats health at any
+  time.
 
 ## License
 

@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1100" viewBox="0 0 960 1100" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="18%" r="95%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0a0e14"/>
+    </radialGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1c3a5e"/>
+      <stop offset="100%" stop-color="#12263f"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a2f12"/>
+      <stop offset="100%" stop-color="#241b08"/>
+    </linearGradient>
+    <linearGradient id="redGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a1a1f"/>
+      <stop offset="100%" stop-color="#240d10"/>
+    </linearGradient>
+    <linearGradient id="slateGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#262c36"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" opacity="0.04"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <marker id="ah-cyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="ah-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="ah-amber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+    </marker>
+    <marker id="ah-red" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f85149"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="1100" fill="url(#bg)"/>
+  <rect width="960" height="1100" fill="url(#dots)"/>
+
+  <text x="430" y="36" text-anchor="middle" font-size="18" font-weight="800" fill="#e6edf3"
+        paint-order="stroke" stroke="#0a0e14" stroke-width="4" stroke-linejoin="round">dir-whip Audit Ladder (settlement loop of a write-class call)</text>
+
+  <!-- ======== Edges (under layer) ======== -->
+  <g fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M430,116 L430,150" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M566,184 L654,184" stroke="#f85149" marker-end="url(#ah-red)"/>
+    <path d="M430,228 L430,262" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M566,304 L654,304" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M430,340 L430,374" stroke="#f85149" marker-end="url(#ah-red)"/>
+    <path d="M430,440 L430,478" stroke="#d29922" marker-end="url(#ah-amber)"/>
+    <path d="M430,568 L430,594" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah-cyan)"/>
+    <path d="M430,684 L430,710" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah-cyan)"/>
+    <path d="M430,800 L430,826" stroke="#22d3ee" stroke-width="2" marker-end="url(#ah-cyan)"/>
+    <path d="M430,928 L430,966" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M566,408 L780,408 L780,582" fill="none" stroke="#d29922" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah-amber)"/>
+    <path d="M780,652 L780,874 L586,874" fill="none" stroke="#d29922" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah-amber)"/>
+    <path d="M300,1000 L26,1000 L26,88 L294,88" stroke="#3fb950" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#ah-green)"/>
+  </g>
+
+  <!-- ======== Edge labels ======== -->
+  <g font-size="11" font-weight="600" text-anchor="middle" dominant-baseline="central"
+     paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">
+    <text x="606" y="172" fill="#ff7b72">violation</text>
+    <text x="444" y="247" fill="#22d3ee">allow</text>
+    <text x="606" y="292" fill="#7ee787">none</text>
+    <text x="444" y="359" fill="#ff7b72">violation</text>
+    <text x="670" y="396" fill="#f0b429">still blocked</text>
+  </g>
+  <text transform="rotate(-90 13 540)" x="13" y="540" text-anchor="middle" font-size="11" fill="#7ee787" opacity="0.9"
+        paint-order="stroke" stroke="#0a0e14" stroke-width="3" stroke-linejoin="round">rescan passes · latch released</text>
+
+  <!-- ======== Nodes ======== -->
+  <rect x="300" y="60" width="260" height="56" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="430" y="80" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ffffff">Write-class tool call</text>
+  <text x="430" y="101" text-anchor="middle" dominant-baseline="central" font-size="10.5" fill="#cffafe">write_file · patch · terminal</text>
+
+  <rect x="300" y="156" width="260" height="72" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="430" y="178" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="700" fill="#ffffff">Front layer: three-tier verdict</text>
+  <text x="430" y="198" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">deterministic → classify chain · uncertain → allow+log</text>
+  <text x="430" y="216" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">device paths / read-only → silent allow</text>
+
+  <rect x="660" y="156" width="260" height="56" rx="10" fill="url(#redGrad)" stroke="#f85149" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="790" y="184" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ff7b72">block + fix guidance</text>
+
+  <rect x="300" y="268" width="260" height="72" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="430" y="292" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ffffff">Audit snapshot diff</text>
+  <text x="430" y="316" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">allowed terminal commands · root-level file entries</text>
+
+  <rect x="660" y="276" width="240" height="56" rx="10" fill="url(#slateGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="780" y="304" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="700" fill="#7ee787">No violation — round ends</text>
+
+  <rect x="300" y="380" width="260" height="60" rx="10" fill="url(#redGrad)" stroke="#f85149" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="430" y="401" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ff7b72">Pending set</text>
+  <text x="430" y="423" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">session-scoped · children post to parent</text>
+
+  <!-- ======== Four-level ladder ======== -->
+  <rect x="280" y="484" width="300" height="84" rx="12" fill="url(#amberGrad)" stroke="#d29922" stroke-width="2" filter="url(#glow)"/>
+  <text x="430" y="510" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#f0b429">L1 · teach notice</text>
+  <text x="430" y="538" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">fire-once — the only in-conversation prompt · lists remedies</text>
+
+  <rect x="280" y="600" width="300" height="84" rx="12" fill="url(#slateGrad)" stroke="#8b949e" stroke-width="2" filter="url(#soft)"/>
+  <text x="430" y="626" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#e6edf3">L2 · record</text>
+  <text x="430" y="654" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">write-audit-* stats + events (background only)</text>
+
+  <rect x="280" y="716" width="300" height="84" rx="12" fill="url(#redGrad)" stroke="#f85149" stroke-width="2" filter="url(#glow)"/>
+  <text x="430" y="742" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#ff7b72">L3 · gate latch</text>
+  <text x="430" y="770" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">freezes write-class calls (incl. rm / config edits)</text>
+
+  <rect x="280" y="832" width="300" height="96" rx="12" fill="url(#blueGrad)" stroke="#58a6ff" stroke-width="2" filter="url(#glow)"/>
+  <text x="430" y="856" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#79c0ff">L4 · remediate</text>
+  <text x="430" y="880" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">① settle → quarantine ② session dir move (out-of-band)</text>
+  <text x="430" y="902" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">③ user /dir-whip allow ④ out-of-band removal</text>
+
+  <rect x="300" y="972" width="260" height="56" rx="28" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.6" filter="url(#glow)"/>
+  <text x="430" y="1000" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#ffffff">pending cleared · latch released</text>
+
+  <rect x="660" y="588" width="240" height="64" rx="10" fill="url(#amberGrad)" stroke="#d29922" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="780" y="611" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="700" fill="#f0b429">pre_verify nudge</text>
+  <text x="780" y="633" text-anchor="middle" dominant-baseline="central" font-size="10" fill="#8b949e">cap 3 per session</text>
+
+  <!-- ======== Legend ======== -->
+  <g font-size="12" fill="#8b949e" dominant-baseline="central">
+    <rect x="40" y="1064" width="14" height="14" rx="3" fill="#f85149" fill-opacity="0.25" stroke="#f85149"/>
+    <text x="62" y="1071">Block · latch</text>
+    <rect x="180" y="1064" width="14" height="14" rx="3" fill="#22d3ee" fill-opacity="0.25" stroke="#22d3ee"/>
+    <text x="202" y="1071">Trunk · cleared</text>
+    <rect x="320" y="1064" width="14" height="14" rx="3" fill="#d29922" fill-opacity="0.25" stroke="#d29922"/>
+    <text x="342" y="1071">Notice · nudge</text>
+    <rect x="460" y="1064" width="14" height="14" rx="3" fill="#58a6ff" fill-opacity="0.25" stroke="#58a6ff"/>
+    <text x="482" y="1071">Remedies</text>
+    <rect x="580" y="1064" width="14" height="14" rx="3" fill="#8b949e" fill-opacity="0.25" stroke="#8b949e"/>
+    <text x="602" y="1071">Background record</text>
+  </g>
+</svg>

@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="700" viewBox="0 0 1160 700" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Hiragino Sans GB',sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="18%" r="95%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0a0e14"/>
+    </radialGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="purpleGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2d2150"/>
+      <stop offset="100%" stop-color="#1a1438"/>
+    </linearGradient>
+    <linearGradient id="blueGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1c3a5e"/>
+      <stop offset="100%" stop-color="#12263f"/>
+    </linearGradient>
+    <linearGradient id="slateGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#262c36"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="panelGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#151a21"/>
+      <stop offset="100%" stop-color="#10141b"/>
+    </linearGradient>
+    <linearGradient id="cylGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#202a37"/>
+      <stop offset="100%" stop-color="#141a22"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" opacity="0.04"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <marker id="ah-cyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="ah-amber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <rect width="1160" height="700" fill="url(#bg)"/>
+  <rect width="1160" height="700" fill="url(#dots)"/>
+
+  <text x="580" y="46" text-anchor="middle" font-size="20" font-weight="800" fill="#e6edf3"
+        paint-order="stroke" stroke="#0a0e14" stroke-width="4" stroke-linejoin="round">dir-whip 功能架构总览</text>
+
+  <!-- ======== ① Skill 教导层（含 Scripts 工具） ======== -->
+  <rect x="40" y="84" width="320" height="320" rx="14" fill="url(#panelGrad)" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="56" y="100" width="10" height="10" rx="2" fill="#a371f7"/>
+  <text x="74" y="105" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">① Skill 教导层（含 Scripts 工具）</text>
+  <line x1="56" y1="122" x2="344" y2="122" stroke="#21262d" stroke-width="1"/>
+
+  <rect x="70" y="150" width="260" height="76" rx="10" fill="url(#purpleGrad)" stroke="#a371f7" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="200" y="180" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">捆绑技能 + 会话开始提醒</text>
+  <text x="200" y="203" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">（可选加载 · ≤280 字符）</text>
+
+  <rect x="70" y="264" width="260" height="76" rx="10" fill="url(#blueGrad)" stroke="#79c0ff" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="200" y="294" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">CLI 脚本</text>
+  <text x="200" y="317" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">建目录 · 审计 · 解析</text>
+
+  <!-- ======== ② Plugin 强制层（9 hooks） ======== -->
+  <rect x="520" y="84" width="320" height="460" rx="14" fill="url(#panelGrad)" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="536" y="100" width="10" height="10" rx="2" fill="#22d3ee"/>
+  <text x="554" y="105" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">② Plugin 强制层（9 hooks）</text>
+  <line x1="536" y1="122" x2="824" y2="122" stroke="#21262d" stroke-width="1"/>
+
+  <rect x="560" y="150" width="240" height="76" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="680" y="180" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ffffff">前置层拦截</text>
+  <text x="680" y="203" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#a5f3fc">落地前三态判定</text>
+
+  <rect x="560" y="280" width="240" height="76" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="680" y="310" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ffffff">审计层兜底</text>
+  <text x="680" y="333" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#a5f3fc">快照 diff · L1 · L3 闩锁</text>
+
+  <rect x="560" y="410" width="240" height="76" rx="10" fill="url(#blueGrad)" stroke="#79c0ff" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="680" y="440" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">兜底工具</text>
+  <text x="680" y="463" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">allow_path · settle · /dir-whip</text>
+
+  <g fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round">
+    <path d="M680,226 L680,272" marker-end="url(#ah-cyan)"/>
+    <path d="M680,356 L680,402" marker-end="url(#ah-cyan)"/>
+  </g>
+
+  <!-- ======== 共享配置（双向） ======== -->
+  <path d="M366,284 L514,284" fill="none" stroke="#d29922" stroke-width="2.2"
+        marker-start="url(#ah-amber)" marker-end="url(#ah-amber)"/>
+  <text x="440" y="262" text-anchor="middle" font-size="13" font-weight="700" fill="#f0b429"
+        paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">dir-whip-config.yaml</text>
+  <text x="440" y="306" text-anchor="middle" font-size="10.5" fill="#8b949e">唯一配置源 · 教罚分离</text>
+
+  <!-- ======== ③ Observability 层 ======== -->
+  <rect x="880" y="84" width="240" height="220" rx="14" fill="url(#panelGrad)" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="896" y="100" width="10" height="10" rx="2" fill="#8b949e"/>
+  <text x="914" y="105" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">③ Observability 层</text>
+  <line x1="896" y1="122" x2="1104" y2="122" stroke="#21262d" stroke-width="1"/>
+
+  <rect x="905" y="166" width="190" height="76" rx="10" fill="url(#slateGrad)" stroke="#8b949e" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="1000" y="196" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">可观测数据</text>
+  <text x="1000" y="219" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">stats · 事件 · 日志 · 报告</text>
+
+  <!-- ======== 工作目录（圆柱） ======== -->
+  <path d="M902,486 V600 A98,20 0 0 0 1098,600 V486" fill="url(#cylGrad)" stroke="#67e8f9" stroke-width="1.5"/>
+  <ellipse cx="1000" cy="486" rx="98" ry="20" fill="#232d3b" stroke="#67e8f9" stroke-width="1.5"/>
+  <text x="1000" y="548" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="#e6edf3">工作目录</text>
+  <text x="1000" y="572" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">会话目录 / 白名单 / .hermes</text>
+
+  <!-- ======== 边 ======== -->
+  <g fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M846,200 L870,200" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M846,448 L1000,448 L1000,458" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M200,408 L200,622 L890,622" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+  </g>
+  <g font-size="12" font-weight="600" dominant-baseline="central"
+     paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">
+    <text x="848" y="186" text-anchor="middle" fill="#8b949e">上报</text>
+    <text x="900" y="436" text-anchor="middle" fill="#67e8f9">强制</text>
+    <text x="480" y="610" text-anchor="middle" fill="#8b949e">落盘 / 审计读写</text>
+  </g>
+
+  <!-- ======== 图例 ======== -->
+  <g font-size="12" fill="#8b949e" dominant-baseline="central">
+    <rect x="40" y="663" width="14" height="14" rx="3" fill="#a371f7" fill-opacity="0.25" stroke="#a371f7"/>
+    <text x="62" y="670">教导层</text>
+    <rect x="150" y="663" width="14" height="14" rx="3" fill="#22d3ee" fill-opacity="0.25" stroke="#22d3ee"/>
+    <text x="172" y="670">强制层</text>
+    <rect x="260" y="663" width="14" height="14" rx="3" fill="#58a6ff" fill-opacity="0.25" stroke="#58a6ff"/>
+    <text x="282" y="670">工具 · 脚本</text>
+    <rect x="402" y="663" width="14" height="14" rx="3" fill="#d29922" fill-opacity="0.25" stroke="#d29922"/>
+    <text x="424" y="670">共享配置</text>
+    <rect x="528" y="663" width="14" height="14" rx="3" fill="#8b949e" fill-opacity="0.25" stroke="#8b949e"/>
+    <text x="550" y="670">可观测</text>
+  </g>
+</svg>
