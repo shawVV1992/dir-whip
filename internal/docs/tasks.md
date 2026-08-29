@@ -222,13 +222,13 @@ patch，用户逐项拍板）。
 | # | Task | Depends on | Key results (KPI) | Status |
 |---|------|-----------|-------------------|--------|
 | 41.1 | **文档批**：`scr-041-plan.md` + spec EN/ZH v2.9 ACTIVE（5.11 工具契约重写：入口门禁+确认协议 verbatim / 5.18 重扫语义 + L1/L3 文案 verbatim / changelog v2.9）+ tasks Phase 10 + testing-standards 7.11 + AGENTS.md 同步 | - | 文档落盘 | Done (2026-08-28) |
-| 41.R1.1 | **red**：重扫不因 runtime 豁免销案（豁免后 pending 保留 / nudge attempt 序号持续断言） | 41.1 | red 确认 | Pending |
-| 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类；含既有"豁免即销案"断言迁移） | 41.R1.1 | 全绿 | Pending |
-| 41.R2.1 | **red+green**：allow_path 入口门禁（子代理拒绝 + 父代指引 verbatim / 整根拒绝 verbatim / stats `allow-path-subagent-rejected` 行 + bus-skip） | 41.1 | 全绿 | Pending |
-| 41.R3.1 | **red+green**：两步确认协议（schema confirm 参数 / 首调确认载荷 verbatim 且不添加 / confirmation-issued 强制两步 / 未签发 confirm 拒绝 / 成功后常规 stats+bus / SKILL.md 措辞同步） | 41.1 | 全绿 | Pending |
-| 41.R4.1 | **red+green**：L1/L3/nudge 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 + 完整命令指令 /dir-whip allow <path> / nudge 尾句选择呈现 + "or the user's decision" / 子代理变体与 settle 行不变） | 41.1 | 全绿 | Pending |
+| 41.R1.1 | **red**：重扫不因 runtime 豁免销案（豁免后 pending 保留 / nudge attempt 序号持续断言） | 41.1 | red 确认 | Done (2026-08-29: red 确认——旧"豁免即销案"行为 + `honor_runtime_allowlist` TypeError；TestRescanSemantics 5 用例) |
+| 41.R1.2 | **green**：verdict.py `classify_target` 增 `honor_runtime_allowlist` 参数 + audit.py 重扫接线（config 口径分类；含既有"豁免即销案"断言迁移） | 41.R1.1 | 全绿 | Done (2026-08-29, 18b313d: 参数落地 + `audit_unresolved_paths` config 口径重扫；无存量销案断言需迁移) |
+| 41.R2.1 | **red+green**：allow_path 入口门禁（子代理拒绝 + 父代指引 verbatim / 整根拒绝 verbatim / stats `allow-path-subagent-rejected` 行 + bus-skip） | 41.1 | Done (2026-08-29, 63ae6b4: 门序 subagent→root→confirm；双 rule_key 入 `_BUS_SKIP_RULE_KEYS`；stats 行落位) |
+| 41.R3.1 | **red+green**：两步确认协议（schema confirm 参数 / 首调确认载荷 verbatim 且不添加 / confirmation-issued 强制两步 / 未签发 confirm 拒绝 / 成功后常规 stats+bus / SKILL.md 措辞同步） | 41.1 | Done (2026-08-29, 63ae6b4: confirm 参数 + confirmation-issued 集合（on_start/reset_cache 清）+ 闩锁条件行 + DEBUG 可观测；未签发 confirm=重发载荷 per erratum-2) |
+| 41.R4.1 | **red+green**：L1/L3/nudge 文案 verbatim 锁更新（config 选项改归属用户 + 闩锁期冻结显式句 + 完整命令指令 /dir-whip allow <path> / nudge 尾句选择呈现 + "or the user's decision" / 子代理变体与 settle 行不变） | 41.1 | Done (2026-08-29, 18b313d: L1/L3/nudge v2.9 verbatim + 4 条 verbatim 锁) |
 | 41.R6.1 | 术语与语义扫描：README EN/ZH + after-install.md 对齐（豁免不清偿 / 两步确认 / 出路清单修正 / 工具签名 confirm 参数） | 41.1 | 文档落盘 | Done (2026-08-28) |
-| 41.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.1、spec re-freeze（v2.9 FROZEN）、发布说明（重扫语义行为变更提示） | 41.R1.2/41.R2.1/41.R3.1/41.R4.1 | 基线全绿 | Pending |
+| 41.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.1、spec re-freeze（v2.9 FROZEN）、发布说明（重扫语义行为变更提示） | 41.R1.2/41.R2.1/41.R3.1/41.R4.1 | Done (2026-08-29: 664 passed / 5 skipped / 0 failed；plugin.yaml 0.6.1；spec v2.9 FROZEN；顺带修复 scr039_helpers 夹具不清 dir-whip logger handler 的跨文件隔离缺陷——register→logsetup 接线（SCR-040 R3）起潜伏，全量字母序 c<s 掩蔽) |
 | 41.10 | 真机复验：六检查点（逃逸闭合 / 子代理拒绝 / 整根拒绝 / 确认流 / 预授权回归 / 新文案渲染，见 scr-041-plan.md 六） | 41.9 | 报告落盘 | Pending |
 
 ---
