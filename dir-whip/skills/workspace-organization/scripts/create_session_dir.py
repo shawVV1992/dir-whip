@@ -25,17 +25,25 @@ Exit codes:
 
 import argparse
 import datetime
+import importlib.util
 import os
 import re
 import sys
 
-try:
-    import workspace_resolver
-except ImportError:
-    # Dual import mode (mirrors the plugin guard): when run from outside the
-    # scripts directory, make the shared module importable from this dir.
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import workspace_resolver
+# SCR-042 H2: the bundled shared resolver is loaded from THIS script's own
+# directory via an absolute path -- independent of sys.path / PYTHONPATH /
+# CWD state, so a same-named workspace file can never hijack the module
+# (python -m / PYTHONPATH shadow / embedded-import vectors). Registering
+# sys.modules["workspace_resolver"] keeps direct-import and in-process
+# callers on a single instance. No fallback: a missing bundled file is a
+# broken script and must fail loudly.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_resolver_spec = importlib.util.spec_from_file_location(
+    "workspace_resolver", os.path.join(_SCRIPT_DIR, "workspace_resolver.py")
+)
+workspace_resolver = importlib.util.module_from_spec(_resolver_spec)
+sys.modules["workspace_resolver"] = workspace_resolver
+_resolver_spec.loader.exec_module(workspace_resolver)
 
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_TASK_NAME_LEN = 80
