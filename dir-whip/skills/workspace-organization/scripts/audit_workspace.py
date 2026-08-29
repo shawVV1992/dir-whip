@@ -5,10 +5,12 @@ Scans the Working Directory root against 6 compliance checks and reports
 violations. Boundary validation (spec 4.4): an explicit --workspace must
 equal the resolved Working Directory; the default target is the resolved
 Working Directory (dir-whip-config override -> HERMES_SESSION_PROFILE ->
-profile enumeration + TERMINAL_CWD candidate root), falling back to the
-current directory with ONE concise stderr warning when the chain is
-unresolvable (fail-open). A missing directory or a mismatch is a
-parameter error.
+profile enumeration + TERMINAL_CWD candidate root). When the chain is
+unresolvable, interactive mode falls back to the current directory with
+ONE concise stderr warning (fail-open); cron mode (--gate) REFUSES to
+fall back -- it exits 2 with zero deletion and no wakeAgent line
+(SCR-042 H1: no deletion without a resolved root). A missing directory
+or a mismatch is a parameter error.
 
 Checks:
   1. Root level may only contain files on the dir-whip allowlist files
@@ -30,7 +32,9 @@ expired entries automatically; interactive mode only proposes them
 (never deletes without the user). The hidden --days flag sets the age
 threshold (default 30). Deletion never touches Outputs/, session files
 outside .tmp/, workspace root files, or the .tmp/ directory itself, and
-never scans .tmp/ directories outside valid session dirs.
+never scans .tmp/ directories outside valid session dirs. The scan
+boundary never follows symlinks: a session-name symlink at the root and
+a symlinked .tmp/ body are both skipped entirely (SCR-042 N1).
 
 Output:
   Plain text: one block per violation (check number, name, path,
@@ -44,7 +48,7 @@ Exit codes:
   0 = compliant (no violations)
   1 = violations found
   2 = parameter/path error (missing directory, --workspace mismatch,
-      invalid --days)
+      invalid --days, or --gate with an unresolved Working Directory)
 """
 
 import argparse
@@ -394,14 +398,17 @@ def find_tmp_entries(parent):
 
     Only scans parent/<session-dir>/.tmp/ where the session dir name is a
     valid session name (real timestamp). Never recurses deeper and never
-    scans .tmp/ directories outside session dirs.
+    scans .tmp/ directories outside session dirs. Symlink boundary
+    (SCR-042 N1), two layers: session-name symlinks are not session dirs
+    (follow_symlinks=False), and a symlinked .tmp/ body skips the whole
+    session (scandir would list external content through the link).
     """
     entries = []
     for entry in os.scandir(parent):
-        if not entry.is_dir() or not is_session_name(entry.name):
+        if not entry.is_dir(follow_symlinks=False) or not is_session_name(entry.name):
             continue
         tmp_dir = os.path.join(entry.path, TMP_DIR)
-        if not os.path.isdir(tmp_dir):
+        if os.path.islink(tmp_dir) or not os.path.isdir(tmp_dir):
             continue
         for item in os.scandir(tmp_dir):
             entries.append(item.path)
@@ -506,6 +513,18 @@ def main(argv=None):
             return 2
     else:
         root = workspace_resolver.resolve_working_dir_root(hh=hh)
+        if root is None and args.gate:
+            # SCR-042 H1: gate mode never deletes on an unresolved root --
+            # the fail-open CWD fallback would delete whatever the injected
+            # environment happens to point at. Upgrades the resolution
+            # failure to a gate failure (exit 2, zero stdout, no wakeAgent).
+            # Checked BEFORE the enablement precheck: the exit-2 path stays
+            # output-clean on stdout. Interactive fail-open is unchanged.
+            sys.stderr.write(
+                "error: Working Directory unresolved; --gate refuses to fall "
+                "back to the current directory (no deletion without a resolved root)\n"
+            )
+            return 2
         if root is None:
             # Fail-open (spec 4.4 step 4): the resolver already emitted
             # exactly ONE concise stderr warning; fall back to CWD.
