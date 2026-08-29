@@ -224,6 +224,12 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
     is settled when it is gone, moved outside the root, or legalized
     (allowlist file / prefix / session dir). Fail-open: a failed re-scan keeps
     the full pending set (the gate stays latched).
+
+    SCR-041 R1 (spec 5.18 v2.9): the classification here is CONFIG-only
+    (honor_runtime_allowlist=False) -- a runtime-allowlist entry is
+    prospective-only and never settles a recorded violation; config
+    allowlist files/dirs entries and session-dir containment still
+    settle. Shared by the L3 gate and the continuation nudge.
     """
     try:
         pending = audit_pending_snapshot(session_id)
@@ -247,7 +253,8 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
             if _classify_fn is None:
                 raise RuntimeError("audit classifier not wired")
             verdict = _classify_fn(
-                path, working_dir_root, allowlist or [], is_subagent=False
+                path, working_dir_root, allowlist or [], is_subagent=False,
+                honor_runtime_allowlist=False,
             )
             if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
                 unresolved.append(path)
@@ -286,11 +293,14 @@ def _remediation_instruction(paths_display):
 
 
 def _audit_notice_message(paths):
-    """The single L1 notice text (5.18, v2.8 R1): the paths and the
+    """The single L1 notice text (5.18, v2.9 R4): the paths and the
     remediation via the shared _remediation_instruction helper (single
     source of truth with the continuation nudge). One notice per result
     listing every unannounced violation; only this notice ever enters
-    the conversation (context hygiene)."""
+    the conversation (context hygiene). v2.9 R4: the config-allowlist
+    option is attributed to the USER ("ask the user to add") with the
+    exact command instruction and the latch-period freeze explicit
+    (all writes frozen incl. config edits)."""
     lines = [
         "[dir-whip] Write audit: the following file(s) were written to the "
         "Working Directory root outside any Session Directory:"
@@ -299,10 +309,13 @@ def _audit_notice_message(paths):
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
         _remediation_instruction(paths)
-        + " (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or add them to "
-        "the allowlist files entries in dir-whip-config.yaml "
-        "(files: [notes.txt]). Further writes to the Working Directory are "
-        "blocked until then."
+        + " (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the "
+        "file(s) at the root, ask the user to add them to the allowlist "
+        "files entries in dir-whip-config.yaml (files: [notes.txt]) — "
+        "give them the exact command to run: /dir-whip allow <path> — "
+        "while the block is active all writes are frozen (config edits "
+        "included). Further writes to the Working Directory are blocked "
+        "until then."
     )
     return "\n".join(lines)
 
@@ -399,11 +412,17 @@ def _audit_gate_block_message(display_paths, is_subagent):
         lines.append("Fix: report the pending path(s) to the parent agent "
                      "for remediation (do not create a session directory).")
     else:
+        # v2.9 R4 (SCR-041): the config-allowlist option is attributed to
+        # the USER with the exact command and the latch-period freeze
+        # explicit. The subagent variant and the settle call line below
+        # are unchanged.
         lines.append(
             "Fix: move the file(s) into a Session Directory "
-            "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/) or add them to "
-            "the allowlist files entries in dir-whip-config.yaml "
-            "(files: [notes.txt])."
+            "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or ask the user "
+            "to add them to the allowlist files entries in "
+            "dir-whip-config.yaml (files: [notes.txt]) — give them the "
+            "exact command: /dir-whip allow <path> — while the block is "
+            "active all writes are frozen (config edits included)."
         )
         # v2.7 R4 ruling (2026-08-26): the gate blocks remediation mv/rm,
         # so the message must name the tool channel or the loop never
@@ -773,12 +792,22 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
             session_id, False,
         )
         display = [str(path).replace("\\", "/") for path in unresolved]
+        # v2.9 R4 third-review tail (SCR-041): the resolution choice is
+        # presented to the USER; the keep-at-root command carries the
+        # REAL absolute forward-slash path(s) (copy-paste runnable; the
+        # /dir-whip allow command accepts whitespace-separated batches).
+        keep_command = "/dir-whip allow %s" % " ".join(display)
         return {
             "action": "continue",
             "message": (
                 "[dir-whip] %d unresolved root write(s) remain at the "
-                "Working Directory root. %s. Finish only after settlement."
-                % (len(display), _remediation_instruction(display))
+                "Working Directory root. %s. Present the resolution "
+                "choice to the user: move the file(s) (settle), or keep "
+                "them at the root — for the keep-at-root choice, give "
+                "the user the exact command to run: %s. Finish only "
+                "after settlement or the user's decision."
+                % (len(display), _remediation_instruction(display),
+                   keep_command)
             ),
         }
     except Exception as exc:

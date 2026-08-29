@@ -392,7 +392,8 @@ def _allowlist_snapshot_transport(allowlist):
     return (_parsed_allowlist_raw(allowlist),)
 
 
-def classify_target(target, working_dir_root, allowlist=None, is_subagent=False):
+def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
+                    honor_runtime_allowlist=True):
     """Classify a single normalized absolute target (spec 5.3 step 6, v2.7 R9).
 
     Returns a verdict dict:
@@ -405,6 +406,13 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False)
     Directory, then BLOCK; outside working_dir_root (incl. sibling profile
     dirs) -> external-write. There is NO approve tier. Casefold handling
     delegated to allowlist module.
+
+    honor_runtime_allowlist (SCR-041 R1, spec 5.18 v2.9): when False the
+    runtime-allowlist check is skipped entirely (config-only judgment --
+    allowlist files/dirs + session-dir containment). Default True
+    preserves the guard/diff behavior exactly; the settlement re-scan
+    (audit_unresolved_paths) passes False so a runtime exemption never
+    settles a recorded violation (prospective-only semantics).
     """
     # Resolve parsed allowlist: prefer passed allowlist, else fresh load.
     parsed = _resolve_parsed_allowlist(allowlist)
@@ -412,7 +420,7 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False)
     # Tier 0: allowlist dirs subtree OR runtime allowlist -> ALLOW
     if is_allowlist_dir(target, working_dir_root, parsed):
         return {"outcome": "allow", "rule_key": "tier0-allowlist"}
-    if is_runtime_allowlisted(target):
+    if honor_runtime_allowlist and is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}
 
     if not within_working_dir(target, working_dir_root):
