@@ -245,13 +245,13 @@ Design source: feedback/13（skill 脚本安全性与稳健性评审，1 高危/
 | # | Task | Depends on | Key results (KPI) | Status |
 |---|------|-----------|-------------------|--------|
 | 42.1 | **文档批**：`scr-042-plan.md` + spec EN/ZH v2.10 ACTIVE（3.4 gate failure 扩展 / 4.2 wakeAgent 四键 + parity + symlink 边界 / 4.4 hermes home 回退 / 7.2 两行 + changelog）+ spec-changes 登记 + tasks Phase 11 + testing-standards 7.12 + AGENTS.md 同步 + feedback/13 处置注记 | - | 文档落盘 | Done (2026-08-29) |
-| 42.R1.1 | **red**：gate+解析失败零删除零输出（rc 2、无 wakeAgent）；symlink 会话目录 / symlink `.tmp` 零扫描零删除；交互 fail-open 回归 | 42.1 | red 确认 | Pending |
-| 42.R1.2 | **green**：main() gate 守卫（解析失败升格 gate failure）+ find_tmp_entries 双层 symlink 加固（follow_symlinks=False + islink(tmp_dir) 跳过） | 42.R1.1 | R1 全绿 | Pending |
-| 42.R2.1 | **red+green**：importlib 绝对路径加载捆绑 resolver（两脚本，sys.modules 注册）+ CWD 阴影防退化测试 | 42.1 | R2 全绿 | Pending |
-| 42.R3.1 | **red+green**：casefold parity（根文件白名单复用 `_ws_is_allowlist_file` / 黑名单 lower / `.hermes` Windows casefold）+ parity 测试 | 42.1 | R3 全绿 | Pending |
-| 42.R4.1 | **red+green**：wakeAgent 四键载荷（violations/removed/failed 恒在）+ gate+json 全行 JSON + 失败注入 failed=1 | 42.1 | R4 全绿 | Pending |
-| 42.R5.1 | **red+green**：三脚本 stdout/stderr reconfigure(errors=replace) + create 解析根 abspath + LOCALAPPDATA 回退用户主目录 | 42.1 | R5 全绿 | Pending |
-| 42.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.2、spec re-freeze（v2.10 FROZEN）、deployment.md 升级注记（--gate 解析失败行为变更提示） | 42.R1.2/42.R2.1/42.R3.1/42.R4.1/42.R5.1 | 基线全绿 | Pending |
+| 42.R1.1 | **red**：gate+解析失败零删除零输出（rc 2、无 wakeAgent）；symlink 会话目录 / symlink `.tmp` 零扫描零删除；交互 fail-open 回归 | 42.1 | red 确认 | Done (2026-08-29: red 确认——3 failed / 2 passed：gate+解析失败曾 exit 0+删除、symlink 会话目录与 `.tmp` 两形态外部内容被删；2 条回归用例先行通过) |
+| 42.R1.2 | **green**：main() gate 守卫（解析失败升格 gate failure）+ find_tmp_entries 双层 symlink 加固（follow_symlinks=False + islink(tmp_dir) 跳过） | 42.R1.1 | R1 全绿 | Done (2026-08-29, cdeb3d6: gate 守卫 verbatim stderr + exit 2、先于 enablement precheck；双层加固；模块 docstring 同步) |
+| 42.R2.1 | **red+green**：importlib 绝对路径加载捆绑 resolver（两脚本，sys.modules 注册）+ CWD 阴影防退化测试 | 42.1 | R2 全绿 | Done (2026-08-29, dbd2baf: spec_from_file_location 按 `__file__` 加载、无兜底；哨兵阴影 rc9→捆绑副本、`__file__` 路径相等断言) |
+| 42.R3.1 | **red+green**：casefold parity（根文件白名单复用 `_ws_is_allowlist_file` / 黑名单 lower / `.hermes` Windows casefold）+ parity 测试 | 42.1 | R3 全绿 | Done (2026-08-29, 0d68c37: check_root_files 复用 resolver 匹配器 + BLACKLIST_NAMES 键小写化（".DS_Store"/"Thumbs.db" 原含大写——计划假设偏差现场修正）+ WHITELISTED_ROOT_DIRS_CASEFOLD nt 分支) |
+| 42.R4.1 | **red+green**：wakeAgent 四键载荷（violations/removed/failed 恒在）+ gate+json 全行 JSON + 失败注入 failed=1 | 42.1 | R4 全绿 | Done (2026-08-29, ac58340: cleanup_tmp echo 参数 + json_quiet 抑制逐项行与明文报告行；red=9 failed 含 5 条既有两键载荷断言迁移至四键契约) |
+| 42.R5.1 | **red+green**：三脚本 stdout/stderr reconfigure(errors=replace) + create 解析根 abspath + LOCALAPPDATA 回退用户主目录 | 42.1 | R5 全绿 | Done (2026-08-29, cb8929e: cp936 红→绿 + 相对 working_dir_root 输出绝对路径 + hermes_home/_precheck_hermes_home 回退) |
+| 42.9 | 回归 + bump：pytest 全量基线对比、plugin.yaml 0.6.2、spec re-freeze（v2.10 FROZEN）、deployment.md 升级注记（--gate 解析失败行为变更提示） | 42.R1.2/42.R2.1/42.R3.1/42.R4.1/42.R5.1 | 基线全绿 | Done (2026-08-29: 687 passed / 5 skipped / 0 failed（664 基线 + 23 新测试）；plugin.yaml 0.6.2；spec EN/ZH v2.10 FROZEN；版本断言 test_version_is_061→062 + 报告版本行迁移；deployment.md v0.6.1→v0.6.2 升级注记落盘) |
 | 42.10 | 真机复验：五检查点（无注入 cron exit 2 零删除 / symlink 逃逸零删除 / gate+json 全解析+failed 可见 / cp936 非 ASCII 不崩 / 常规 gate 回归，见 scr-042-plan.md 六） | 42.9 | user-gated | Pending |
 
 ---
