@@ -30,6 +30,7 @@ class _SessionState:
         self.project_active_fn = None    # 宿主 API 注入槽（ADR-0007；R7 项目豁免探针，on_start 时调用）
         self.reminder_status = None      # R2/R6: injected|skipped-outside|skipped-child|unavailable
         self.log_handler_installed = False  # SCR-040 R5: dir-whip.log attach 幂等标志（logsetup.setup）
+        self.confirmation_issued = set()  # SCR-041 R3: allow_path 两步确认已签发集合（会话内存，受 self.lock 保护）
         self.child_session_ids = set()   # 受 self.lock 保护
         # P6 precomputed plugin paths/version (31.13): filled once at
         # register(); None until then (direct-call fallbacks keep the

@@ -513,6 +513,10 @@ def reset_cache():
         _registered_config_accessor.reset()
     with _runtime_allowlist_lock:
         _runtime_allowlist.clear()
+    # SCR-041 R3: the allow_path confirmation-issued set follows the
+    # runtime allowlist lifecycle (register/re-register clears it too).
+    with state.session.lock:
+        state.session.confirmation_issued.clear()
     # Session-scoped state: re-seeded at register (get_cached_config) and at
     # the next top-level on_session_start.
     state.session.session_root = None

@@ -48,7 +48,7 @@ OTHERWISE
 | Writing any file | classify → create session dir → write: Classify target → create session dir if needed → `Outputs/` or `.tmp/` |
 | Root write blocked | Create session dir, re-target there |
 | Delete / overwrite / move | Confirmation Protocol (list files → wait for explicit yes) |
-| User specifies a path | Call `dir_whip_allow_path(path)` BEFORE writing |
+| User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval |
 | Subagent writing | Write to parent-passed dir, never create own session dir |
 
 ## Instant Discipline (Layer 1)
@@ -127,13 +127,14 @@ Subagent variant: replace "I will create..." with "I will write to the target di
 - Parent ensures the target directory exists before delegating (lazy creation is the parent's job)
 - Subagents write to the parent's `.tmp/` (default) or an explicit `Outputs/`/per-task subdirectory
 - Subagents never create session directories or promote outputs (`.tmp/` → `Outputs/` is the parent's review step); missing target or blocked write → report back to the parent
+- `dir_whip_allow_path` is not available to subagents; exemptions are granted by the user via the main agent -> report back so the parent can ask the user
 
 ## Terminal Write Discipline
 
 Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations; uncertain intent is allowed + logged.
 
 1. Prefer Session Directories for all writes
-2. User specifies a path → call `dir_whip_allow_path(path)` BEFORE writing
+2. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing
 3. Blocked → create a Session Directory and re-target (never bypass the guard)
 
 ## Governance & Cron

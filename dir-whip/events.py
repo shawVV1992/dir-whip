@@ -31,12 +31,15 @@ logger = logging.getLogger("dir-whip")
 
 # Verdict rule_keys that never fan out to the bus (5.14): their callers
 # emit their own bus events (approval verdicts, the audit gate block, the
-# audit violation verdict).
+# audit violation verdict) or are allow_path entry-gating rejections
+# (SCR-041 R2, 5.11 v2.9 -- stats row only, no generic blocked fanout).
 _BUS_SKIP_RULE_KEYS = frozenset((
     "approval:granted",
     "approval:denied",
     "write-audit-gate-block",
     "write-audit-violation",
+    "allow-path-subagent-rejected",
+    "allow-path-root-rejected",
 ))
 
 
