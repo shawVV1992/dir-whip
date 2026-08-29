@@ -77,6 +77,7 @@ sys.modules["workspace_resolver"] = workspace_resolver
 _resolver_spec.loader.exec_module(workspace_resolver)
 
 WHITELISTED_ROOT_DIRS = (".hermes",)
+WHITELISTED_ROOT_DIRS_CASEFOLD = frozenset(d.casefold() for d in WHITELISTED_ROOT_DIRS)
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 OUTPUTS_DIR = "Outputs"
 TMP_DIR = ".tmp"
@@ -84,8 +85,8 @@ SCRIPT_EXTENSIONS = (".py", ".sh", ".bat", ".ps1")
 BLACKLIST_NAMES = {
     "__pycache__": "directory",
     "node_modules": "directory",
-    ".DS_Store": "file",
-    "Thumbs.db": "file",
+    ".ds_store": "file",
+    "thumbs.db": "file",
 }
 
 
@@ -286,7 +287,12 @@ def is_session_name(name):
 
 def check_root_files(root, allowed, violations):
     for entry in os.scandir(root):
-        if entry.is_file() and entry.name not in allowed:
+        # SCR-042 M1: match through the resolver's allowlist helper (the
+        # same code path shape as allowlist.is_allowlist_file, Windows
+        # casefold) so guard and audit never disagree on case variants.
+        if entry.is_file() and not workspace_resolver._ws_is_allowlist_file(
+            entry.name, {"files": allowed}
+        ):
             violations.append({
                 "check": 1,
                 "name": "Root-level files",
@@ -322,7 +328,16 @@ def check_root_outputs(root, violations):
 
 def check_root_session_format(root, violations, dirs_entries=None):
     for entry in os.scandir(root):
-        if not entry.is_dir() or entry.name in WHITELISTED_ROOT_DIRS:
+        if not entry.is_dir():
+            continue
+        # SCR-042 M1: .hermes whitelist compares case-insensitively on
+        # Windows (mirrors report.py _case_eq; .HERMES == .hermes there).
+        whitelisted = (
+            entry.name.casefold() in WHITELISTED_ROOT_DIRS_CASEFOLD
+            if os.name == "nt"
+            else entry.name in WHITELISTED_ROOT_DIRS
+        )
+        if whitelisted:
             continue
         if _dir_exempt(entry.name, dirs_entries):
             continue  # allowlist dirs subtree (v2.7 R9)
@@ -349,11 +364,14 @@ def check_session_structure(session, violations):
 def check_outputs_content(outputs, violations):
     for entry in os.scandir(outputs):
         kind = "directory" if entry.is_dir() else "file"
-        if entry.name.lower() == "__pycache__" or entry.name.lower() == "node_modules":
+        # SCR-042 M1: blacklist comparisons are case-insensitive (keys are
+        # already lowercase; .pyc style matches check_session_scripts).
+        name_lower = entry.name.lower()
+        if name_lower == "__pycache__" or name_lower == "node_modules":
             if kind != "directory":
                 continue
-        if entry.name in BLACKLIST_NAMES or (
-            kind == "file" and entry.name.endswith(".pyc")
+        if name_lower in BLACKLIST_NAMES or (
+            kind == "file" and name_lower.endswith(".pyc")
         ):
             violations.append({
                 "check": 5,
