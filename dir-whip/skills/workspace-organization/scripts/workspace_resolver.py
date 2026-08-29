@@ -44,6 +44,14 @@ import posixpath
 import re
 import sys
 
+# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# non-ASCII paths) -- encode errors degrade to replacement characters
+# instead of raising UnicodeEncodeError. errors= only; encoding itself is
+# untouched, and the hasattr guard covers non-standard streams.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 GUARD_SUBDIR = "dir-whip"
 CONFIG_FILE = "dir-whip-config.yaml"
 
@@ -73,7 +81,9 @@ def hermes_home(env=None):
 
     HERMES_HOME environment variable wins when set (Hermes' canonical
     override, used by tests to isolate from any real installation);
-    otherwise Windows: LOCALAPPDATA/hermes, POSIX: ~/.hermes. `env`
+    otherwise Windows: LOCALAPPDATA/hermes -- with a user-home fallback
+    when LOCALAPPDATA is unset/empty so the home is NEVER a relative path
+    resolvable against the CWD (SCR-042 N7) --, POSIX: ~/.hermes. `env`
     overrides os.environ (test isolation).
     """
     if env is None:
@@ -82,7 +92,10 @@ def hermes_home(env=None):
     if env_home:
         return env_home
     if os.name == "nt":
-        return os.path.join(env.get("LOCALAPPDATA", ""), "hermes")
+        local_app_data = (env.get("LOCALAPPDATA") or "").strip()
+        if local_app_data:
+            return os.path.join(local_app_data, "hermes")
+        return os.path.join(os.path.expanduser("~"), "hermes")
     return os.path.join(os.path.expanduser("~"), ".hermes")
 
 

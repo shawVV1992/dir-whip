@@ -45,6 +45,12 @@ workspace_resolver = importlib.util.module_from_spec(_resolver_spec)
 sys.modules["workspace_resolver"] = workspace_resolver
 _resolver_spec.loader.exec_module(workspace_resolver)
 
+# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# non-ASCII paths) -- encode errors degrade to replacement characters.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_TASK_NAME_LEN = 80
 
@@ -96,7 +102,9 @@ def main(argv=None):
         # resolution failure the resolver emits exactly ONE stderr WARNING
         # (fail-open) and we fall back to the CWD -- no extra warnings here.
         resolved = workspace_resolver.resolve_working_dir_root()
-        workspace = resolved if resolved is not None else os.getcwd()
+        # SCR-042 N2: the printed path is ALWAYS absolute (spec 4.1) --
+        # a relative working_dir_root config value is anchored to the CWD.
+        workspace = os.path.abspath(resolved) if resolved is not None else os.getcwd()
     else:
         workspace = os.path.abspath(workspace_arg)
 

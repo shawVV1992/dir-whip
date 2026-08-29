@@ -82,6 +82,13 @@ workspace_resolver = importlib.util.module_from_spec(_resolver_spec)
 sys.modules["workspace_resolver"] = workspace_resolver
 _resolver_spec.loader.exec_module(workspace_resolver)
 
+# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# non-ASCII paths) -- encode errors degrade to replacement characters
+# (stderr too: error messages carry the same non-ASCII paths).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 WHITELISTED_ROOT_DIRS = (".hermes",)
 WHITELISTED_ROOT_DIRS_CASEFOLD = frozenset(d.casefold() for d in WHITELISTED_ROOT_DIRS)
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
@@ -107,7 +114,12 @@ def _precheck_hermes_home():
     if env_home:
         return env_home
     if os.name == "nt":
-        return os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
+        # SCR-042 N7: unset/empty LOCALAPPDATA falls back to the user home
+        # so the precheck never reads config relative to the CWD.
+        local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
+        if local_app_data:
+            return os.path.join(local_app_data, "hermes")
+        return os.path.join(os.path.expanduser("~"), "hermes")
     return os.path.join(os.path.expanduser("~"), ".hermes")
 
 
