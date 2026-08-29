@@ -185,6 +185,9 @@ commands:
 | | Everything outside the Working Directory (allowed + logged) |
 | | Read-only tools and commands |
 | | Deletions (report-only, never violations) |
+| | Arbitrary code execution (`execute_code` and similar) — file I/O inside an execution kernel bypasses the guard, the audit, and the gate entirely |
+
+> **Scope disclaimer**: dir-whip is behavioral monitoring, **not a security boundary**. It observes a specific set of host tool behaviors (`write_file` / `patch` / `terminal` interception, post-hoc root-write audit, session-dir discipline) and cannot see writes that bypass the tool layer entirely — e.g. code-execution kernels performing their own file I/O. Such channels carry inherent risk; treat dir-whip as a discipline helper, never as a sandbox or a security guarantee.
 
 ## Commands
 
