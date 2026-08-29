@@ -41,7 +41,13 @@ Output:
   suggestion), or a single "OK" line when compliant.
   --json: a JSON array of violation objects, or [] when compliant.
   --gate: regular output first, then the cleanup report, then a final
-  JSON line {"wakeAgent": false} or {"wakeAgent": true, "violations": N}.
+  JSON line {"wakeAgent": bool, "violations": N, "removed": K,
+  "failed": F} -- four keys always present; "removed" counts successful
+  deletions, "failed" counts deletion failures (SCR-042 M2+N8: cleanup
+  failures are visible to cron while the exit code stays
+  violations-driven). In --gate + --json mode stdout is exactly two
+  lines, each json.loads-able: the violations JSON array and the
+  wakeAgent line (the plain removal report moves to stderr only).
   Interactive --json keeps the plain JSON array (no cleanup proposal).
 
 Exit codes:
@@ -450,13 +456,15 @@ def is_old(path, days):
     return age >= days * 86400
 
 
-def cleanup_tmp(root, days, delete):
+def cleanup_tmp(root, days, delete, echo=True):
     """Find expired session .tmp/ entries; delete them when delete=True.
 
     Returns (items, failures). Deletion is limited to the contents of
     session .tmp/ directories: Outputs/, session files outside .tmp/,
     workspace root files and the .tmp/ directory itself are never
-    touched.
+    touched. `echo=False` suppresses the per-item stdout lines (SCR-042
+    M2: gate+json stdout stays all-JSON); the per-item failure stderr
+    lines are always written.
     """
     items = [p for p in find_tmp_entries(root) if is_old(p, days)]
     failures = 0
@@ -467,7 +475,8 @@ def cleanup_tmp(root, days, delete):
                     shutil.rmtree(path)
                 else:
                     os.remove(path)
-                sys.stdout.write(to_fwd(path) + "\n")
+                if echo:
+                    sys.stdout.write(to_fwd(path) + "\n")
             except OSError as exc:
                 failures += 1
                 sys.stderr.write("error: could not delete %s: %s\n" % (to_fwd(path), exc))
@@ -570,13 +579,20 @@ def main(argv=None):
     else:
         print_plain(violations)
 
-    items, failures = cleanup_tmp(root, args.days, delete=args.gate)
+    # SCR-042 M2: gate+json keeps stdout machine-parseable -- the per-item
+    # removal lines and the plain "Removed N item(s)" report are suppressed
+    # (stdout = violations array line + wakeAgent line); the failure report
+    # stays on stderr in every mode.
+    json_quiet = args.gate and args.json
+    items, failures = cleanup_tmp(root, args.days, delete=args.gate, echo=not json_quiet)
+    removed = len(items) - failures
     if args.gate and items:
         if failures:
             sys.stderr.write(
                 "error: %d item(s) could not be removed from .tmp directories\n" % failures
             )
-        sys.stdout.write("Removed %d item(s) from .tmp directories.\n" % (len(items) - failures))
+        if not json_quiet:
+            sys.stdout.write("Removed %d item(s) from .tmp directories.\n" % removed)
     elif items and not args.json:
         sys.stdout.write("Tmp cleanup proposal (cron mode auto-cleans):\n")
         for path in items:
@@ -584,10 +600,16 @@ def main(argv=None):
         sys.stdout.write("Proposed %d item(s) for .tmp cleanup.\n" % len(items))
 
     if args.gate:
-        if violations:
-            sys.stdout.write(json.dumps({"wakeAgent": True, "violations": len(violations)}) + "\n")
-        else:
-            sys.stdout.write(json.dumps({"wakeAgent": False}) + "\n")
+        # SCR-042 M2+N8: four keys always present (json and non-json alike);
+        # "failed" makes partial cleanup failures visible to cron while the
+        # exit code stays violations-driven (backward-compatible add-only).
+        payload = {
+            "wakeAgent": bool(violations),
+            "violations": len(violations),
+            "removed": removed,
+            "failed": failures,
+        }
+        sys.stdout.write(json.dumps(payload) + "\n")
 
     return 1 if violations else 0
 
