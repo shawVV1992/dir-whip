@@ -284,5 +284,6 @@ R4 → R1 → R3（E2 段边界是 T1 层前置）。
 | 43.R5.1 | **red+green**：隔离区迁址 dir-whip home（`audit_settle_paths` + `_remediation_instruction` 消息改写）+ 审计 `WHITELISTED_ROOT_DIRS` 移除 `.hermes` + `/dir-whip list` 隔离区行 | 43.1 | R5 全绿 | Done (2026-08-30) |
 | 43.R6.1 | **red+green**：gate 去删除（`cleanup_tmp` 收窄只读盘点 + `delete=args.gate` 接线移除）+ wakeAgent 两键负载 + 交互盘点措辞 + SCR-042 断言改写/退役（42.R1 删除断言→盘点边界；42.R4 四键→两键） | 43.1 | R6 全绿 | Done (2026-08-30) |
 | 43.9 | 回归 + bump：pytest 全量基线对比（687 基线）、plugin.yaml 0.6.3、spec re-freeze（v2.11 FROZEN）、deployment.md 升级注记核对（两键化 / 隔离区迁址 / 根外登记拒绝三项行为提示） | 43.R1.2/43.R2.1/43.R3.1/43.R4.1/43.R5.1/43.R6.1 | 基线全绿 | Done (2026-08-30) |
-| 43.10 | 真机复验：六检查点（根外信号+前缀边界 / 根外登记拒绝自解释 / 隔离区迁址三方口径 / cron 两键零删除 / 交互盘点只读 / 常规回归，见 scr-043-plan.md 六）+ 报告（user-gated） | 43.9 | Pending |
-completed; it now closes the phase._
+| 43.10 | 真机复验：六检查点（根外信号+前缀边界 / 根外登记拒绝自解释 / 隔离区迁址三方口径 / cron 两键零删除 / 交互盘点只读 / 常规回归，见 scr-043-plan.md 六）+ 报告（user-gated） | 43.9 | PASS 无 FAIL (2026-08-30, user-confirmed; 报告归档 archive/v0.6.3/) |
+
+_Phase 12 (SCR-043 v0.6.3) completed; it now closes the phase._
