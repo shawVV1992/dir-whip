@@ -239,20 +239,19 @@ Health: Good
 
 ## 高级用法
 
-### 可选配置
+### config 配置
 
 可选、由用户维护，位于 `HERMES_HOME/dir-whip/dir-whip-config.yaml`
-（Windows：`%LOCALAPPDATA%/hermes/dir-whip/dir-whip-config.yaml`；POSIX：
-`~/.hermes/dir-whip/dir-whip-config.yaml`）。
+（`HERMES_HOME` 环境变量优先；Windows 默认 `%LOCALAPPDATA%/hermes`，未设时
+回退 `~/hermes`；POSIX 默认 `~/.hermes`）。会话档案启用时落至
+`profiles/<name>/dir-whip/`。
 
-| 键 | 含义 |
-| --- | ---- |
-| `allowlist` | 结构化映射：`files` = 根级文件 basename，`dirs` = 相对工作目录的目录路径（递归子树豁免；允许多级）；键缺失时严格空回退；遗留平铺值 fail-closed 忽略 |
-| `working_dir_root` | 显式工作目录覆盖；缺省回退 = 当前档案 `terminal.cwd`；覆盖值与档案值不一致时 `/dir-whip` 报告输出 WARNING |
-
-`terminal_guard` / `write_audit` / `write_audit_entry_cap` 三个键已移除
-（BREAKING）：拦截与审计恒开启，审计条目上限固定 2000，配置文件中的残留
-键在运行时被忽略。
+| 字段 | 含义 |
+| ---- | ---- |
+| `allowlist.files` | 根级文件 basename 白名单（如 `README.md`）；名称校验禁止 `..`、绝对形式与路径分隔符 |
+| `allowlist.dirs` | 相对工作目录的目录路径（如 `projects/foo`），**递归子树豁免**，允许多级 |
+| `allowlist` 键缺失 | 严格空回退——白名单为空，根级一切写入均拦截 |
+| `working_dir_root` | 显式工作目录覆盖；与当前档案 `terminal.cwd` 不一致时 `/dir-whip` 报告输出 WARNING |
 
 ```yaml
 allowlist:
@@ -261,81 +260,72 @@ allowlist:
 # working_dir_root: E:/HermesWorkspace/default   # 可选覆盖
 ```
 
-> 配置位于 `dir-whip-config.yaml` —— 可手改，也可通过
-> `/dir-whip allow <编号|名称|路径>|remove|list` 快捷修改（config_writer 行级编辑，保留注释）。
-> 不带参数的 `/dir-whip` 仍为只读报告。
+**解析机制。** 插件与脚本各有一条解析链（节点细节见各图下方说明）：
 
-**工作目录解析。** 插件侧分三步：dir-whip-config.yaml 中显式 `working_dir_root`
-优先；否则取当前档案的 `terminal.cwd`；两者皆不可用时插件 fail-open（守卫
-关闭——`/dir-whip` 显示 `State: disabled` 并在 Health 列出问题）。脚本侧
-链条更长：还会枚举各档案并回退到当前工作目录，同时向 stderr 发出 WARNING。
-`/dir-whip` 会报告取值及其来源。
+**插件侧**（register 解析一次 · 顶层会话开始刷新）：
 
-### 定时治理模式
+![config 解析链——插件侧](assert/image/config-plugin-chain.svg)
 
-`audit_workspace.py --gate` 是 Hermes cron 任务的零 token 预检门：
+- 安全 YAML 解析（`safe_load`）：文件缺失或解析失败 fail-open 到空配置；覆盖值与档案 `terminal.cwd` 不一致时 `/dir-whip` 输出 WARNING；fail-open 时守卫关闭（`State: disabled`，Health 列出问题）。
 
-```mermaid
-flowchart TD
-    A[cron tick] --> B[audit_workspace.py --gate]
-    B -->|OK| C[wakeAgent: false - 静默跳过一次]
-    B -->|列出违规| D[wakeAgent: true - agent 唤醒]
-    D --> E[分类并归档错位文件]
-    E --> F[报告摘要]
-    B -->|workspace 不匹配或根解析失败| G[退出码 2 - 不唤醒]
-```
+**脚本侧**（独立运行 · 无 yaml 库时行解析兜底）：
 
-```bash
-# Cron 任务：script= scripts/audit_workspace.py --gate
-#            skill= dir-whip:workspace-organization
-#            prompt: "If audit found violations, classify and archive misplaced
-#                     files. If no violations, respond with [SILENT]."
-```
+![config 解析链——脚本侧](assert/image/config-script-chain.svg)
 
-- stdout 为 "OK" → `{"wakeAgent": false, "violations": 0, "removed": 0,
-  "failed": 0}` → 静默跳过一次，不投递
-- stdout 列出违规 → `{"wakeAgent": true, "violations": 2, "removed": 1,
-  "failed": 0}` → agent 被唤醒、分类并把文件移入会话目录
-- `--workspace` 不匹配或 gate 模式下根解析失败 → 退出码 2、不发出 wakeAgent
-  （边界配置错误属于系统问题，而非治理场景）
+- 候选根 = 枚举各档案 cwd + `TERMINAL_CWD`（`--workspace` 按相等匹配、CWD 按包含匹配）；未命中时交互模式回退 CWD 并发 stderr WARNING，`--workspace` 模式保持干净、由调用方 exit 2；两条链判定等价（parity 测试保证），守卫与脚本结论一致。
 
-gate 负载恒为四键。`--gate` 还会自动清理过期的 `.tmp/` 条目（超过 30 天）：
-`removed` / `failed` 让部分清理失败可见，失败明细写入 stderr，退出码仍由
-违规驱动（有违规为 1，否则为 0）。
+### 支持 cron 任务
+
+> 待填充：本节将描述 Hermes cron 任务的定时治理支持——任务配置（script /
+> skill / prompt）、wakeAgent 两键负载与静默 tick 语义。内容随 feedback/14
+> E6（gate 回归纯审计 + 唤醒）实施后补齐。
 
 ### 子代理模式
 
-父代理把任务委托给子代理时，遵循以下文件协议：
+父代理把任务委托给子代理时，遵循以下机制：
 
-```mermaid
-flowchart TD
-    A[父代委托任务] --> B[父代确保目标目录存在]
-    B --> C[子代理写入父代传递的目录]
-    C -->|缺省| D[父会话 .tmp/]
-    C -->|显式传递| E[Outputs/ 或独立子目录]
-    C -->|写入被拦截| F[向父代上报]
-    C -->|完成| G[父代审阅并晋升 .tmp/ → Outputs/]
-```
+![子代理模式流程——登记、写入、挂账、清偿、解除](assert/image/subagent-flow.svg)
 
-- 父代在委托前确保目标目录存在（必要时先创建会话目录）。
-- 子代理写入父代传递的目标目录：缺省为父会话 `.tmp/`；父代可显式传递
-  `Outputs/` 路径（正式交付物），或为每个子代理指定独立子目录
+- `subagent_start` 登记 child→parent 映射：子会话开始提醒记为
+  `skipped-child`，审计状态继承父会话（不重置闩锁）。
+- 父代在委托前确保目标目录存在（必要时先创建会话目录）；缺省为父会话
+  `.tmp/`，可显式传 `Outputs/` 路径（正式交付物），或为每个子代理指定独立子目录
   （如 `.tmp/<task>/`）。
-- 子代理不自建会话目录、不自晋升产物（`.tmp/` → `Outputs/` 晋升归父代
-  审阅）。
-- 目标目录缺失或写入被拦截时，子代理向父代上报，而非自行创建会话目录。
-- 插件对子代理写入的判定与父代一致；统计按子代理切分记录。
+- 子代理写入的判定与父代完全一致；统计按 `is_subagent` 切分。
+- 子代理的审计违规挂到**父 pending 集合**——`dir_whip_allow_path` 与
+  `dir_whip_settle` 对子代理拒绝，豁免与清偿都由父代执行。
+- 目标目录缺失或写入被拦截时向父代上报，而非自行创建会话目录。
+- `subagent_stop` 解除登记并记录 duration/状态；`.tmp/` → `Outputs/` 晋升
+  归父代审阅。
 
-### 统计
+### 统计与可观察
 
-每次判定以一行 JSON 追加写入 `HERMES_HOME/dir-whip/stats.jsonl`。每行含
-会话字段（`profile` / `session_id` / `is_subagent` / `started_at`）与事件
-字段（`ts` / `outcome` / `reason` / `tool` / `rule_key` / `target`）。记录
-范围：拦截判定、运行时豁免、审批观察，以及写入审计的违规与闸门拦截
-（`write-audit-violation` / `write-audit-gate-block`），按子代理切分。
-`target` 一律相对 Working Directory 记录，外部路径哈希前缀或省略——不含
-文件内容、绝对路径或提示词文本。超过 5 MB 滚动为 `stats.jsonl.1`；跨会话
-汇总经 `/dir-whip` 报告的 Stats File 路径查看。
+每次判定以一行 JSON 追加写入 `HERMES_HOME/dir-whip/stats.jsonl`（超过 5 MB
+滚动为 `stats.jsonl.1`）。记录范围：拦截判定、运行时豁免、审批观察，以及
+写入审计的违规与闸门拦截（`write-audit-violation` /
+`write-audit-gate-block`），按子代理切分。每行字段分两组：
+
+| 字段 | 含义 | 说明 |
+| ---- | ---- | ---- |
+| `profile` | 会话档案 | 统计文件落在该档案的 dir-whip 目录，路径随会话档案切换 |
+| `session_id` | 会话标识 | 当前判定所属会话 |
+| `is_subagent` | 子代理标记 | 统计按父/子代理切分 |
+| `started_at` | 会话开始时间 | 会话上下文的一部分 |
+| `ts` | 事件时间戳 | ISO 格式，判定发生时刻 |
+| `outcome` | 判定结果 | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block` 等 |
+| `reason` | 结果原因 | 短语说明，如根外写入记 `target outside working_dir_root` |
+| `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `allow-path` 等 |
+| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` |
+| `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
+
+全文件不含文件内容、绝对路径或提示词文本。可观察入口：
+
+- **实时事件流**——判定与审计结果以 7 类 `dir-whip:*` 事件发到 Hermes 事件
+  总线，订阅即观测；
+- **`/dir-whip` 报告**——Stats File 路径（跨会话汇总入口）、Health（统计
+  健康）与 Debug Log（配置来源核对）；
+- **日志分级**——`block` / fail-open 记 WARNING，`external-write` 记 INFO，
+  其余放行记 DEBUG（dir-whip.log）。
 
 ## 安全与风险
 

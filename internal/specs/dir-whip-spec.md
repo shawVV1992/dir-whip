@@ -1,8 +1,8 @@
 ﻿# dir-whip — Complete Specification
 
-- Version: 2.10
-- Date: 2026-08-29 (SCR-042 amendment v2.10 — skill-scripts security hardening; previous freeze v2.9 2026-08-29)
-- Status: FROZEN (v2.10, activated 2026-08-29, re-frozen 2026-08-29 at implementation-complete state; suite 687 passed / 5 skipped / 0 failed) — SCR-042 amendment v2.10 (scr-042-plan.md, scope ruling 2026-08-29): skill-scripts security hardening per feedback/13 (9 items, 5 requirement groups): (R1) deletion surface — --gate mode treats a Working Directory resolution failure as a gate failure (exit 2, reason on stderr, NO wakeAgent line, NOTHING deleted; an unresolved root never becomes a deletion target via the fail-open CWD fallback; interactive fail-open unchanged), and the .tmp cleanup scan boundary excludes symlinked session dirs and symlinked .tmp directories (two layers); (R2) import hardening — both scripts load the bundled workspace_resolver via importlib from the __file__-derived absolute path with sys.modules registration (CWD/PYTHONPATH shadowing can no longer divert the shared module); (R3) case parity — audit root-file allowlist matching reuses the resolver's Windows-casefold matcher (parity with allowlist.py by construction, ADR-0006), Outputs blacklist comparisons case-insensitive, .hermes root-dir exemption casefolded on Windows (mirrors report.py _case_eq); (R4) gate output contract — the wakeAgent line carries four keys always ({wakeAgent, violations, removed, failed}; cleanup failures visible to cron) and gate+json stdout is line-by-line JSON; (R5) robustness smalls — stdout/stderr reconfigure(errors=replace) in all three scripts (cp936 non-ASCII paths no longer crash), create_session_dir abspaths the resolved root (absolute-path contract), hermes home falls back to the user home when LOCALAPPDATA is unset/empty (never CWD-relative). Version target v0.6.2 (patch — skill-scripts security hardening; no config surface change; hooks 9 / emits 7 unchanged; the --gate resolution-failure behavior change is noted in the release notes). Historical: SCR-041 v2.9 (activated 2026-08-28, re-frozen 2026-08-29 at implementation-complete state; suite 664 passed / 5 skipped / 0 failed) — SCR-041 amendment (scr-041-plan.md, user decisions 2026-08-28): (1) re-scan semantics tightened (R1) — the L3 settlement re-scan classifies pending paths by the CONFIG allowlist only (allowlist files/dirs + session-dir); a runtime-allowlist entry no longer settles a recorded violation (runtime exemption = prospective-only: future writes pass Tier 0, past violations stay pending); the pre-write sanction flow is unaffected (the audit diff classifies at write time, so a path exempted BEFORE the write never creates a violation); (2) allow_path entry gating (R2) — subagent calls rejected with a parent-guidance variant + stats rule_key allow-path-subagent-rejected (bus-skipped), and the Working Directory root itself is rejected as a path argument (workspace-wide exemptions belong in config allowlist dirs authored by the user); (3) two-step user-confirmation protocol (R3) — dir_whip_allow_path gains an optional confirm parameter: the first call (no confirm) returns a confirmation payload (risk + removal method + relay instruction) WITHOUT adding, and confirm=true is honored only for a path whose confirmation payload was already issued this session (mandatory two-step, session-memory state); (4) L1/L3 message rewording (R4) — the config-allowlist remediation option is re-attributed to the USER (ask the user to add) with the latch-period freeze made explicit (all writes frozen incl. config edits), removing the false affordance that cost two gate-blocked turns in realhost. Version target v0.6.1 (patch — enforcement hardening: no config surface change, confirm is a new optional parameter). Historical: SCR-040 v2.8 (activated 2026-08-27: continuation-nudge rework + observability pack + config/report surface rework incl. three-key de-configuration BREAKING; re-frozen 2026-08-28 after the implementation batch). Historical: SCR-039 v2.7 (activated 2026-08-26: prompt-channel rework + same-turn self-heal + structured allowlist; re-frozen 2026-08-27 at implementation-complete state). Earlier activations: 2026-08-22 — SCR-033 terminal false-positive fix (v2.1),
+- Version: 2.11
+- Date: 2026-08-30 (SCR-043 amendment v2.11 — classification chain T0-T4 reorder + runtime-allowlist value-domain gating + .hermes quarantine relocation + gate zero-auto-delete; previous freeze v2.10 2026-08-29)
+- Status: ACTIVE (v2.11, activated 2026-08-30, re-freeze at implementation-complete state 43.9) — SCR-043 amendment v2.11 (scr-043-plan.md, feedback/14 design finalization 2026-08-30; version ruling v0.6.3 patch): (R1) classification chain T0-T4 — SCOPE FIRST: outside-root (excluding the root itself) is ALWAYS `external-write` before any exemption is consulted, so the outside-root signal never depends on gating correctness; under-root priority = runtime allowlist (T1) > config allowlist (T2; dual rule_keys `tier0-allowlist` / `allowed-file` kept distinct) > session dir (T3) > BLOCK (T4, including the root itself — `rel == "."` blocks as root-file without consulting the `files` list); (R2) external-write log/event routing sinks to the emit layer as a geometric test (normalize_target + within_working_dir; the outcome string stays as fallback) so any future allow tier cannot bypass the outside-root signal; (R3) registration gating completes the registrable value domain to the strict root subtree — outside-root rejection (R2c, self-explaining verbatim + stats rule_key `allow-path-external-rejected`, bus-skipped; 7 emits unchanged), empty-path rejection at the add layer (a normalized empty string prefix-matched EVERYTHING), and `runtime_allowlist_add` gains an optional `working_dir_root` assertion injected by the caller (config.py never imports verdict, ADR-0007); (R4) runtime allowlist matching becomes SEGMENT-BOUNDARY (`target == entry` or `target.startswith(entry.rstrip("/") + "/")` — `docs` no longer exempts `docs_secret`; pathlib is_relative_to rejected to keep one lexical basis); (R5) the audit quarantine relocates out of the workspace root to `<dir-whip home>/audit-quarantine/<ts>/` (profile-aware, beside dir-whip-config.yaml/stats.jsonl); the L1/nudge remediation message paths updated; the audit `.hermes` root-dir exemption is removed (the guard adds none — three-way consistency); `/dir-whip list` gains a quarantine-path line; (R6) `--gate` returns to PURE audit + wake: the `.tmp` deletion execution and `delete=args.gate` wiring are removed, the wakeAgent payload drops to two keys always ({wakeAgent, violations} — removed/failed retired, breaking for strict cron consumers), the SCR-042 H1 unresolved-root exit 2 stays as cron failure VISIBILITY, the R1 symlink scan boundary stays as inventory correctness, and the interactive proposal becomes a read-only inventory. 3.4/4.2/5.3/5.11/5.18/7.2/7.3/8.1 updated. All 7 feedback/14 items disposed (no backlog). Version target v0.6.3 (patch per user ruling 2026-08-30 — behavior changes flagged in the release notes; hooks 9 / emits 7 unchanged). Historical: SCR-042 v2.10 (activated 2026-08-29, re-frozen 2026-08-29 at implementation-complete state; suite 687 passed / 5 skipped / 0 failed) — SCR-042 amendment v2.10 (scr-042-plan.md, scope ruling 2026-08-29): skill-scripts security hardening per feedback/13 (9 items, 5 requirement groups): (R1) deletion surface — --gate mode treats a Working Directory resolution failure as a gate failure (exit 2, reason on stderr, NO wakeAgent line, NOTHING deleted; an unresolved root never becomes a deletion target via the fail-open CWD fallback; interactive fail-open unchanged), and the .tmp cleanup scan boundary excludes symlinked session dirs and symlinked .tmp directories (two layers); (R2) import hardening — both scripts load the bundled workspace_resolver via importlib from the __file__-derived absolute path with sys.modules registration (CWD/PYTHONPATH shadowing can no longer divert the shared module); (R3) case parity — audit root-file allowlist matching reuses the resolver's Windows-casefold matcher (parity with allowlist.py by construction, ADR-0006), Outputs blacklist comparisons case-insensitive, .hermes root-dir exemption casefolded on Windows (mirrors report.py _case_eq); (R4) gate output contract — the wakeAgent line carries four keys always ({wakeAgent, violations, removed, failed}; cleanup failures visible to cron) and gate+json stdout is line-by-line JSON; (R5) robustness smalls — stdout/stderr reconfigure(errors=replace) in all three scripts (cp936 non-ASCII paths no longer crash), create_session_dir abspaths the resolved root (absolute-path contract), hermes home falls back to the user home when LOCALAPPDATA is unset/empty (never CWD-relative). Version target v0.6.2 (patch — skill-scripts security hardening; no config surface change; hooks 9 / emits 7 unchanged; the --gate resolution-failure behavior change is noted in the release notes). Historical: SCR-041 v2.9 (activated 2026-08-28, re-frozen 2026-08-29 at implementation-complete state; suite 664 passed / 5 skipped / 0 failed) — SCR-041 amendment (scr-041-plan.md, user decisions 2026-08-28): (1) re-scan semantics tightened (R1) — the L3 settlement re-scan classifies pending paths by the CONFIG allowlist only (allowlist files/dirs + session-dir); a runtime-allowlist entry no longer settles a recorded violation (runtime exemption = prospective-only: future writes pass Tier 0, past violations stay pending); the pre-write sanction flow is unaffected (the audit diff classifies at write time, so a path exempted BEFORE the write never creates a violation); (2) allow_path entry gating (R2) — subagent calls rejected with a parent-guidance variant + stats rule_key allow-path-subagent-rejected (bus-skipped), and the Working Directory root itself is rejected as a path argument (workspace-wide exemptions belong in config allowlist dirs authored by the user); (3) two-step user-confirmation protocol (R3) — dir_whip_allow_path gains an optional confirm parameter: the first call (no confirm) returns a confirmation payload (risk + removal method + relay instruction) WITHOUT adding, and confirm=true is honored only for a path whose confirmation payload was already issued this session (mandatory two-step, session-memory state); (4) L1/L3 message rewording (R4) — the config-allowlist remediation option is re-attributed to the USER (ask the user to add) with the latch-period freeze made explicit (all writes frozen incl. config edits), removing the false affordance that cost two gate-blocked turns in realhost. Version target v0.6.1 (patch — enforcement hardening: no config surface change, confirm is a new optional parameter). Historical: SCR-040 v2.8 (activated 2026-08-27: continuation-nudge rework + observability pack + config/report surface rework incl. three-key de-configuration BREAKING; re-frozen 2026-08-28 after the implementation batch). Historical: SCR-039 v2.7 (activated 2026-08-26: prompt-channel rework + same-turn self-heal + structured allowlist; re-frozen 2026-08-27 at implementation-complete state). Earlier activations: 2026-08-22 — SCR-033 terminal false-positive fix (v2.1),
   SCR-034 root write audit feature (v2.2), SCR-034 acceptance clauses 7.6 (v2.3), all
   re-frozen after completion. Changes go through the SCR process again (spec-changes.md).
   (SCR-024 root), superseding the v1.4 baseline. v0.2.0 implemented and
@@ -117,7 +117,7 @@ coupling (the guard never calls the skill; the skill never calls the guard).
 | Governance Mode | Workflow triggered by user request ("tidy workspace") or cron job. Audits, classifies, proposes corrective actions, and executes with user confirmation (cron mode auto-cleans .tmp). Automated by `audit_workspace.py --gate`. |
 | File Operation Guard | The plugin's pre_tool_call hook that classifies write targets (write_file / patch / terminal) and blocks operations targeting non-whitelist paths at the Working Directory root outside valid Session Directories. External paths are allowed and logged. |
 | Allowlisted Dirs | Parsed `dirs` subset of `allowlist` (relative paths under working_dir_root) — directory subtrees inside the Working Directory that are not subject to guard enforcement; recursive. Not a separate config key (the single key is `allowlist`). Legacy v2.6 `prefix:` entries are ignored (clean break). |
-| Runtime Allowlist | Session-scoped in-memory set of user-specified paths (injected via the `dir_whip_allow_path` tool), cleared at every session start; merged with allowlist `dirs` entries at Tier 0 of the guard. Entries are exempt for the current session only. |
+| Runtime Allowlist | Session-scoped in-memory set of user-specified paths (injected via the `dir_whip_allow_path` tool), cleared at every session start; merged with allowlist `dirs` entries at T1 of the guard chain (v2.11). Entries are exempt for the current session only. |
 | Subagent | A child AIAgent spawned by the parent agent (delegate_task). Runs in the same process and inherits the parent's toolset, so pre_tool_call covers its writes. By discipline its files land in the parent session's Session Directory `.tmp/`. |
 | Discipline Block | The session-start discipline message injected once per top-level Working-Directory session via `ctx.inject_message()` (v2.7; replaces the removed always-on Discipline Prompt). Carries the core discipline; the full interception response template is delivered by the guard's block message. |
 
@@ -283,15 +283,19 @@ Flow:
   5. Agent reports summary (delivered to configured platform)
 ```
 
-Gate failure: when the `--workspace` mismatch check fails, the audit exits 2
-with the reason on stderr and emits NO wakeAgent line — the cron tick fails
-visibly and the agent is NOT woken (a misconfigured boundary is a system
-problem, not a governance situation). In `--gate` mode a Working Directory
-resolution failure is ALSO a gate failure (SCR-042 H1): the audit exits 2
-with the reason on stderr, emits NO wakeAgent line, and deletes NOTHING —
-an unresolved root never becomes a deletion target via the fail-open CWD
-fallback. Interactive (non-gate) runs keep the fail-open chain (4.4):
-fallback to CWD with one stderr WARNING and proceed.
+Gate contract (v2.11, SCR-043 R6): `--gate` is a PURE audit + wake — the
+embedded `.tmp` auto-cleanup is removed and the plugin has NO automatic
+deletion path anywhere. The last stdout line is the two-key wakeAgent
+payload `{"wakeAgent": false|"true", "violations": N}` (4.2). Gate failure:
+when the `--workspace` mismatch check fails, OR when the Working Directory
+resolution fails in gate mode (SCR-042 H1; kept in v0.6.3 as cron failure
+VISIBILITY — with deletion gone it no longer serves deletion safety), the
+audit exits 2 with the reason on stderr and emits NO wakeAgent line — the
+cron tick fails visibly and the agent is NOT woken. Interactive (non-gate)
+runs keep the fail-open chain (4.4): fallback to CWD with one stderr
+WARNING and proceed; expired `.tmp` entries are listed as a READ-ONLY
+proposal (cleanup is agent-decided and confirmation-gated — "the agent
+organizes, the plugin guards").
 
 ### 3.5 Terminal Write Discipline (simplified, A1/A2)
 
@@ -305,7 +309,7 @@ approval gate). The agent must:
 2. When the user explicitly specifies a target path in the conversation
    (e.g. "write to C:/Users/me/Reports/R1.md"), call the
    `dir_whip_allow_path(path)` tool to register that path before writing,
-   so the guard's Tier 0 allows it.
+   so the guard's exemption tiers (T1/T2) allow it.
 3. When a write is blocked by the guard, create a Session Directory
    (`python scripts/create_session_dir.py <task_name> --workspace <working_dir>`)
    and re-target — never bypass the guard.
@@ -446,19 +450,24 @@ tagged format and the pre-v2.6 keys are removed, no backward compat).
 Root-file allowlist matching uses the same Windows-casefold semantics as
 the plugin guard — the audit reuses the resolver's allowlist matcher, so
 guard and audit never disagree on case variants (ADR-0006 parity,
-SCR-042 R3). The `.tmp` cleanup scan boundary excludes symlinked session
-dirs and symlinked `.tmp` directories (real directories only; SCR-042 R1).
+SCR-042 R3). The `.tmp` inventory scan boundary excludes symlinked session
+dirs and symlinked `.tmp` directories (real directories only; the SCR-042
+R1 deletion-surface hardening is retained as INVENTORY correctness —
+nothing is deleted). The audit NEVER deletes (SCR-043 R6): expired `.tmp`
+entries are listed as a read-only proposal in interactive runs.
+`.hermes` is no longer exempt from the root-directory format check
+(SCR-043 R5 — the audit quarantine lives outside the workspace root now,
+so a root-level `.hermes/` is residue and is flagged like any
+non-session directory).
 
 `--gate` retained (Q4) for cron wakeAgent integration:
-- Last stdout line is JSON with four keys always present:
-  `{"wakeAgent": false, "violations": 0, "removed": K, "failed": F}` (no
-  violations) or `{"wakeAgent": true, "violations": N, "removed": K,
-  "failed": F}` (violations found); `removed`/`failed` count cleanup
-  deletions and cleanup failures so cron sees partial cleanup failure
-  (SCR-042 R4)
+- Last stdout line is JSON with two keys always present:
+  `{"wakeAgent": false, "violations": 0}` (no violations) or
+  `{"wakeAgent": true, "violations": N}` (violations found); the
+  `removed`/`failed` keys are REMOVED together with the deletion execution
+  (SCR-043 R6 — breaking for strict cron consumers, release-note flagged)
 - With `--json`, every stdout line is a valid JSON document (the violations
-  array line + the wakeAgent line; the plain-text removal report is dropped
-  in json mode — failure details stay on stderr)
+  array line + the wakeAgent line)
 - Regular output (plain or --json) still printed before the gate line
 - Gate error (boundary mismatch, or resolution failure in gate mode):
   exit 2, reason on stderr, NO wakeAgent line, nothing deleted
@@ -695,18 +704,31 @@ Unified judgment chain (shared by all intercepted tools):
    - Paths still unclassifiable after normalization fail open (allow) with
      a warning log.
 
-6. For each target, classify via classify_target():
+6. For each target, classify via classify_target() — the T0-T4 chain
+   (v2.11, SCR-043 R1; scope is a PREMISE, not a rung: outside-root has
+   exactly one exit — allow + log — regardless of any exemption; under-root
+   priority is session-authorization T1 > persistent config T2 >
+   session structure T3):
 
-   - matches allowlist `dirs` entries OR runtime allowlist (Tier 0)    -> ALLOW
+   T0  target outside working_dir_root (the root itself is NOT outside;
+       incl. sibling profile directories)                -> ALLOW + LOG
+                                                          (external-write)
+   T1  runtime allowlist hit (value domain = strict subtree of the root,
+       5.11 v2.11 gating)                                 -> ALLOW
+                                                          (runtime-allowlist)
+   T2  config allowlist hit — allowlist `dirs` subtree OR root-level
+       `files` entry (rule_keys tier0-allowlist / allowed-file kept
+       distinct)                                          -> ALLOW
+   T3  inside a valid Session Directory                   -> ALLOW
+                                                          (session-dir)
+   T4  everything else, INCLUDING the root itself (rel == "." blocks as
+       root-file without consulting the `files` list)     -> BLOCK + fix
+       guidance (root-file / non-session-dir)
 
-      target under working_dir_root:
-        - matches allowlist `files` entries at root             -> ALLOW
-        - is inside a valid Session Directory              -> ALLOW
-        - otherwise (root non-allowlist / non-session dir) -> BLOCK
-
-      target outside working_dir_root
-        (incl. sibling profile directories)                -> ALLOW + LOG
-                                                            (external-write event)
+   The external-write log/event routing is computed in the emit layer as a
+   geometric test (normalize_target + within_working_dir; the outcome
+   string remains the fallback) so any FUTURE allow tier cannot bypass the
+   outside-root signal (SCR-043 R2).
 
 7. Aggregate multi-target result (strictest wins):
    - any BLOCK            -> return block
@@ -943,8 +965,8 @@ is ignored fail-closed (guard and audit agree) and `/dir-whip list` reports it
 as ignored legacy entries so the migration is visible. Missing `allowlist`
 key -> strict empty allowlist (fail-closed, guard and audit agree).
 
-The runtime allowlist (5.11) is merged with the parsed `dirs` subset at
-Tier 0.
+The runtime allowlist (5.11) is merged with the parsed `dirs` subset in
+the classification chain (T1; v2.11 — after the T0 scope premise).
 
 ### 5.7 Commands and Tools (Q12) — SCR-029 / SCR-037 v2.6 / SCR-039 v2.7
 
@@ -973,7 +995,10 @@ Registered at `register()`:
     sets, 5.6 rules).
   - `/dir-whip list` renders the current allowlist in the same two-section
     numbered format (numbers align with `remove`), plus an ignored-legacy
-    hint line when a legacy flat value was ignored (v2.6 format, clean break).
+    hint line when a legacy flat value was ignored (v2.6 format, clean break),
+    plus a quarantine-path line showing the current audit quarantine
+    directory (v2.11, SCR-043 R5 — discoverability after the relocation out
+    of the workspace root).
   - Any other argument renders `Usage: /dir-whip [allow|remove|list]`.
 
 **Interaction flow (v2.7, 2026-08-26 ruling — R1-R8):**
@@ -1034,13 +1059,14 @@ Registered at `register()`:
   allowlist tool unaffected; digit-only filenames (e.g. `123`) are always
   parsed as indices (documented).
 
-- Tool `dir_whip_allow_path(path)` — runtime allowlist (Tier 0);
+- Tool `dir_whip_allow_path(path)` — runtime allowlist (T1);
   session-scoped, cleared at session start (5.4).
 - Tool `dir_whip_settle(paths)` (NEW v2.7, LAZILY REGISTERED) — same-turn
   self-heal for write-audit violations (5.18): hard-constrained to paths
   currently in this session's unresolved pending set (zero arbitrary
   filesystem capability); moves each accepted path via shutil.move into
-  `<working_dir_root>/.hermes/audit-quarantine/<timestamp>/` (audit-safe:
+  `<dir-whip home>/audit-quarantine/<timestamp>/` (v2.11, SCR-043 R5 —
+  outside the workspace root; audit-safe:
   snapshot scans top-level entries only and directory entries never violate);
   returns the moved list; subagents rejected (remediation is the parent's
   job); fail-open on error (error dict, latch stays). Registered on first L1
@@ -1192,31 +1218,37 @@ precedence (any block -> block; else allow). Always on (as of v2.8 the
 rule_keys for statistics: `terminal-redirect`, `terminal-touch`,
 `terminal-cp-mv`, `terminal-write-uncertain`.
 
-### 5.11 Runtime Allowlist (retained, Q2; v2.9 entry gating + user confirmation)
+### 5.11 Runtime Allowlist (retained, Q2; v2.9 entry gating + user confirmation; v2.11 value-domain gating + segment-boundary matching)
 
 The plugin registers the tool `dir_whip_allow_path(path, confirm=false)` at
 `register()` (via `ctx.register_tool`) -- this is the plugin's eager,
 resident tool; the `dir_whip_settle` self-heal tool (5.18) is lazily
 registered on the first L1 audit notice instead. Its handler adds `path`
 to a session-scoped in-memory allowlist, merged with allowlist `dirs`
-entries at Tier 0 (step 6 of 5.3). The allowlist is cleared at every session start
+entries in the classification chain (T1, step 6 of 5.3 — consulted only
+AFTER the T0 scope premise; v2.11). The allowlist is cleared at every session start
 (`on_session_start`, 5.4); `reset_cache()` (invoked at plugin
 register/re-register) also clears it, so entries never leak into the next
 session. The tool's description tells the agent the entry is "exempt for this
 session".
 
 v2.9 semantics (SCR-041 R1): a runtime entry is PROSPECTIVE-ONLY — future
-writes under the path pass Tier 0, but a runtime entry never settles a
+writes under the path pass the chain (T1), but a runtime entry never settles a
 recorded root-write violation: the L3 settlement re-scan (5.18) classifies
 pending paths by the CONFIG allowlist only (allowlist `files`/`dirs`
 entries + session directories). The pre-write sanction flow is unaffected:
 a path exempted BEFORE the write never creates a violation (the audit diff
 classifies at write time through the same chain).
 
-Matching semantics: entries prefix-match like allowlist `dirs` entries — forward-slash
-normalized and casefolded on Windows; a directory entry exempts its entire
-subtree. (Runtime entries stay absolute-path based — they are user-specified
-per session, unlike the persistent relative `allowlist`.)
+Matching semantics (v2.11, SCR-043 R4): entries match by SEGMENT BOUNDARY —
+forward-slash normalized and casefolded on Windows; `target == entry` OR
+`target` starts with `entry.rstrip("/") + "/"` — a directory entry exempts
+its entire subtree, a trailing slash on the entry is compatible, and the
+former bare `startswith` (which let `docs` exempt `docs_secret`) is gone.
+`pathlib.is_relative_to` was rejected to keep ONE lexical basis with
+`_paths_equal` / `within_working_dir`. (Runtime entries stay absolute-path
+based — they are user-specified per session, unlike the persistent relative
+`allowlist`.)
 
 Tool registration: the schema follows the OpenAI function format
 (name/description/parameters) with parameters `path` (string, required)
@@ -1252,10 +1284,38 @@ Allow a specific file or subdirectory path instead; workspace-wide
 exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user.
 ```
 
+- A path OUTSIDE the Working Directory is REJECTED (v2.11 R2c, SCR-043 R3):
+  outside-root writes need no registration — they are allowed and logged as
+  external-write (T0, 5.3). The rejection is self-explaining to prevent
+  agent retry loops (feedback/14 E5 R2); the judgment reuses the chain's own
+  basis (normalize_target + within_working_dir — never a hand-rolled prefix
+  comparison, guarding against Windows drive-case / backslash / `..` drift):
+
+```
+[dir-whip] BLOCKED: the path is outside the Working Directory; no allowlist
+entry is needed. Writes there are allowed and logged (external-write).
+Retry the write directly at the requested path.
+```
+
 - A rejected call records a stats row `block / allow-path / <rule_key>` —
   bus-skipped (no generic blocked fanout), mirroring the write-audit-violation
   precedent (5.13/5.14): subagent calls -> `allow-path-subagent-rejected`;
-  root-target calls -> `allow-path-root-rejected`.
+  root-target calls -> `allow-path-root-rejected`; outside-target calls ->
+  `allow-path-external-rejected` (v2.11).
+
+v2.11 add-layer assertion + empty-value rejection (SCR-043 R3):
+`runtime_allowlist_add(path, working_dir_root=None)` asserts the value
+domain when the caller injects the resolved root — an outside-root path is
+rejected from the store (the handler always passes the root; direct callers
+without a root keep working unchanged). config.py NEVER imports verdict
+(verdict depends on config, ADR-0007) — the assertion uses
+`paths.within_working_dir`, the same implementation the chain uses. Empty
+or None paths are rejected outright: a normalized empty string
+prefix-matched EVERYTHING — one empty entry meant a full-session exemption
+(feedback/14 finding). Together with the root rejection (R2b) and the
+outside rejection (R2c) the registrable value domain is the strict subtree
+of the Working Directory — value hygiene, not the signal guard (the T0
+scope premise protects external-write unconditionally).
 
 v2.9 two-step user confirmation (SCR-041 R3): adding an entry REQUIRES
 explicit user approval via a mandatory two-step protocol.
@@ -1295,7 +1355,8 @@ dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves.
   file(s) (settle), or keep them at the root (give the user the exact
   command: /dir-whip allow <path>). Writes stay frozen until then.` —
   preventing the wasted approval round-trip (the latch freezes ALL
-  write-class calls; the exemption only passes Tier 0 and does not open the
+  write-class calls; the exemption only passes the exemption tier (T1) and
+  does not open the
   gate).
 
 - Removal method (documented only — no revoke capability, user ruling
@@ -1479,7 +1540,7 @@ it lands, the hook only observes.
   Discipline Prompt channel is gone; teaching = session-start discipline
   block (5.4) + block-message completion (5.3) + SKILL.md opt-in load).
 
-### 5.18 Root Write Audit (SCR-034; v2.7 same-turn self-heal; v2.9 re-scan semantics)
+### 5.18 Root Write Audit (SCR-034; v2.7 same-turn self-heal; v2.9 re-scan semantics; v2.11 quarantine relocation)
 
 The ROOT WRITE AUDIT is the second detection backbone for terminal
 discipline: it OBSERVES what the filesystem actually changed instead of
@@ -1513,7 +1574,7 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   config-allowlist option to the USER and makes the latch-period freeze
   explicit; third-review 2026-08-28 adds the exact-command instruction):
   "Remediate now: call dir_whip_settle(paths=[...]) to move the file(s) into
-  quarantine (<root>/.hermes/audit-quarantine/), or move them manually into
+  quarantine (<dir-whip home>/audit-quarantine/), or move them manually into
   a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the
   file(s) at the root, ask the user to add them to the allowlist files
   entries in dir-whip-config.yaml (files: [notes.txt]) — give them the
@@ -1541,7 +1602,7 @@ parsing, catches every syntax (shutil, heredoc, tee/dd, future forms).
   v2.9 (SCR-041 R1): the settlement re-scan classifies by the CONFIG
   allowlist only — a runtime-allowlist entry (5.11) does NOT settle a
   recorded violation (runtime exemption is prospective-only: future writes
-  pass Tier 0, past violations stay pending until physical remediation or a
+  pass the chain (T1), past violations stay pending until physical remediation or a
   user-authored config entry). First write cannot be
   prevented; all FURTHER writes are frozen until remediation. The latch is
   session-scoped and cleared at session start; subagent sessions inherit
@@ -1563,9 +1624,12 @@ loop completes within the user turn that triggered the violation.
 - `dir_whip_settle(paths)` tool (5.7): the ONLY agent-side remediation
   channel. Hard-constrained to paths currently in this session's
   unresolved pending set; moves them via shutil.move into
-  `<working_dir_root>/.hermes/audit-quarantine/<timestamp>/` (audit-safe by
+  `<dir-whip home>/audit-quarantine/<timestamp>/` (v2.11, SCR-043 R5 —
+  relocated OUT of the workspace root; dir-whip home = `paths._profile_home()/dir-whip/`,
+  profile-aware, beside dir-whip-config.yaml / stats.jsonl; timestamp
+  batches keep the all-or-nothing rollback semantics; audit-safe by
   5.6/5.18 semantics: top-level snapshot only, directory entries never
-  judged); reversible (no deletion); subagents rejected; fail-open on error
+  judged; reversible (no deletion); subagents rejected; fail-open on error
   (error dict, latch stays). After a successful settle the next latch
   re-scan finds the original paths gone -> settled -> gate opens.
   Contract (2026-08-26 ruling, plugin-skill consistency): `paths` args are
@@ -1600,7 +1664,7 @@ loop completes within the user turn that triggered the violation.
   sessions no-op (remediation is the parent's job).
   - **Message (verbatim lock, shares the L1 remediation sentence helper;
     v2.9 third-review tail adds the resolution-choice presentation)**:
-    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory. Present the resolution choice to the user: move the file(s) (settle), or keep them at the root — for the keep-at-root choice, give the user the exact command to run: /dir-whip allow <path>. Finish only after settlement or the user's decision.`
+    `[dir-whip] {N} unresolved root write(s) remain at the Working Directory root. Remediate now: call dir_whip_settle(paths=["<p1>", ...]) to move the file(s) into quarantine (<dir-whip home>/audit-quarantine/), or move them manually into a Session Directory. Present the resolution choice to the user: move the file(s) (settle), or keep them at the root — for the keep-at-root choice, give the user the exact command to run: /dir-whip allow <path>. Finish only after settlement or the user's decision.`
     Paths are absolute forward-slash form (matching the settle canonical
     input contract); the runtime exemption TOOL `dir_whip_allow_path` is
     never mentioned (no exemption option offered, no negative call-out —
@@ -1770,15 +1834,19 @@ Upgrade from v0.1.x: reinstall with `--force` (the plugin directory has no
       proceed; mismatch -> exit 2 (create_session_dir and audit_workspace)
 - [ ] Resolution failure -> fail-open: fallback + one concise stderr WARNING,
       non-fatal (interactive mode); in --gate mode resolution failure ->
-      exit 2 + no wakeAgent line + nothing deleted (SCR-042)
+      exit 2 + no wakeAgent line + nothing deleted (SCR-042; kept in v0.6.3
+      as cron failure visibility, SCR-043 R6)
 - [ ] create_session_dir exit codes: 0 / 1 / 2 per 4.1
 - [ ] audit_workspace exit codes: 0 / 1 / 2 per 4.2; `--json` output
-- [ ] audit_workspace `--gate`: wakeAgent JSON on last line with violations/
-      removed/failed keys always present; boundary mismatch or gate-mode
+- [ ] audit_workspace `--gate`: wakeAgent JSON on last line with EXACTLY the
+      two keys {wakeAgent, violations} (SCR-043 R6 — removed/failed retired
+      with the deletion execution); boundary mismatch or gate-mode
       resolution failure -> exit 2 + no wakeAgent line (agent not woken);
       --json + --gate stdout parses line-by-line as JSON
-- [ ] audit `--gate` cron mode auto-cleans `.tmp` (cleanup embedded in the
-      audit per 3.4; interactive mode keeps --confirm semantics)
+- [ ] audit NEVER deletes (SCR-043 R6): `--gate` is pure audit + wake (zero
+      deletion); interactive mode lists expired `.tmp` entries as a
+      read-only proposal (`--days` thresholds the inventory; cleanup is
+      agent-decided and confirmation-gated)
 - [ ] audit root allowlist from dir-whip-config `allowlist` `files`/`dirs`
       entries; missing key -> strict empty allowlist
 - [ ] workspace_resolver.py resolves dir-whip-config -> terminal.cwd -> fail-open
@@ -1799,8 +1867,20 @@ Upgrade from v0.1.x: reinstall with `--force` (the plugin directory has no
       injected (≤200 字)
 - [ ] pre_tool_call blocks root non-allowlist writes (write_file / patch /
       terminal block tier)
-- [ ] pre_tool_call allows allowlist file entries, session-dir writes, allowlist
-      prefix entries, runtime-allowlisted paths
+- [ ] pre_tool_call classifies by the T0-T4 chain (SCR-043 R1): outside-root
+      -> external-write allow+log EVEN when an exemption matches; the root
+      itself -> block (root-file); allows allowlist `files` entries,
+      session-dir writes, `dirs` subtrees, runtime-allowlisted paths
+- [ ] Runtime allowlist segment-boundary matching: `docs` does NOT exempt
+      `docs_secret` (SCR-043 R4)
+- [ ] `dir_whip_allow_path` rejects outside-root paths (self-explaining
+      message, stats `allow-path-external-rejected` bus-skipped) and empty
+      paths; the add-layer assertion keeps the registrable value domain to
+      the strict root subtree (SCR-043 R3)
+- [ ] `dir_whip_settle` moves into `<dir-whip home>/audit-quarantine/<ts>/`
+      (outside the workspace root); `/dir-whip list` shows the quarantine
+      path; the guard still blocks tool writes to `.hermes/**`; the audit no
+      longer exempts a root-level `.hermes/` (SCR-043 R5)
 - [ ] pre_tool_call allows + logs external paths (incl. sibling profile dirs);
       NO cross-profile approve exists
 - [ ] Terminal uncertain write intent -> allow + log (no approval gate)
@@ -1930,8 +2010,10 @@ testing-standards.md v0.3.0; v2.6 allowlist key = single `allowlist`, A7 wording
 ### 8.1 Safety
 
 - No `rm -rf`, `del /S/Q`, bulk rename, recursive delete
-- Script deletion requires `--confirm` (default: dry-run); audit deletes only
-  in cron mode (.tmp auto-cleanup per 3.4) — otherwise it only proposes actions
+- Script deletion requires `--confirm` (default: dry-run); the plugin has NO
+  automatic deletion path ANYWHERE (v2.11 red line, SCR-043 R6 — the
+  v0.6.2 cron-mode `.tmp` auto-cleanup is removed): audit only proposes /
+  inventories; cleanup is agent-decided and confirmation-gated
 - No secrets/credentials in any file; stats.jsonl never records file contents
   or absolute external paths
 - Plugin guard is fail-open (never crashes the agent)
@@ -2057,3 +2139,4 @@ Not implemented in v0.2.0. Design decisions should not block these:
 | 2026-08-27 | v2.8 ACTIVE — SCR-040 v0.6.0 (scr-040-plan.md / feedback/11, two ruling rounds after the v0.5.0 release): (1) continuation-nudge rework — nudge message rewritten settle-first (shares the L1 remediation sentence helper, exact `dir_whip_settle(paths=[...])` call form, allow_path never mentioned) + plugin-side session-cumulative cap=3 (`PRE_VERIFY_NUDGE_CAP` hardcoded, reset at session start, host per-turn budget kept as outer bound — overturns the v2.7 "hook adds no throttling" clause); grounded in realhost experiment A (one-nudge conversion hard evidence + the agent's allow_path detour); (2) observability pack — 5.13 adds four stats rule_keys (`pre-verify-nudge` / `runtime-allowlist-add` / `session-reminder` / `write-audit-settle-rejected`; emits stay at 7) + a diagnostic log file dir-whip.log subsection (new module logsetup.py, profile-aware, DEBUG-full, CLH→stdlib→console three-tier degradation, 5MiB×3+delay+utf-8, absolute-path policy); (3) report surface rework (5.7 layout rewrite) — State values become enabled/disabled, Terminal Guard and Reminder lines removed, Allowlist multi-lined (header line + Files/Dirs one line each, valued sections indented 2 spaces, strict-empty keeps the single line), Health moved last with Good/brief-problem-list two states, a Debug Log line added near the end; (4) three-key de-configuration (BREAKING, 5.6) — terminal_guard/write_audit/write_audit_entry_cap stop being user config, internal constants (interception/audit always on, cap=2000), leftover keys completely ignored, and the `write_audit_autofix` reservation key is removed too (L4 becomes a keyless reserved direction); (5) shipped template comments corrected to the v2.7 structured tutorial. Terminology unified: external-facing 「dir-whip 续推兜底」/"dir-whip continuation nudge", host hook identifier pre_verify only in implementation contexts. (6) placement-wording de-ambiguation (R9, folded in 2026-08-27; realhost incident session 20260827_222411_245249: the block message arrow shorthand `deliverable -> Outputs/` was misread as a literal path template and the file landed at <session>/deliverable/Outputs/) — block message line reworded to `Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).` (5.3), session-start reminder parenthetical reworded accordingly (3.7/5.4; 251 chars <= 280 lock), create_session_dir.py stdout gains a placement hint line (4.1 output contract added); docs first, code/tests land with the SCR-040 implementation batch (40.R9.1). session_dir_pattern judged worth developing, registered in feedback/11 for a separate SCR. Implemented and re-frozen 2026-08-28 (implementation batch 40.x complete; suite 644 passed / 5 skipped / 0 failed) | User decisions 2026-08-27 (scr-040-plan.md rulings: Plan A four records / log absolute paths / report rework + Health last + Allowlist multi-line / three-key de-configuration + leftovers completely ignored / version target 0.6.0) |
 | 2026-08-28 | v2.9 ACTIVE — SCR-041 v0.6.1 (scr-041-plan.md, user decisions 2026-08-28 after the v0.6.0 realhost six-scenario verification): (1) re-scan semantics tightened (R1, 5.18) — the L3 settlement re-scan classifies pending paths by the CONFIG allowlist only (allowlist files/dirs + session-dir); a runtime-allowlist entry no longer settles a recorded violation (runtime exemption = prospective-only: future writes pass Tier 0, past violations stay pending); grounded in the v0.6.0 realhost escape (sessions 20260828_135518_31b5d6 / 20260828_135546_abff8d: the agent self-served allow_path after the nudge, pending cleared, cap=3 unreachable); (2) allow_path entry gating (R2, 5.11) — subagent calls rejected with a parent-guidance variant + stats rule_key allow-path-subagent-rejected (bus-skipped; sanction flows top-down only, user ruling), and the Working Directory root itself rejected as a path argument; (3) two-step user-confirmation protocol (R3, 5.11) — dir_whip_allow_path gains an optional confirm parameter: the first call returns a confirmation payload (risk + removal method + relay instruction) WITHOUT adding and records the path in a session-memory confirmation-issued set; confirm=true is honored only for an already-briefed path (mandatory two-step); removal method documented only (session-end auto-expiry; persistent exemptions via config, /dir-whip remove) — no revoke capability per user ruling; (4) L1/L3 message rewording (R4, 5.18) — the config-allowlist remediation option re-attributed to the USER (ask the user to add) with the latch-period freeze made explicit (all writes frozen incl. config edits), removing the false affordance that cost two gate-blocked turns in realhost. Version target v0.6.1 (patch — enforcement hardening). Re-frozen 2026-08-29 (implementation batch complete, suite 664 passed / 5 skipped / 0 failed) | User decisions 2026-08-28 (Plan A + subagent policy A + documented-removal-only + v0.6.1 patch) |
 | 2026-08-29 | v2.10 ACTIVE — SCR-042 v0.6.2 (scr-042-plan.md, scope ruling 2026-08-29 after the feedback/13 skill-scripts security review): skill-scripts security hardening, 9 items in 5 requirement groups — (R1) deletion surface: --gate mode treats a Working Directory resolution failure as a gate failure (exit 2, reason on stderr, NO wakeAgent line, NOTHING deleted — an unresolved root never becomes a deletion target via the fail-open CWD fallback; interactive fail-open unchanged) and the .tmp cleanup scan boundary excludes symlinked session dirs and symlinked .tmp directories (two layers); (R2) import hardening: both scripts load the bundled workspace_resolver via importlib from the __file__-derived absolute path with sys.modules registration (CWD/PYTHONPATH shadowing can no longer divert the shared module); (R3) case parity: audit root-file allowlist matching reuses the resolver's Windows-casefold matcher (parity with allowlist.py by construction, ADR-0006), Outputs blacklist comparisons case-insensitive, .hermes root-dir exemption casefolded on Windows (mirrors report.py _case_eq); (R4) gate output contract: the wakeAgent line carries four keys always ({wakeAgent, violations, removed, failed} — cleanup failures visible to cron, N8 closed with M2) and gate+json stdout is line-by-line JSON (plain-text removal report dropped in json mode, failure details on stderr); (R5) robustness smalls: stdout/stderr reconfigure(errors=replace) in all three scripts (cp936 non-ASCII paths no longer crash), create_session_dir abspaths the resolved root (absolute-path contract, N2), hermes home falls back to the user home when LOCALAPPDATA is unset/empty (never CWD-relative, N7). 3.4/4.2/4.4/7.2 updated. Remaining 7 low-risk findings (L1/L2/N4/N5/N6/L3+N3/L4) registered, not disposed. Version target v0.6.2 (patch — no config surface change; hooks 9 / emits 7 unchanged). Re-frozen 2026-08-29 (implementation batch complete: commits cdeb3d6/dbd2baf/0d68c37/ac58340/cb8929e, suite 687 passed / 5 skipped / 0 failed) | User scope ruling 2026-08-29 (9 items: 2 must-fix + 5 recommended + 2 free-riders) |
+| 2026-08-30 | v2.11 ACTIVE — SCR-043 v0.6.3 (scr-043-plan.md, feedback/14 classify-chain & governance design finalization 2026-08-30): (R1) classification chain T0-T4 (5.3) — scope first: outside-root (excluding the root itself) always external-write before any exemption; under-root priority runtime (T1) > config (T2, dual rule_keys kept) > session dir (T3); T4 blocks including the root itself (rel == "." -> root-file); (R2) external-write log/event routing sinks to the emit layer as a geometric test (normalize_target + within_working_dir, outcome string as fallback); (R3) allow_path registration gating (5.11) — outside-root rejection R2c (self-explaining verbatim + stats rule_key allow-path-external-rejected, bus-skipped, 7 emits unchanged), empty-path rejection (an empty entry prefix-matched everything), add-layer value-domain assertion via an optional working_dir_root parameter injected by the caller (config never imports verdict, ADR-0007); (R4) runtime allowlist segment-boundary matching — docs no longer exempts docs_secret (pathlib is_relative_to rejected: one lexical basis); (R5) audit quarantine relocates to <dir-whip home>/audit-quarantine/<ts>/ (profile-aware, out of the workspace root); L1/nudge message paths updated; audit .hermes root-dir exemption removed (guard adds none); /dir-whip list gains a quarantine-path line; (R6) gate = pure audit + wake — .tmp deletion execution and delete=args.gate removed, wakeAgent payload two keys always {wakeAgent, violations} (removed/failed retired — breaking for strict cron consumers), H1 unresolved-root exit 2 kept as cron failure visibility, R1 symlink scan boundary kept as inventory correctness, interactive proposal becomes a read-only inventory. All 7 feedback/14 items disposed (C1-C4 + 2 new findings + G1; no backlog). 3.4/4.2/5.3/5.11/5.18/7.2/7.3/8.1 updated. Version target v0.6.3 (patch per user ruling 2026-08-30 — behavior changes flagged in release notes; hooks 9 / emits 7 unchanged). Re-freeze at 43.9 | User version ruling 2026-08-30 (v0.6.3 patch line, SCR-042 precedent; feedback/14 design finalization) |

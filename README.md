@@ -284,21 +284,19 @@ Health: Good
 
 ## Advanced Usage
 
-### Optional Configuration
+### Config
 
 Optional and user-managed, at `HERMES_HOME/dir-whip/dir-whip-config.yaml`
-(Windows: `%LOCALAPPDATA%/hermes/dir-whip/dir-whip-config.yaml`; POSIX:
-`~/.hermes/dir-whip/dir-whip-config.yaml`).
+(`HERMES_HOME` wins; Windows default `%LOCALAPPDATA%/hermes`, falling back
+to `~/hermes` when unset; POSIX default `~/.hermes`). With session profiles
+it lives at `profiles/<name>/dir-whip/`.
 
-| Key | Meaning |
-| --- | ------- |
-| `allowlist` | Structured mapping: `files` = root-level file basenames, `dirs` = Working-Directory-relative dir paths (recursive subtree exemption; multi-level allowed); strict empty fallback when the key is missing; legacy flat values are ignored fail-closed |
-| `working_dir_root` | Explicit Working Directory override; fallback = profile `terminal.cwd`; `/dir-whip` prints a WARNING when the override differs from the profile value |
-
-The `terminal_guard` / `write_audit` / `write_audit_entry_cap` keys were
-removed (BREAKING): interception and the audit are always on, the audit
-entry cap is a fixed 2000, and any leftover values in the config file are
-ignored at runtime.
+| Field | Meaning |
+| ----- | ------- |
+| `allowlist.files` | Root-level file basenames allowlist (e.g. `README.md`); name validation rejects `..`, absolute forms and path separators |
+| `allowlist.dirs` | Working-Directory-relative dir paths (e.g. `projects/foo`), **recursive subtree exemption**, multi-level allowed |
+| `allowlist` key missing | Strict empty fallback — the allowlist is empty and every root-level write is blocked |
+| `working_dir_root` | Explicit Working Directory override; `/dir-whip` prints a WARNING when it differs from the profile `terminal.cwd` |
 
 ```yaml
 allowlist:
@@ -307,93 +305,90 @@ allowlist:
 # working_dir_root: E:/HermesWorkspace/default   # optional override
 ```
 
-> Configuration lives in `dir-whip-config.yaml` — edit by hand or via
-> `/dir-whip allow <number|name|path>|remove|list` (row-level edit via
-> config_writer, comments preserved). Bare `/dir-whip` without args is still a
-> read-only report.
+**Parsing mechanism.** One resolution chain each for the plugin and the
+scripts (node details in the notes below):
 
-**Working Directory resolution.** The plugin resolves in three steps:
-explicit `working_dir_root` in dir-whip-config.yaml wins; otherwise the
-current profile's `terminal.cwd` is used; if both fail the plugin fails
-open (the guard is off — `/dir-whip` shows `State: disabled` and lists a
-Health issue). The CLI scripts use a longer chain: they additionally
-enumerate profiles and fall back to the current working directory with a
-stderr WARNING. `/dir-whip` reports the value and its source.
+**Plugin side** (parsed once at register · refreshed at each top-level
+session start):
 
-### Scheduled Governance
+![Config resolution chain — plugin side](assert/image/config-plugin-chain-en.svg)
 
-`audit_workspace.py --gate` is a zero-token pre-run gate for Hermes cron
-jobs:
+- Safe YAML parsing (`safe_load`): a missing or unparseable file fails open
+  to an empty config; a `/dir-whip` WARNING prints when the override differs
+  from the profile `terminal.cwd`; on fail-open the guard is off
+  (`State: disabled`, Health lists the issues).
 
-```mermaid
-flowchart TD
-    A[cron tick] --> B[audit_workspace.py --gate]
-    B -->|OK| C[wakeAgent: false - silent tick]
-    B -->|violations listed| D[wakeAgent: true - agent wakes]
-    D --> E[classify and archive misplaced files]
-    E --> F[report summary]
-    B -->|workspace mismatch or root unresolved| G[exit 2 - no wakeAgent]
-```
+**Script side** (standalone · line-parse fallback when no yaml library):
 
-```bash
-# Cron job: script= scripts/audit_workspace.py --gate
-#           skill= dir-whip:workspace-organization
-#           prompt: "If audit found violations, classify and archive misplaced
-#                    files. If no violations, respond with [SILENT]."
-```
+![Config resolution chain — script side](assert/image/config-script-chain-en.svg)
 
-- stdout "OK" → `{"wakeAgent": false, "violations": 0, "removed": 0, "failed": 0}`
-  → silent tick, no delivery
-- stdout lists violations → `{"wakeAgent": true, "violations": 2, "removed": 1, "failed": 0}`
-  → the agent wakes, classifies, and moves files into Session Directories
-- `--workspace` mismatch or a failed root resolution in gate mode → exit 2, no
-  wakeAgent (a misconfigured boundary is a system problem, not a governance
-  situation)
+- Candidate roots = all profile cwds + `TERMINAL_CWD` (`--workspace` matches
+  equal, CWD matches containment); on a miss interactive mode falls back to
+  CWD with a stderr WARNING while `--workspace` mode stays clean and the
+  caller exits 2; the two chains are verdict-equivalent (parity-tested) —
+  the guard and the scripts never disagree.
 
-The gate payload always carries all four keys. `--gate` also auto-cleans
-expired `.tmp/` entries (older than 30 days): `removed` / `failed` make
-partial cleanup failures visible, failure details go to stderr, and the exit
-code stays violations-driven (1 when violations exist, else 0).
+### Cron Support
+
+> To be filled: this section will describe the scheduled-governance support
+> for Hermes cron jobs — job configuration (script / skill / prompt), the
+> two-key wakeAgent payload, and silent-tick semantics. Content lands with
+> feedback/14 E6 (gate becomes pure audit + wake).
 
 ### Subagent Mode
 
-When a parent agent delegates to subagents, it follows this file protocol:
+When a parent agent delegates to subagents, it follows this mechanism:
 
-```mermaid
-flowchart TD
-    A[parent delegates task] --> B[parent ensures target dir exists]
-    B --> C[child writes to parent-passed dir]
-    C -->|default| D[parent session .tmp/]
-    C -->|explicit| E[Outputs/ or per-subagent subdir]
-    C -->|write blocked| F[child reports to parent]
-    C -->|done| G[parent reviews, promotes .tmp/ to Outputs/]
-```
+![Subagent mode flow — register, write, post, settle, unregister](assert/image/subagent-flow-en.svg)
 
+- `subagent_start` registers the child→parent mapping: the child's
+  session-start reminder is recorded as `skipped-child`, and the audit state
+  is inherited from the parent (the latch is not reset).
 - The parent ensures the target directory exists before delegating (creating
-  a Session Directory first when needed).
-- The child writes to the parent-passed target directory: the parent session's
-  `.tmp/` by default; the parent may explicitly pass an `Outputs/` path (formal
-  deliverables) or a per-subagent subdirectory (e.g. `.tmp/<task>/`).
-- The child never self-creates a Session Directory and never self-promotes
-  (`.tmp/` → `Outputs/` promotion is the parent's review step).
+  a Session Directory first when needed); the parent session's `.tmp/` by
+  default, or an explicit `Outputs/` path / per-subagent subdirectory
+  (e.g. `.tmp/<task>/`).
+- Verdicts for subagent writes are identical to the parent's; stats are
+  split by `is_subagent`.
+- Subagent violations post to the **parent pending set** —
+  `dir_whip_allow_path` and `dir_whip_settle` are rejected for subagents;
+  exemptions and settlement are the parent's job.
 - When the target directory is missing or a write is blocked, the child
   reports to the parent instead of creating a Session Directory itself.
-- Verdicts for subagent writes are identical to the parent's; stats are
-  split by subagent.
+- `subagent_stop` unregisters the child and records duration/status; the
+  `.tmp/` → `Outputs/` promotion is the parent's review step.
 
-### Statistics
+### Statistics & Observability
 
 Every verdict is appended as one JSON line to
-`HERMES_HOME/dir-whip/stats.jsonl`. Each line carries session fields
-(`profile` / `session_id` / `is_subagent` / `started_at`) and event fields
-(`ts` / `outcome` / `reason` / `tool` / `rule_key` / `target`). Recorded:
-interception verdicts, runtime exemptions, approval observations, and the
-write audit's violations and gate blocks (`write-audit-violation` /
-`write-audit-gate-block`), split by subagent. `target` is always relative to
-the Working Directory; external paths are hashed or omitted — no file
-contents, no absolute paths, no prompt text. At 5 MB the file rolls over to
-`stats.jsonl.1`; see the Stats File path shown by `/dir-whip` for
-cross-session totals.
+`HERMES_HOME/dir-whip/stats.jsonl` (rolls over to `stats.jsonl.1` at 5 MB).
+Recorded: interception verdicts, runtime exemptions, approval observations,
+and the write audit's violations and gate blocks
+(`write-audit-violation` / `write-audit-gate-block`), split by subagent.
+Each line carries two groups of fields:
+
+| Field | Meaning | Notes |
+| ---- | ---- | ---- |
+| `profile` | Session profile | The stats file lives in that profile's dir-whip directory; the path follows the session profile |
+| `session_id` | Session identifier | The session the verdict belongs to |
+| `is_subagent` | Subagent flag | Stats are split parent/subagent |
+| `started_at` | Session start time | Part of the session context |
+| `ts` | Event timestamp | ISO format, moment of the verdict |
+| `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block`, etc. |
+| `reason` | Outcome reason | Short phrase, e.g. `target outside working_dir_root` for out-of-root writes |
+| `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `allow-path`, etc. |
+| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` |
+| `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
+
+The file never contains file contents, absolute paths, or prompt text.
+Observability surfaces:
+
+- **Live event stream** — verdicts and audit results fan out as the 7
+  `dir-whip:*` events on the Hermes event bus; subscribe to observe.
+- **`/dir-whip` report** — the Stats File path (cross-session totals),
+  Health (stats health), and Debug Log (config source checks).
+- **Log levels** — `block` / fail-open log at WARNING, `external-write` at
+  INFO, other allows at DEBUG (dir-whip.log).
 
 ## Security & Risk
 

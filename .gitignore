@@ -24,3 +24,6 @@ internal/
 
 # Tests (not published)
 tests/
+
+# ZCode local workspace
+.zcode/

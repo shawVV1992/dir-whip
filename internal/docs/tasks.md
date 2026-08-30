@@ -259,4 +259,30 @@ Design source: feedback/13（skill 脚本安全性与稳健性评审，1 高危/
 _Note: testing-standards.md v0.3.0 rebuild (listed in the earlier backlog) is
 already DONE (2026-08-22) — it is the acceptance source for this phase, not a
 pending task. Version bump (30.13) was deferred per user until SCR review
+
+---
+
+## Phase 12 — SCR-043 v0.6.3 分类链定稿 + 值域门禁 + 隔离区迁址 + gate 零自动删除 (43.x)
+
+TDD per task: write the mapped tests FIRST (red), then implement (green).
+Acceptance = mapped testing-standards §7.13 matrix (v2.11) all green + KPI
+column. Active branch: `0.6.3_dev` (from `main@9ce0afa` v0.6.2; cut at
+implementation start).
+Design source: feedback/14（分类链与定时治理设计定稿，2026-08-30：C1-C4 +
+新发现 2 项 + G1，无安全高危项）+ `docs/scr-043-plan.md`——R1-R6 定稿设计
+（E1-E6 全收合一；版本定档 v0.6.3 patch，用户 2026-08-30）。建议执行顺序
+R4 → R1 → R3（E2 段边界是 T1 层前置）。
+
+| # | Task | Depends on | Key results (KPI) | Status |
+|---|------|-----------|-------------------|--------|
+| 43.1 | **文档批**：`scr-043-plan.md` + spec EN/ZH v2.11 ACTIVE（3.4 gate 纯审计+唤醒 / 4.2 两键负载+盘点+.hermes 豁免移除 / 5.3 T0-T4 链+emit 几何路由 / 5.11 值域门禁+段边界匹配 / 5.18 隔离区迁址+消息路径 / 5.7 list 隔离区行 / 7.2/7.3 验收行 / 8.1 零自动删除红线 + changelog）+ spec-changes 登记 + tasks Phase 12 + testing-standards 7.13 + AGENTS.md 同步 + CONTEXT.md 术语同步 + deployment.md 升级注记 + feedback/14 处置注记 + ADR-0011 | - | 文档落盘 | Done (2026-08-30) |
+| 43.R1.1 | **red**：T0-T4 次序矩阵（根外+运行时豁免 → external-write；根自身 block root-file）+ T1/T2/T3 回归基线 + settle 重扫 config-only 回归 | 43.1 | red 确认 | Pending |
+| 43.R1.2 | **green**：classify_target T0-T4 重排（根自身 rel=="." 前置 T4；T2 双 rule_key 保留） | 43.R1.1 | R1 全绿 | Pending |
+| 43.R2.1 | **red+green**：external-write 记日志几何路由下沉 emit 层（events.py；normalize_target + within_working_dir，outcome 字符串作 fallback）+ bus-skip/stats 回归 | 43.1 | R2 全绿 | Pending |
+| 43.R3.1 | **red+green**：R2c 根外拒绝（verbatim ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE + stats `allow-path-external-rejected` + `_BUS_SKIP_RULE_KEYS` 登记）+ add 层 `working_dir_root` 断言（config 不 import verdict）+ 空值拒绝 | 43.1 | R3 全绿 | Pending |
+| 43.R4.1 | **red+green**：`is_runtime_allowlisted` 段边界匹配（docs 不误豁免 docs_secret）+ 尾斜杠登记兼容 | 43.1 | R4 全绿 | Pending |
+| 43.R5.1 | **red+green**：隔离区迁址 dir-whip home（`audit_settle_paths` + `_remediation_instruction` 消息改写）+ 审计 `WHITELISTED_ROOT_DIRS` 移除 `.hermes` + `/dir-whip list` 隔离区行 | 43.1 | R5 全绿 | Pending |
+| 43.R6.1 | **red+green**：gate 去删除（`cleanup_tmp` 收窄只读盘点 + `delete=args.gate` 接线移除）+ wakeAgent 两键负载 + 交互盘点措辞 + SCR-042 断言改写/退役（42.R1 删除断言→盘点边界；42.R4 四键→两键） | 43.1 | R6 全绿 | Pending |
+| 43.9 | 回归 + bump：pytest 全量基线对比（687 基线）、plugin.yaml 0.6.3、spec re-freeze（v2.11 FROZEN）、deployment.md 升级注记核对（两键化 / 隔离区迁址 / 根外登记拒绝三项行为提示） | 43.R1.2/43.R2.1/43.R3.1/43.R4.1/43.R5.1/43.R6.1 | 基线全绿 | Pending |
+| 43.10 | 真机复验：六检查点（根外信号+前缀边界 / 根外登记拒绝自解释 / 隔离区迁址三方口径 / cron 两键零删除 / 交互盘点只读 / 常规回归，见 scr-043-plan.md 六）+ 报告（user-gated） | 43.9 | Pending |
 completed; it now closes the phase._
