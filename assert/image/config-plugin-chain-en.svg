@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="480" viewBox="0 0 880 480" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Hiragino Sans GB',sans-serif">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="18%" r="95%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="100%" stop-color="#0a0e14"/>
+    </radialGradient>
+    <linearGradient id="startGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="diaGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d2150"/>
+      <stop offset="100%" stop-color="#1a1438"/>
+    </linearGradient>
+    <linearGradient id="allowGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b3a2a"/>
+      <stop offset="100%" stop-color="#0f2419"/>
+    </linearGradient>
+    <linearGradient id="logGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a2f12"/>
+      <stop offset="100%" stop-color="#241b08"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" opacity="0.04"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <marker id="ah-cyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="ah-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="ah-amber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <rect width="880" height="480" fill="url(#bg)"/>
+  <rect width="880" height="480" fill="url(#dots)"/>
+
+  <g fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M430,85 L430,130" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M430,220 L430,265" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M540,175 L590,175" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M545,310 L590,310" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M430,355 L430,395" stroke="#d29922" marker-end="url(#ah-amber)"/>
+  </g>
+
+  <g font-size="13" font-weight="700" text-anchor="middle" dominant-baseline="central"
+     paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">
+    <text x="564" y="162" fill="#7ee787">yes</text>
+    <text x="404" y="243" fill="#22d3ee">no</text>
+    <text x="566" y="297" fill="#7ee787">yes</text>
+    <text x="404" y="378" fill="#f0b429">no</text>
+  </g>
+
+  <rect x="300" y="35" width="260" height="50" rx="25" fill="url(#startGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#glow)"/>
+  <text x="430" y="60" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="#ffffff">dir-whip-config.yaml</text>
+
+  <polygon points="430,130 540,175 430,220 320,175" fill="url(#diaGrad)" stroke="#a371f7" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="430" y="175" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="600" fill="#e6edf3">working_dir_root?</text>
+
+  <rect x="590" y="147" width="250" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="715" y="175" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="700" fill="#7ee787">Working Directory = override</text>
+
+  <polygon points="430,265 545,310 430,355 315,310" fill="url(#diaGrad)" stroke="#a371f7" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="430" y="310" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="600" fill="#e6edf3">profile terminal.cwd?</text>
+
+  <rect x="590" y="282" width="250" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="715" y="310" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="700" fill="#7ee787">Working Directory = profile value</text>
+
+  <rect x="290" y="395" width="280" height="56" rx="10" fill="url(#logGrad)" stroke="#d29922" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="430" y="423" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#f0b429">fail-open · guard off</text>
+</svg>
