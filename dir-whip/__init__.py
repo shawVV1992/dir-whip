@@ -51,9 +51,19 @@ except ImportError:
     import verdict
 
 try:
-    from .paths import _paths_equal, normalize_target, relativize_target
+    from .paths import (
+        _paths_equal,
+        normalize_target,
+        relativize_target,
+        within_working_dir,
+    )
 except ImportError:
-    from paths import _paths_equal, normalize_target, relativize_target
+    from paths import (
+        _paths_equal,
+        normalize_target,
+        relativize_target,
+        within_working_dir,
+    )
 
 logger = logging.getLogger("dir-whip")
 
@@ -104,6 +114,15 @@ ALLOW_PATH_ROOT_REJECTED_MESSAGE = (
     "[dir-whip] BLOCKED: the Working Directory root itself cannot be allowlisted.\n"
     "Allow a specific file or subdirectory path instead; workspace-wide\n"
     "exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user."
+)
+
+# Spec 5.11 v2.11 (SCR-043 R2c): outside-root rejection -- no entry is
+# needed there; writes outside the Working Directory are allowed and
+# logged (external-write), so the retry is direct.
+ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE = (
+    "[dir-whip] BLOCKED: the path is outside the Working Directory; no allowlist\n"
+    "entry is needed. Writes there are allowed and logged (external-write).\n"
+    "Retry the write directly at the requested path."
 )
 
 # Spec 5.11 v2.9 (SCR-041 R3): two-step confirmation payload ("<path>"
@@ -593,20 +612,20 @@ def _confirmation_payload(path, session_id):
 
 
 def _allow_path_handler(args, **kwargs):
-    """Registered allow_path handler (spec 5.11 v2.9).
+    """Registered allow_path handler (spec 5.11 v2.9/v2.11).
 
-    Entry gating in strict order (SCR-041 R2): subagent rejection ->
-    Working Directory root rejection -> two-step user confirmation
-    (SCR-041 R3): the first call (confirm absent/false) returns the
-    confirmation payload WITHOUT adding and records the path in the
-    session-memory confirmation-issued set; confirm=true adds ONLY an
-    already-briefed path (an unbriefed confirm=true re-issues the payload
-    and marks the path briefed -- confirm never adds on its own). A
-    successful add keeps the existing flow: config tool + allowlisted bus
-    event (5.14) + the symmetric runtime-allowlist-add stats row
-    (SCR-040 R4, 5.13). Rejections record block stats rows that are
-    bus-skipped (rule_keys in events._BUS_SKIP_RULE_KEYS). Fail-open:
-    never raises.
+    Entry gating in strict order (SCR-041 R2 + SCR-043 R2c): subagent
+    rejection -> Working Directory root rejection -> outside-root
+    rejection -> two-step user confirmation (SCR-041 R3): the first
+    call (confirm absent/false) returns the confirmation payload WITHOUT
+    adding and records the path in the session-memory confirmation-issued
+    set; confirm=true adds ONLY an already-briefed path (an unbriefed
+    confirm=true re-issues the payload and marks the path briefed --
+    confirm never adds on its own). A successful add keeps the existing
+    flow: config tool + allowlisted bus event (5.14) + the symmetric
+    runtime-allowlist-add stats row (SCR-040 R4, 5.13). Rejections
+    record block stats rows that are bus-skipped (rule_keys in
+    events._BUS_SKIP_RULE_KEYS). Fail-open: never raises.
     """
     try:
         path = args.get("path") if isinstance(args, dict) else args
@@ -629,6 +648,19 @@ def _allow_path_handler(args, **kwargs):
                     "root-target", session_id, False,
                 )
                 return ALLOW_PATH_ROOT_REJECTED_MESSAGE
+            # R2c (SCR-043): an outside-root path is never allowlisted --
+            # no entry is needed there (writes are allowed and logged,
+            # external-write). Same lexical domain as the classify chain
+            # (normalize_target + within_working_dir; no hand-rolled
+            # prefix comparison).
+            if working_dir_root and not within_working_dir(
+                normalize_target(str(path), working_dir_root), working_dir_root
+            ):
+                events.emit(
+                    "block", "allow-path", "allow-path-external-rejected",
+                    None, "external-target", session_id, False,
+                )
+                return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
         # R3: two-step user confirmation (main-agent path only).
         if path:
             briefed = _briefing_issued(path)
@@ -648,10 +680,15 @@ def _allow_path_handler(args, **kwargs):
                     )
             if not (confirm and briefed):
                 return _confirmation_payload(path, session_id)
-        # Confirmed add (existing flow unchanged).
-        result = config.dir_whip_allow_path(args, **kwargs)
+        # Confirmed add (existing flow unchanged). SCR-043 R3: the root is
+        # resolved BEFORE the add call and passed through so the add layer
+        # can assert the strict-subtree value domain (None = fail-open,
+        # assertion skipped).
+        working_dir_root, _ = verdict._resolved_config()
+        result = config.dir_whip_allow_path(
+            args, working_dir_root=working_dir_root, **kwargs
+        )
         if path:
-            working_dir_root, _ = verdict._resolved_config()
             events._bus_emit("allowlisted", {
                 "outcome": "allowlisted",
                 "rule_key": "runtime-allowlist",

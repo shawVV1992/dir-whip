@@ -401,11 +401,14 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
       {"outcome": "external-write", "rule_key": "external-write"} -> allow + log
       {"outcome": "block", "rule_key": ..., "message": ...}      -> block
 
-    Order: Tier 0 (allowlist dirs subtree + runtime allowlist) first; under
-    working_dir_root -> allowlist file at root, then valid Session
-    Directory, then BLOCK; outside working_dir_root (incl. sibling profile
-    dirs) -> external-write. There is NO approve tier. Casefold handling
-    delegated to allowlist module.
+    Order (SCR-043 R1, spec 5.3 v2.11): scope first -- T0 outside
+    working_dir_root (incl. sibling profile dirs) -> external-write
+    ALWAYS (a runtime entry can no longer mask the signal); then, inside
+    the root, on-the-spot grant beats persistent config beats session
+    structure: T1 runtime allowlist, T2 config allowlist (dirs subtree /
+    root-level file; dual rule_keys kept), T3 valid Session Directory,
+    T4 BLOCK (incl. the root itself: rel == "." -> root-file). There is
+    NO approve tier. Casefold handling delegated to allowlist module.
 
     honor_runtime_allowlist (SCR-041 R1, spec 5.18 v2.9): when False the
     runtime-allowlist check is skipped entirely (config-only judgment --
@@ -417,14 +420,17 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
     # Resolve parsed allowlist: prefer passed allowlist, else fresh load.
     parsed = _resolve_parsed_allowlist(allowlist)
 
-    # Tier 0: allowlist dirs subtree OR runtime allowlist -> ALLOW
-    if is_allowlist_dir(target, working_dir_root, parsed):
-        return {"outcome": "allow", "rule_key": "tier0-allowlist"}
+    # T0: scope first (SCR-043 R1) -- outside-root is ALWAYS external-write
+    if not within_working_dir(target, working_dir_root):
+        return {"outcome": "external-write", "rule_key": "external-write"}
+
+    # T1: runtime allowlist (value domain = strict subtree of root, R3 gating)
     if honor_runtime_allowlist and is_runtime_allowlisted(target):
         return {"outcome": "allow", "rule_key": "runtime-allowlist"}
 
-    if not within_working_dir(target, working_dir_root):
-        return {"outcome": "external-write", "rule_key": "external-write"}
+    # T2: config allowlist -- dirs subtree (dual rule_keys kept)
+    if is_allowlist_dir(target, working_dir_root, parsed):
+        return {"outcome": "allow", "rule_key": "tier0-allowlist"}
 
     try:
         rel = os.path.relpath(target, working_dir_root)
@@ -432,15 +438,18 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
         # Mixed drive/UNC pair on Windows: cannot relate -> external.
         return {"outcome": "external-write", "rule_key": "external-write"}
     rel_fwd = rel.replace("\\", "/")
-    if "/" not in rel_fwd:
-        # Root file: allowlist file check (spec 5.6 B2)
+    # T2 root-level file (rel == "." never reaches the file check: the
+    # root itself falls through to T4, SCR-043 R1/C3).
+    if rel != "." and "/" not in rel_fwd:
         base = os.path.basename(target)
         if is_allowlist_file(base, parsed):
             return {"outcome": "allow", "rule_key": "allowed-file"}
 
+    # T3: session dir
     if is_inside_session_dir(target, working_dir_root):
         return {"outcome": "allow", "rule_key": "session-dir"}
 
+    # T4: block (incl. root itself: rel == "." -> root-file)
     rule_key = "root-file" if "/" not in rel_fwd else "non-session-dir"
     return {
         "outcome": "block",

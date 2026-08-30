@@ -45,14 +45,18 @@ try:
         _get_hermes_home,
         _paths_equal,
         _profile_home,
+        normalize_target,
         relativize_target,
+        within_working_dir,
     )
 except ImportError:
     from paths import (
         _get_hermes_home,
         _paths_equal,
         _profile_home,
+        normalize_target,
         relativize_target,
+        within_working_dir,
     )
 
 # Unified allowlist core: parsing/validation/matching lives in allowlist.py.
@@ -360,6 +364,22 @@ def is_inside_session_dir(path, working_dir_root):
 
 # ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
 
+# SCR-043 R3 (spec 5.11 v2.11): add-layer rejection messages. The
+# outside-root text mirrors the handler-layer R2c verbatim constant in
+# __init__.py (config.py must not import the assembly layer, ADR-0007
+# dependency direction; the text is duplicated verbatim so both layers
+# answer identically).
+ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE = (
+    "[dir-whip] BLOCKED: the path is outside the Working Directory; no allowlist\n"
+    "entry is needed. Writes there are allowed and logged (external-write).\n"
+    "Retry the write directly at the requested path."
+)
+ALLOW_PATH_EMPTY_REJECTED_MESSAGE = (
+    "[dir-whip] Rejected: empty path. dir_whip_allow_path requires an explicit\n"
+    "path inside the Working Directory."
+)
+
+
 def _normalize_allowlist_path(path):
     """Normalize a path for allowlist comparison (forward slashes)."""
     if path is None:
@@ -367,12 +387,27 @@ def _normalize_allowlist_path(path):
     return str(path).replace("\\", "/")
 
 
-def runtime_allowlist_add(path):
+def runtime_allowlist_add(path, working_dir_root=None):
     """Add a path to the runtime allowlist (process-lifetime).
 
     Returns a confirmation string for the dir_whip_allow_path tool.
+
+    SCR-043 R3 (spec 5.11 v2.11) value-domain gating: empty/None paths
+    are rejected (a normalized-empty entry would prefix-match every
+    path). When working_dir_root is injected (non-None), the path is
+    asserted to be inside the root via paths.within_working_dir (the
+    same implementation as the classify chain; config never imports
+    verdict, ADR-0007) -- an outside-root path is NOT stored and the
+    rejection message is returned. working_dir_root=None (existing
+    direct-call/test form) skips the assertion, behavior unchanged.
     """
     normalized = _normalize_allowlist_path(path)
+    if not normalized:
+        return ALLOW_PATH_EMPTY_REJECTED_MESSAGE
+    if working_dir_root is not None and not within_working_dir(
+        normalize_target(normalized, working_dir_root), working_dir_root
+    ):
+        return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
     with _runtime_allowlist_lock:
         _runtime_allowlist.add(normalized)
     logger.debug("dir-whip: runtime allowlist added: %s", normalized)
@@ -382,13 +417,20 @@ def runtime_allowlist_add(path):
 def is_runtime_allowlisted(path):
     """Check a path against the runtime allowlist (normalized slashes).
 
-    Prefix match (case-insensitive): allowing a directory also exempts
-    operations under it, matching the dir_whip_allow_path tool intent
-    ("file operations under that path are exempt") and exempt_paths semantics.
+    Segment-boundary match (SCR-043 R4, case-insensitive): an entry
+    exempts ITSELF (file-level registration) and everything UNDER it
+    (directory subtree, entry with or without a trailing slash). A bare
+    string prefix no longer matches -- allowing "docs" does not exempt a
+    same-prefix sibling like "docs_secret/x.txt". casefold (Windows
+    caliber) and the forward-slash _normalize_allowlist_path lexical
+    domain (same domain as the classify chain) are kept.
     """
     normalized = _normalize_allowlist_path(path).casefold()
     with _runtime_allowlist_lock:
-        return any(normalized.startswith(e.casefold()) for e in _runtime_allowlist)
+        return any(
+            normalized == ec or normalized.startswith(ec.rstrip("/") + "/")
+            for ec in (e.casefold() for e in _runtime_allowlist)
+        )
 
 
 def runtime_allowlist_snapshot():
@@ -409,7 +451,7 @@ def runtime_allowlist_clear():
         _runtime_allowlist.clear()
 
 
-def dir_whip_allow_path(args, **kwargs):
+def dir_whip_allow_path(args, working_dir_root=None, **kwargs):
     """Tool handler: add a path to the runtime allowlist (spec 5.7, 5.11).
 
     Accepts either the tool-handler contract (args dict + extra kwargs such
@@ -417,9 +459,13 @@ def dir_whip_allow_path(args, **kwargs):
     helper/test callers). Returns a confirmation string. This is the
     plugin's ONLY tool. Wiring into ctx.register_tool happens in __init__.py
     (register).
+
+    SCR-043 R3: optional working_dir_root pass-through to the add layer's
+    value-domain assertion (the handler injects the resolved root; the
+    bare-path/rootless direct-call form keeps the assertion skipped).
     """
     path = args.get("path") if isinstance(args, dict) else args
-    return runtime_allowlist_add(path)
+    return runtime_allowlist_add(path, working_dir_root=working_dir_root)
 
 
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)

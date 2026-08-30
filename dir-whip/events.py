@@ -18,9 +18,9 @@ except ImportError:
     import state
 
 try:
-    from .paths import relativize_target
+    from .paths import normalize_target, relativize_target, within_working_dir
 except ImportError:
-    from paths import relativize_target
+    from paths import normalize_target, relativize_target, within_working_dir
 
 try:
     from .stats import record as stats_record
@@ -32,7 +32,8 @@ logger = logging.getLogger("dir-whip")
 # Verdict rule_keys that never fan out to the bus (5.14): their callers
 # emit their own bus events (approval verdicts, the audit gate block, the
 # audit violation verdict) or are allow_path entry-gating rejections
-# (SCR-041 R2, 5.11 v2.9 -- stats row only, no generic blocked fanout).
+# (SCR-041 R2 + SCR-043 R3, 5.11 -- stats row only, no generic blocked
+# fanout).
 _BUS_SKIP_RULE_KEYS = frozenset((
     "approval:granted",
     "approval:denied",
@@ -40,6 +41,7 @@ _BUS_SKIP_RULE_KEYS = frozenset((
     "write-audit-violation",
     "allow-path-subagent-rejected",
     "allow-path-root-rejected",
+    "allow-path-external-rejected",
 ))
 
 
@@ -53,15 +55,19 @@ def _verdict_reason(outcome):
 def _emit_verdict(outcome, tool, rule_key, target, reason, session_id, is_subagent):
     """Emit ONE single-line structured verdict event (5.13 logging part).
 
-    Levels: block / fail-open -> WARNING; external-write -> INFO; other
-    allows -> DEBUG. Also records the verdict via stats (counters +
+    Levels (SCR-043 R2): block / fail-open -> WARNING; a GEOMETRICALLY
+    outside-root target (same normalize_target + within_working_dir
+    domain as the classify chain) or the external-write outcome string
+    (fallback: root unresolved / target None fail-open shapes) -> INFO;
+    other allows -> DEBUG. Also records the verdict via stats (counters +
     stats.jsonl append). Verdict-derived bus events (blocked /
-    external-write, 5.14) are emitted unless the rule_key is in
-    _BUS_SKIP_RULE_KEYS (callers that handle their own events, e.g.
-    approval). working_dir_root and profile resolve from state
-    (state.session.session_root / state.session.session_profile);
-    session_id / is_subagent describe the judged call's session and are
-    explicit params. Never raises (fail-open, 5.8).
+    external-write, 5.14) use the same geometric basis and are emitted
+    unless the rule_key is in _BUS_SKIP_RULE_KEYS (callers that handle
+    their own events, e.g. approval). working_dir_root and profile
+    resolve from state (state.session.session_root /
+    state.session.session_profile); session_id / is_subagent describe
+    the judged call's session and are explicit params. Never raises
+    (fail-open, 5.8).
     """
     try:
         working_dir_root = state.session.session_root
@@ -70,6 +76,15 @@ def _emit_verdict(outcome, tool, rule_key, target, reason, session_id, is_subage
             is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
         )
         rel_target = relativize_target(target, working_dir_root)
+        # SCR-043 R2: the log/bus routing basis is GEOMETRIC (computed
+        # fresh, chain-homologous); the outcome string stays as the
+        # fallback so fail-open shapes keep their levels.
+        outside = (
+            bool(target) and bool(working_dir_root)
+            and not within_working_dir(
+                normalize_target(target, working_dir_root), working_dir_root
+            )
+        )
         event = {
             "outcome": outcome,
             "reason": reason,
@@ -83,18 +98,23 @@ def _emit_verdict(outcome, tool, rule_key, target, reason, session_id, is_subage
         line = json.dumps(event)
         if outcome in ("block", "fail-open"):
             logger.warning("dir-whip: verdict %s", line)
-        elif outcome == "external-write":
+        elif outside or outcome == "external-write":
             logger.info("dir-whip: verdict %s", line)
         else:
             logger.debug("dir-whip: verdict %s", line)
-        # 5.14: verdict-derived bus events (privacy-shaped relative target).
+        # 5.14: verdict-derived bus events (privacy-shaped relative target),
+        # same geometric basis as the log routing; _BUS_SKIP_RULE_KEYS
+        # respected unchanged.
         if outcome == "block" and rule_key not in _BUS_SKIP_RULE_KEYS:
             _bus_emit("blocked", {
                 "outcome": outcome,
                 "rule_key": rule_key,
                 "target": rel_target,
             })
-        elif outcome == "external-write" and rule_key not in _BUS_SKIP_RULE_KEYS:
+        elif (
+            (outside or outcome == "external-write")
+            and rule_key not in _BUS_SKIP_RULE_KEYS
+        ):
             _bus_emit("external-write", {
                 "outcome": outcome,
                 "rule_key": rule_key,
