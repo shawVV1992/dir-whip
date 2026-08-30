@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.2](https://img.shields.io/badge/version-0.6.2-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.3](https://img.shields.io/badge/version-0.6.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -27,7 +27,7 @@
 1. **教罚结合：** skill 教纪律、plugin 强制执行，默认工作区管理纪律有效稳定，文件管理不再混乱。
 2. **双层检测+兜底工具：** 在插件中，前置层在落地前拦截白名单与会话目录之外的写入（含根级文件与非会话子目录）并附修正指引；审计层对放行的终端命令做快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
 3. **可观测：** 定义 7 类 `dir-whip:*` 事件保存至 stats.jsonl（5 MB 滚动），可观测溯源。
-4. **定时治理：** 针对 cron 任务采用 wakeAgent / [SILENT] 模式，不打断 agent 执行。下次 cron tick 继续治理。
+4. **定时治理：** 针对 cron 任务采用纯审计 + 两态唤醒（`{"wakeAgent": bool, "violations": N}`），全插件零自动删除；静默 tick 不打断执行，有违规才唤醒 agent 清偿。
 5. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
 6. **项目模式感知：** 当活跃 Hermes 项目包含 agent CWD 时，会话开始提醒整体跳过（`skipped-project`）。
 
@@ -108,15 +108,15 @@ hermes plugins disable dir-whip
 ```
 <Working Directory>/
 ├── (严格空白名单；通过 /dir-whip allow 添加)
-├── 20260822_143000_ReportTask/    # 会话目录（懒创建）
-│   ├── Outputs/                   # 正式交付物
-│   └── .tmp/                      # 中间文件（可按时间清理）
-└── .hermes/                       # Hermes 自身目录
+└── 20260822_143000_ReportTask/    # 会话目录（懒创建）
+    ├── Outputs/                   # 正式交付物
+    └── .tmp/                      # 中间文件（按龄盘点，永不自动清理）
 ```
 
 - 命名 `YYYYMMDD_HHMMSS_TaskName/`，时间戳必须真实（插件校验）。
 - 懒创建：首次文件写入时才建，不产出文件的对话不建目录。
-- 根目录只允许三样东西：白名单 `files` 条目、会话格式目录、`.hermes/`。
+- 根目录只允许两样东西：白名单 `files` 条目、会话格式目录。（审计隔离区已迁至
+  dir-whip home：`<profile home>/dir-whip/audit-quarantine/`。）
 
 ### 执行策略
 
@@ -139,7 +139,7 @@ hermes plugins disable dir-whip
 - 拦截对象仅三种写类工具：`write_file` / `patch` / `terminal`；其余工具与只读命令不进入判定。
 - **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
 - **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头目标排除。
-- **统一分类链**（与审计层共用，判定永不矛盾）：Tier 0 白名单 / 运行时豁免 → 工作目录之外放行记日志 → 根级白名单文件 → 会话目录 → 其余 block（`root-file` / `non-session-dir`），block 消息自带修正指引。
+- **统一分类链**（与审计层共用，判定永不矛盾），定稿 T0-T4、范围置首：T0 工作目录之外 → 放行记日志（`external-write`）；T1 运行时白名单（当场授权）→ 放行；T2 config 白名单（`dirs` 子树 / 根级 `files` 条目）→ 放行；T3 会话目录 → 放行；T4 其余 block（`root-file` / `non-session-dir`，含工作目录根自身），block 消息自带修正指引。链序范围置首：根外判定恒为 `external-write`——白名单条目不再可能掩盖该信号。
 
 **审计层（兜底，四级阶梯）** —— 只观察放行的终端命令实际落盘了什么：
 
@@ -215,10 +215,10 @@ Agent: （一次写入绕过前置层，落在了根目录）
 
 [dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
   - notes.txt
-Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<profile home>/dir-whip/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
 
 Agent: dir_whip_settle(paths=["notes.txt"])
-       # 文件移入 .hermes/audit-quarantine/<timestamp>/，闸门重新打开
+       # 文件移入 <profile home>/dir-whip/audit-quarantine/<timestamp>/，闸门重新打开
 ```
 
 ### 3. `/dir-whip` 报告实时状态
@@ -226,7 +226,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.2
+[dir-whip] v0.6.3
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -276,9 +276,21 @@ allowlist:
 
 ### 支持 cron 任务
 
-> 待填充：本节将描述 Hermes cron 任务的定时治理支持——任务配置（script /
-> skill / prompt）、wakeAgent 两键负载与静默 tick 语义。内容随 feedback/14
-> E6（gate 回归纯审计 + 唤醒）实施后补齐。
+`audit_workspace.py` 是 Hermes cron 任务的定时治理入口：`--gate` 执行一次纯审计
+并在 stdout 末尾追加一行 JSON 唤醒行。退出码：0 合规、1 有违规、2 参数错误或
+Working Directory 未解析（cron 失败可见性）。
+
+- **纯审计 + 两态唤醒**——stdout 末行为 `{"wakeAgent": bool, "violations": N}`，
+  恰好两键。`false` 为静默 tick（不打断执行）；`true` 唤醒 agent 清偿。
+- **零自动删除**——全插件没有任何自动删除路径；清理决策归还 agent。
+- **只读盘点**——交互模式审计将过期 `.tmp` 条目以提案形式列出
+  （"Expired .tmp entries (proposal only; cleanup needs your confirmation):"），
+  供 agent（或用户）后续处置。
+
+```bash
+# cron 任务示例：审计工作目录，仅违规时唤醒
+python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
+```
 
 ### 子代理模式
 
@@ -315,7 +327,7 @@ allowlist:
 | `outcome` | 判定结果 | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block` 等 |
 | `reason` | 结果原因 | 短语说明，如根外写入记 `target outside working_dir_root` |
 | `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `allow-path` 等 |
-| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` |
+| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `allow-path-external-rejected` |
 | `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
 
 全文件不含文件内容、绝对路径或提示词文本。可观察入口：
@@ -335,7 +347,7 @@ dir-whip 是**行为监控与软性管理**，**不是安全边界**：它经由
 
 1. **写类工具拦截**——`write_file` / `patch` / `terminal` 中，工作目录内白名单与会话目录之外的写入在落地前拦截（含根级文件与非会话子目录，`root-file` / `non-session-dir`），block 消息自带修正指引。
 2. **根级写入事后审计与清偿闸门**——放行的终端命令经快照 diff 捕获漏网违规，走 L1–L4 阶梯直至清偿（见执行策略）。
-3. **会话目录结构合规**——`audit_workspace.py` 检查 Outputs/ 与 .tmp/ 结构合规，并按期清理 .tmp（cron 定时治理的入口）。
+3. **会话目录结构合规**——`audit_workspace.py` 检查 Outputs/ 与 .tmp/ 结构合规，过期 `.tmp` 条目以只读提案列出（cron 定时治理的入口——零自动删除）。
 
 **不管。**
 

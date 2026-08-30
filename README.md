@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.2](https://img.shields.io/badge/version-0.6.2-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.3](https://img.shields.io/badge/version-0.6.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -38,9 +38,10 @@ directories are not subject to enforcement.
    and a dir-whip continuation nudge.
 3. **Observable.** 7 `dir-whip:*` events recorded to stats.jsonl
    (5 MB rollover) for audit and diagnostics.
-4. **Scheduled governance.** wakeAgent / [SILENT] pattern for cron tasks
-   — no interruption to agent execution; next cron tick continues
-   governance.
+4. **Scheduled governance.** Pure audit + two-state wake
+   (`{"wakeAgent": bool, "violations": N}`) for cron tasks — zero
+   auto-delete anywhere; a silent tick never interrupts, violations wake
+   the agent to remediate.
 5. **Subagent discipline.** Children write to parent-designated
    directories; they never self-create Session Directories.
 6. **Project-mode aware.** When an active Hermes project contains the
@@ -124,18 +125,18 @@ the Working Directory root:
 ```
 <Working Directory>/
 ├── (strict empty allowlist; add via /dir-whip allow)
-├── 20260822_143000_ReportTask/    # Session Directory (lazy-created)
-│   ├── Outputs/                   # formal deliverables
-│   └── .tmp/                      # intermediate files (age-cleanable)
-└── .hermes/                       # Hermes internal
+└── 20260822_143000_ReportTask/    # Session Directory (lazy-created)
+    ├── Outputs/                   # formal deliverables
+    └── .tmp/                      # intermediate files (age-listed, never auto-cleaned)
 ```
 
 - Named `YYYYMMDD_HHMMSS_TaskName/` with a real timestamp (the plugin
   validates it).
 - Created lazily at the first file write — conversations that produce no
   files create no directory.
-- The root allows exactly three things: allowlist `files` entries,
-  session-format directories, and `.hermes/`.
+- The root allows exactly two things: allowlist `files` entries and
+  session-format directories. (The audit quarantine lives in the
+  dir-whip home: `<profile home>/dir-whip/audit-quarantine/`.)
 
 ### Enforcement
 
@@ -167,10 +168,14 @@ false passes, never false blocks**:
 - **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
   newlines, targets extracted per segment; `=`-leading targets excluded.
 - **Unified classify chain** (shared with the audit layer — the two can
-  never disagree): Tier 0 allowlist / runtime exemption → outside the
-  Working Directory allowed + logged → root-level allowlist file → Session
-  Directory → otherwise block (`root-file` / `non-session-dir`), with
-  fix-it guidance in the message.
+  never disagree), scope-first T0-T4: T0 outside the Working Directory →
+  allowed + logged (`external-write`); T1 runtime allowlist (on-the-spot
+  grant) → allowed; T2 config allowlist (`dirs` subtree / root-level
+  `files` entry) → allowed; T3 Session Directory → allowed; T4 otherwise
+  block (`root-file` / `non-session-dir`, the Working Directory root
+  itself included), with fix-it guidance in the message. The chain is
+  scope-first: outside-root is ALWAYS `external-write` — an allowlist
+  entry can no longer mask it.
 
 **Audit layer (backstop, four-level ladder)** — observes only what allowed
 terminal commands actually landed:
@@ -260,10 +265,10 @@ Agent: (a write slips past the front layer and lands at the root)
 
 [dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
   - notes.txt
-Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<root>/.hermes/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<profile home>/dir-whip/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
 
 Agent: dir_whip_settle(paths=["notes.txt"])
-       # file moves to .hermes/audit-quarantine/<timestamp>/, gate re-opens
+       # file moves to <profile home>/dir-whip/audit-quarantine/<timestamp>/, gate re-opens
 ```
 
 ### 3. `/dir-whip` reports the live state
@@ -271,7 +276,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.2
+[dir-whip] v0.6.3
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -330,10 +335,25 @@ session start):
 
 ### Cron Support
 
-> To be filled: this section will describe the scheduled-governance support
-> for Hermes cron jobs — job configuration (script / skill / prompt), the
-> two-key wakeAgent payload, and silent-tick semantics. Content lands with
-> feedback/14 E6 (gate becomes pure audit + wake).
+`audit_workspace.py` is the scheduled-governance entry for Hermes cron
+jobs: `--gate` runs a pure audit and appends one JSON wake line to
+stdout. Exit codes: 0 compliant, 1 violations found, 2 parameter error
+or an unresolved Working Directory (cron failure visibility).
+
+- **Pure audit + two-state wake** — the final stdout line is
+  `{"wakeAgent": bool, "violations": N}`, exactly two keys. `false` is
+  a silent tick (no interruption); `true` wakes the agent to remediate.
+- **Zero auto-delete** — the plugin never deletes anything; cleanup
+  decisions belong to the agent.
+- **Read-only inventory** — the interactive audit lists expired `.tmp`
+  entries as a proposal
+  ("Expired .tmp entries (proposal only; cleanup needs your
+  confirmation):"), ready for the agent (or the user) to act on.
+
+```bash
+# cron job example: audit the Working Directory, wake only on violations
+python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
+```
 
 ### Subagent Mode
 
@@ -377,7 +397,7 @@ Each line carries two groups of fields:
 | `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block`, etc. |
 | `reason` | Outcome reason | Short phrase, e.g. `target outside working_dir_root` for out-of-root writes |
 | `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `allow-path`, etc. |
-| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` |
+| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `allow-path-external-rejected` |
 | `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
 
 The file never contains file contents, absolute paths, or prompt text.
@@ -408,8 +428,8 @@ inside a code-execution kernel).
    commands are re-checked via snapshot diff; slipped-through violations
    run the L1–L4 ladder until settled (see Enforcement).
 3. **Session Directory structure compliance** — `audit_workspace.py`
-   checks the Outputs/ and .tmp/ layout and cleans expired `.tmp` entries
-   (the cron governance entry).
+   checks the Outputs/ and .tmp/ layout and lists expired `.tmp` entries
+   as a read-only proposal (the cron governance entry — zero auto-delete).
 
 **Not enforced.**
 

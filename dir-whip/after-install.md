@@ -26,10 +26,13 @@ the exact path.
 **Tools**: dir_whip_allow_path — allow a user-specified path for this
 session (two-step user confirmation: the first call returns a briefing
 payload without adding; re-call with confirm=true after the user approves;
-prospective-only — never clears a recorded violation; subagent calls and
-the Working Directory root itself are rejected). dir_whip_settle — lazily
-registered on the first write-audit notice; moves flagged root files into
-the audit quarantine (same-turn self-heal).
+prospective-only — never clears a recorded violation; subagent calls,
+empty paths, and registrations outside the Working Directory are rejected
+with a self-explaining message — the value domain is paths INSIDE the
+Working Directory; writes outside it need no entry, they are allowed and
+logged). dir_whip_settle — lazily registered on the first write-audit
+notice; moves flagged root files into the audit quarantine (same-turn
+self-heal).
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
 (structured allowlist mapping {files, dirs}, working_dir_root override).

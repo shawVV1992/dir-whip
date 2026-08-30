@@ -48,7 +48,7 @@ OTHERWISE
 | Writing any file | classify → create session dir → write: Classify target → create session dir if needed → `Outputs/` or `.tmp/` |
 | Root write blocked | Create session dir, re-target there |
 | Delete / overwrite / move | Confirmation Protocol (list files → wait for explicit yes) |
-| User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval |
+| User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged) |
 | Subagent writing | Write to parent-passed dir, never create own session dir |
 
 ## Instant Discipline (Layer 1)
@@ -71,7 +71,7 @@ Triggered by: any file write, create, save, delete, or move.
   `python scripts/create_session_dir.py <task> --workspace <root>`
   Example: `python scripts/create_session_dir.py <task> --workspace <root>` - replace <task> and <root> with your values (legacy form `python scripts/create_session_dir.py <task_name> --workspace <working_dir>` also works)
 - Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
-- Root allows ONLY: `allowlist` `files` entries, session-format dirs, `.hermes/`
+- Root allows ONLY: `allowlist` `files` entries, session-format dirs (`allowlist` `dirs` subtrees likewise exempt)
 - Project directories inside the workspace can be exempted wholesale via an
   `allowlist` `dirs` entry (recursive subtree) — add via `/dir-whip allow <path>`
 - `Outputs/` blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
@@ -86,8 +86,9 @@ Classify BEFORE writing, by intent. First match wins:
    scripts, intermediate data, debug output, drafts still being iterated. -> `.tmp/`
 3. **Unsure?** -> `.tmp/` (default; promotion later is always possible, demotion pollutes the deliverable folder)
 
-Anchor: `.tmp/` is eligible for age-based cleanup (audit cron, default 30 days).
-If you would miss this file after a 30-day cleanup, it belongs in `Outputs/`.
+Anchor: expired `.tmp/` entries (30-day default threshold) appear in the
+audit's read-only inventory proposal - the plugin never auto-cleans.
+If you would miss this file when the proposal lists it, it belongs in `Outputs/`.
 
 Extension hints (intent wins over extension):
 - Deliverable-like: `.md` report, `.pdf`, `.docx`, `.xlsx`, `.png`/`.svg` result
@@ -134,7 +135,7 @@ Subagent variant: replace "I will create..." with "I will write to the target di
 Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations; uncertain intent is allowed + logged.
 
 1. Prefer Session Directories for all writes
-2. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing
+2. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged)
 3. Blocked → create a Session Directory and re-target (never bypass the guard)
 
 ## Governance & Cron
@@ -145,7 +146,7 @@ Triggered by "tidy workspace" or cron job:
 2. Violations? Classify → propose → execute with confirmation
 3. No violations? Report "OK" (or `[SILENT]` in cron mode)
 
-Cron: `script: scripts/audit_workspace.py --gate` + skill `dir-whip:workspace-organization`. Gate emits `{"wakeAgent": false}` on compliance, `{"wakeAgent": true}` on violations; gate failure exits 2 with no wakeAgent; resolution failure fails open to CWD. Cron auto-cleans expired `.tmp/` contents (age-based, default 30 days); interactive runs only propose, never delete. See `references/workspace-audit.md` for the full checklist.
+Cron: `script: scripts/audit_workspace.py --gate` + skill `dir-whip:workspace-organization`. Gate emits `{"wakeAgent": false, "violations": 0}` on compliance, `{"wakeAgent": true, "violations": N}` on violations (exactly two keys); gate failure exits 2 with no wakeAgent (an unresolved Working Directory is a gate failure); interactive resolution failure fails open to CWD. Zero auto-delete: the plugin never deletes; the interactive audit lists expired `.tmp/` entries as a read-only proposal ("Expired .tmp entries (proposal only; cleanup needs your confirmation):"). See `references/workspace-audit.md` for the full checklist.
 
 ## Scripts
 
@@ -154,7 +155,7 @@ All scripts: Python 3.11, `--help` support, forward-slash output paths.
 | Script | Purpose | Key flags |
 |--------|---------|-----------|
 | create_session_dir.py | Create session dir with Outputs/ + .tmp/ | `--workspace` |
-| audit_workspace.py | Compliance audit with gate + cron .tmp cleanup | `--workspace`, `--json`, `--gate`, `--days` |
+| audit_workspace.py | Compliance audit + wakeAgent gate line (audit-only, zero delete) | `--workspace`, `--json`, `--gate`, `--days` |
 
 Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resolution failure fails open to CWD with one warning.
 
@@ -175,8 +176,8 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 - Created session dir before first write?
 - File inside a session dir, in the correct `Outputs/`/`.tmp/`?
 - No non-whitelist files at the Working Directory root? (root allows only
-  `allowlist` `files` entries, session-format dirs, `.hermes/`, and
-  `allowlist` `dirs` subtrees)
+  `allowlist` `files` entries, session-format dirs, and `allowlist` `dirs`
+  subtrees; a leftover `.hermes/` directory is flagged by the audit)
 - Confirmation obtained before delete/overwrite/move?
 
 ## Remember

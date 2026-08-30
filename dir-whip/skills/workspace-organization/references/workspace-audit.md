@@ -29,7 +29,7 @@ Before auditing, confirm the target is a legitimate Working Directory:
 
 | # | Check | Violation Example |
 |:-:|-------|-----------------|
-| 1 | **Root-level entries** -- only allowlist `files` entries, allowlist `dirs` subtrees, session-format dirs (`YYYYMMDD_HHMMSS_TaskName/`), and optional .hermes/ should exist at the workspace root | Scripts, images, notes dumped in root |
+| 1 | **Root-level entries** -- only allowlist `files` entries, allowlist `dirs` subtrees, and session-format dirs (`YYYYMMDD_HHMMSS_TaskName/`) should exist at the workspace root; a leftover `.hermes/` directory is flagged too (the audit quarantine moved to the dir-whip home) | Scripts, images, notes dumped in root |
 | 2 | **Root-level Outputs/** -- deliverables must live inside a session dir's Outputs/ | `Outputs/script.sh` at top level |
 | 3 | **Session dir format** -- must be `YYYYMMDD_HHMMSS_TaskName` | Plain-named folders, missing timestamp |
 | 4 | **Session subdirs** -- each session dir must have both `Outputs/` and `.tmp/` | Missing `.tmp/` or missing `Outputs/` |
@@ -95,12 +95,15 @@ Confirm:
 - No root-level deliverables remain
 - Every session dir has Outputs/ + .tmp/
 - Outputs/ contains only user-facing files
-- The workspace rules file and .hermes/ are untouched
+- The workspace rules file is untouched
 
 ## Cron Mode
 
-With `--gate` the audit emits a single JSON wakeAgent line
-(`{"wakeAgent": false}` on compliance, `{"wakeAgent": true, "violations": N}`
-otherwise) and auto-cleans expired `.tmp/` contents (age-based, default 30
-days). Interactive runs only propose; deletion happens only in cron mode
-within the age window or after explicit user confirmation.
+With `--gate` the audit runs a pure audit and emits a single JSON wakeAgent
+line (`{"wakeAgent": false, "violations": 0}` on compliance,
+`{"wakeAgent": true, "violations": N}` otherwise -- exactly two keys); an
+unresolved Working Directory is a gate failure (exit 2, no wakeAgent line).
+ZERO auto-delete: the plugin never deletes anything. The interactive audit
+lists expired `.tmp/` entries as a read-only inventory proposal
+("Expired .tmp entries (proposal only; cleanup needs your confirmation):");
+the agent (or the user) decides what to clean up.
