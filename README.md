@@ -168,14 +168,15 @@ false passes, never false blocks**:
 - **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
   newlines, targets extracted per segment; `=`-leading targets excluded.
 - **Unified classify chain** (shared with the audit layer — the two can
-  never disagree), scope-first T0-T4: T0 outside the Working Directory →
-  allowed + logged (`external-write`); T1 runtime allowlist (on-the-spot
-  grant) → allowed; T2 config allowlist (`dirs` subtree / root-level
-  `files` entry) → allowed; T3 Session Directory → allowed; T4 otherwise
-  block (`root-file` / `non-session-dir`, the Working Directory root
-  itself included), with fix-it guidance in the message. The chain is
-  scope-first: outside-root is ALWAYS `external-write` — an allowlist
-  entry can no longer mask it.
+  never disagree), scope-first T0-T4:
+
+| Tier | Scope judged | Verdict | Notes |
+|------|--------------|---------|-------|
+| **T0** | Outside the Working Directory | allowed + logged (`external-write`) | Scope-first: outside-root is ALWAYS `external-write` — an allowlist entry can no longer mask it |
+| **T1** | Runtime allowlist (on-the-spot grant) | allowed | |
+| **T2** | Config allowlist (`dirs` subtree / root-level `files` entry) | allowed | |
+| **T3** | Session Directory | allowed | |
+| **T4** | Everything else (incl. the Working Directory root itself) | block (`root-file` / `non-session-dir`) | Fix-it guidance in the message |
 
 **Audit layer (backstop, four-level ladder)** — observes only what allowed
 terminal commands actually landed:
@@ -185,12 +186,16 @@ terminal commands actually landed:
   deletions are record-only.
 - **Pending set**: session-scoped; subagent violations post to the parent's
   set — the parent settles the latch.
-- The four-level ladder (defined in the table above): **L1** the fire-once
-  notice is the only in-conversation prompt; **L2** stats + events stay in
-  the background; **L3** the latch freezes every write-class call (incl.
-  `rm` and agent-driven config edits); **L4** four remedies — settle / move
-  into a session dir (out-of-band) / user `/dir-whip allow` / out-of-band
-  removal.
+- The four-level ladder (defined in the table above), as it surfaces in
+  the audit layer:
+
+| Level | Audit-layer behavior |
+|-------|----------------------|
+| **L1** | The fire-once notice is the only in-conversation prompt |
+| **L2** | Stats + events stay in the background |
+| **L3** | The latch freezes every write-class call (incl. `rm` and agent-driven config edits) |
+| **L4** | Four remedies — settle / move into a session dir (out-of-band) / user `/dir-whip allow` / out-of-band removal |
+
 - **Settlement is config-only**: a runtime exemption is prospective-only
   and never clears a recorded violation.
 - **pre_verify continuation nudge**: one more reminder when a turn ends
