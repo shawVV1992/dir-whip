@@ -37,9 +37,19 @@ except ImportError:
     from events import _bus_emit, emit
 
 try:
-    from .paths import relativize_target, within_working_dir
+    from .paths import (
+        _get_hermes_home,
+        _profile_home,
+        relativize_target,
+        within_working_dir,
+    )
 except ImportError:
-    from paths import relativize_target, within_working_dir
+    from paths import (
+        _get_hermes_home,
+        _profile_home,
+        relativize_target,
+        within_working_dir,
+    )
 
 try:
     from .sessions import _is_child_session, _record_top_session
@@ -267,17 +277,22 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
 def _remediation_instruction(paths_display):
     """Shared remediation sentence (5.18 v2.8 R1, single source of truth):
     the exact dir_whip_settle(paths=[...]) call form with absolute
-    forward-slash paths and the quarantine location under the RESOLVED
-    working_dir_root. Used by BOTH the L1 notice and the continuation
-    nudge; the L3 gate message keeps its 2026-08-26 short form.
-    allow_path is never mentioned (settle-first ruling 2026-08-27).
-    Fail-open: root unresolved -> the literal <root> placeholder."""
+    forward-slash paths and the quarantine location under the dir-whip
+    home (<profile home>/dir-whip/audit-quarantine/; SCR-043 R5 moved it
+    out of the workspace root -- layout-aware via paths._profile_home,
+    the stats.jsonl / dir-whip.log family). Used by BOTH the L1 notice
+    and the continuation nudge; the L3 gate message keeps its
+    2026-08-26 short form. allow_path is never mentioned (settle-first
+    ruling 2026-08-27). Fail-open: home unresolved -> the literal <home>
+    placeholder."""
     try:
-        root, _allowlist = get_cached_config(state.session.registered_ctx)
+        home = _get_hermes_home()
+        if state.session.session_profile:
+            home = _profile_home(home, state.session.session_profile)
     except Exception:
-        root = None
-    quarantine = "%s/.hermes/audit-quarantine/" % (
-        str(root).replace("\\", "/") if root else "<root>"
+        home = None
+    quarantine = "%s/dir-whip/audit-quarantine/" % (
+        str(home).replace("\\", "/") if home else "<home>"
     )
     return (
         "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
@@ -673,13 +688,16 @@ def audit_settle_paths(session_id, paths):
     rejected before any filesystem action, all-or-nothing); relative args
     are resolved against working_dir_root then matched against the
     normalized pending keys. Each accepted path is shutil.move'd into
-    <root>/.hermes/audit-quarantine/<YYYYMMDD_HHMMSS>/ (audit-safe: the
-    snapshot only judges root-top-level FILE entries) and dropped from the
-    pending set. A pending path that no longer exists is an idempotent
-    successful no-op settlement (2026-08-26 ruling; matches the latch's
-    lexists semantics). Returns {"settled": [<root-relative paths>]} on
-    success (relative for privacy) or {"error": "<reason>"} on rejection/
-    failure -- fail-open: a move error leaves the latch latched.
+    <dir-whip home>/audit-quarantine/<YYYYMMDD_HHMMSS>/ (SCR-043 R5:
+    layout-aware profile home, the stats.jsonl family -- relocated out
+    of the workspace root; legacy <root>/.hermes/ quarantine data is
+    NOT migrated; audit-safe: the snapshot only judges root-top-level
+    FILE entries) and dropped from the pending set. A pending path that
+    no longer exists is an idempotent successful no-op settlement
+    (2026-08-26 ruling; matches the latch's lexists semantics). Returns
+    {"settled": [<root-relative paths>]} on success (relative for
+    privacy) or {"error": "<reason>"} on rejection/failure -- fail-open:
+    a move error leaves the latch latched.
     """
     try:
         if session_id and _is_child_session(session_id):
@@ -716,8 +734,15 @@ def audit_settle_paths(session_id, paths):
                 return {"error": "path is not in the pending violation "
                                  "set: %s" % str(path).replace("\\", "/")}
             keys.append(key)
+        # SCR-043 R5: the quarantine lives under the dir-whip home
+        # (<profile home>/dir-whip/audit-quarantine/<ts>/), layout-aware
+        # via paths._profile_home -- the stats.jsonl / dir-whip.log
+        # family. Out of the workspace root; no legacy data migration.
+        home = _get_hermes_home()
+        if state.session.session_profile:
+            home = _profile_home(home, state.session.session_profile)
         quarantine_dir = os.path.join(
-            working_dir_root, ".hermes", "audit-quarantine",
+            str(home), "dir-whip", "audit-quarantine",
             datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         )
         settled = []

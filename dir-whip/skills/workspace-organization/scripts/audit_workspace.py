@@ -8,8 +8,8 @@ Working Directory (dir-whip-config override -> HERMES_SESSION_PROFILE ->
 profile enumeration + TERMINAL_CWD candidate root). When the chain is
 unresolvable, interactive mode falls back to the current directory with
 ONE concise stderr warning (fail-open); cron mode (--gate) REFUSES to
-fall back -- it exits 2 with zero deletion and no wakeAgent line
-(SCR-042 H1: no deletion without a resolved root). A missing directory
+fall back -- it exits 2 with no wakeAgent line (SCR-042 H1, reframed by
+SCR-043 R6 as cron failure visibility). A missing directory
 or a mismatch is a parameter error.
 
 Checks:
@@ -17,44 +17,45 @@ Checks:
      whitelist (structured mapping v2.7; legacy flat values ignored with
      a stderr hint).
   2. No Outputs/ directory directly at workspace root.
-  3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName]),
-     the whitelisted .hermes/ directory, or a directory covered by an
-     allowlist dirs entry (recursive subtree exemption).
+  3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName])
+     or a directory covered by an allowlist dirs entry (recursive
+     subtree exemption). SCR-043 R5: the former .hermes/ whitelist is
+     removed -- a leftover .hermes/ directory is flagged like any other
+     non-session directory (the audit quarantine lives in the dir-whip
+     home now).
   4. Each valid session dir must contain both Outputs/ and .tmp/.
   5. Outputs/ must not contain build artifacts (__pycache__, *.pyc,
      node_modules, .DS_Store, Thumbs.db) at its immediate level.
   6. Script files (.py, .sh, .bat, .ps1) directly inside a session dir
      belong in .tmp/ instead.
 
-Embedded .tmp cleanup (spec 3.4 / 8.1): age-based cleanup of session
-.tmp/ directories runs inside the audit. Cron mode (--gate) deletes
-expired entries automatically; interactive mode only proposes them
-(never deletes without the user). The hidden --days flag sets the age
-threshold (default 30). Deletion never touches Outputs/, session files
-outside .tmp/, workspace root files, or the .tmp/ directory itself, and
-never scans .tmp/ directories outside valid session dirs. The scan
+Embedded .tmp inventory (spec 3.4 / 8.1; SCR-043 R6): expired session
+.tmp/ entries (default age threshold 30 days, hidden --days flag) are
+listed as a READ-ONLY proposal in interactive mode; the plugin never
+deletes (zero auto-delete anywhere -- cleanup decisions belong to the
+agent). Cron mode (--gate) outputs no expired list. The inventory
 boundary never follows symlinks: a session-name symlink at the root and
-a symlinked .tmp/ body are both skipped entirely (SCR-042 N1).
+a symlinked .tmp/ body are both excluded entirely (SCR-042 N1, kept as
+inventory correctness -- never list outside content).
 
 Output:
   Plain text: one block per violation (check number, name, path,
   suggestion), or a single "OK" line when compliant.
   --json: a JSON array of violation objects, or [] when compliant.
-  --gate: regular output first, then the cleanup report, then a final
-  JSON line {"wakeAgent": bool, "violations": N, "removed": K,
-  "failed": F} -- four keys always present; "removed" counts successful
-  deletions, "failed" counts deletion failures (SCR-042 M2+N8: cleanup
-  failures are visible to cron while the exit code stays
-  violations-driven). In --gate + --json mode stdout is exactly two
-  lines, each json.loads-able: the violations JSON array and the
-  wakeAgent line (the plain removal report moves to stderr only).
-  Interactive --json keeps the plain JSON array (no cleanup proposal).
+  --gate: regular output first, then a final JSON line
+  {"wakeAgent": bool, "violations": N} -- exactly two keys (SCR-043 R6:
+  the removed/failed cleanup keys are gone with auto-delete). In
+  --gate + --json mode stdout is exactly two lines, each
+  json.loads-able: the violations JSON array and the wakeAgent line.
+  Interactive --json keeps the plain JSON array (no inventory
+  proposal).
 
 Exit codes:
   0 = compliant (no violations)
   1 = violations found
   2 = parameter/path error (missing directory, --workspace mismatch,
-      invalid --days, or --gate with an unresolved Working Directory)
+      invalid --days, or --gate with an unresolved Working Directory --
+      cron failure visibility, SCR-042 H1)
 """
 
 import argparse
@@ -63,7 +64,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import sys
 import time
 
@@ -89,8 +89,6 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
 
-WHITELISTED_ROOT_DIRS = (".hermes",)
-WHITELISTED_ROOT_DIRS_CASEFOLD = frozenset(d.casefold() for d in WHITELISTED_ROOT_DIRS)
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 OUTPUTS_DIR = "Outputs"
 TMP_DIR = ".tmp"
@@ -348,15 +346,11 @@ def check_root_session_format(root, violations, dirs_entries=None):
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        # SCR-042 M1: .hermes whitelist compares case-insensitively on
-        # Windows (mirrors report.py _case_eq; .HERMES == .hermes there).
-        whitelisted = (
-            entry.name.casefold() in WHITELISTED_ROOT_DIRS_CASEFOLD
-            if os.name == "nt"
-            else entry.name in WHITELISTED_ROOT_DIRS
-        )
-        if whitelisted:
-            continue
+        # SCR-043 R5: the .hermes root-dir whitelist is removed -- after
+        # the quarantine relocation to the dir-whip home no .hermes/
+        # directory should exist in the workspace; a leftover one is a
+        # non-session violation like any other (_dir_exempt is the
+        # allowlist dirs channel, untouched).
         if _dir_exempt(entry.name, dirs_entries):
             continue  # allowlist dirs subtree (v2.7 R9)
         if not is_session_name(entry.name):
@@ -468,31 +462,16 @@ def is_old(path, days):
     return age >= days * 86400
 
 
-def cleanup_tmp(root, days, delete, echo=True):
-    """Find expired session .tmp/ entries; delete them when delete=True.
+def cleanup_tmp(root, days):
+    """Read-only inventory of expired session .tmp/ entries (SCR-043 R6).
 
-    Returns (items, failures). Deletion is limited to the contents of
-    session .tmp/ directories: Outputs/, session files outside .tmp/,
-    workspace root files and the .tmp/ directory itself are never
-    touched. `echo=False` suppresses the per-item stdout lines (SCR-042
-    M2: gate+json stdout stays all-JSON); the per-item failure stderr
-    lines are always written.
+    Returns the sorted entry paths that have not been modified for
+    `days` days or longer (find_tmp_entries + is_old filter). The
+    plugin never deletes: cleanup decisions belong to the agent; the
+    interactive audit lists the result as a proposal and gate mode
+    outputs no expired list.
     """
-    items = [p for p in find_tmp_entries(root) if is_old(p, days)]
-    failures = 0
-    if delete:
-        for path in items:
-            try:
-                if os.path.isdir(path) and not os.path.islink(path):
-                    shutil.rmtree(path)
-                else:
-                    os.remove(path)
-                if echo:
-                    sys.stdout.write(to_fwd(path) + "\n")
-            except OSError as exc:
-                failures += 1
-                sys.stderr.write("error: could not delete %s: %s\n" % (to_fwd(path), exc))
-    return items, failures
+    return [p for p in find_tmp_entries(root) if is_old(p, days)]
 
 
 def print_plain(violations):
@@ -533,7 +512,7 @@ def main(argv=None):
     parser.add_argument(
         "--gate",
         action="store_true",
-        help="Cron mode: auto-clean expired .tmp entries and append the wakeAgent JSON line.",
+        help="Cron mode: audit-only run (zero deletion) and append the wakeAgent JSON line.",
     )
     parser.add_argument(
         "--days",
@@ -561,15 +540,16 @@ def main(argv=None):
     else:
         root = workspace_resolver.resolve_working_dir_root(hh=hh)
         if root is None and args.gate:
-            # SCR-042 H1: gate mode never deletes on an unresolved root --
-            # the fail-open CWD fallback would delete whatever the injected
-            # environment happens to point at. Upgrades the resolution
-            # failure to a gate failure (exit 2, zero stdout, no wakeAgent).
-            # Checked BEFORE the enablement precheck: the exit-2 path stays
-            # output-clean on stdout. Interactive fail-open is unchanged.
+            # SCR-042 H1, reframed by SCR-043 R6 as cron failure
+            # visibility: gate mode never falls back to the fail-open
+            # CWD -- an unresolved Working Directory is a gate failure
+            # (exit 2, zero stdout, no wakeAgent line) so cron surfaces
+            # the broken environment instead of auditing the wrong
+            # directory. Checked BEFORE the enablement precheck: the
+            # exit-2 path stays output-clean on stdout.
             sys.stderr.write(
-                "error: Working Directory unresolved; --gate refuses to fall "
-                "back to the current directory (no deletion without a resolved root)\n"
+                "error: Working Directory unresolved; --gate refuses to "
+                "fall back to the current directory\n"
             )
             return 2
         if root is None:
@@ -591,35 +571,25 @@ def main(argv=None):
     else:
         print_plain(violations)
 
-    # SCR-042 M2: gate+json keeps stdout machine-parseable -- the per-item
-    # removal lines and the plain "Removed N item(s)" report are suppressed
-    # (stdout = violations array line + wakeAgent line); the failure report
-    # stays on stderr in every mode.
-    json_quiet = args.gate and args.json
-    items, failures = cleanup_tmp(root, args.days, delete=args.gate, echo=not json_quiet)
-    removed = len(items) - failures
-    if args.gate and items:
-        if failures:
-            sys.stderr.write(
-                "error: %d item(s) could not be removed from .tmp directories\n" % failures
-            )
-        if not json_quiet:
-            sys.stdout.write("Removed %d item(s) from .tmp directories.\n" % removed)
-    elif items and not args.json:
-        sys.stdout.write("Tmp cleanup proposal (cron mode auto-cleans):\n")
+    # SCR-043 R6: read-only inventory -- the expired entries are listed
+    # as a proposal in interactive plain mode only (gate outputs no
+    # expired list; --json keeps stdout schema-clean). Nothing is ever
+    # deleted; --days serves the inventory threshold.
+    items = cleanup_tmp(root, args.days)
+    if items and not args.gate and not args.json:
+        sys.stdout.write(
+            "Expired .tmp entries (proposal only; cleanup needs your confirmation):\n"
+        )
         for path in items:
             sys.stdout.write(to_fwd(path) + "\n")
         sys.stdout.write("Proposed %d item(s) for .tmp cleanup.\n" % len(items))
 
     if args.gate:
-        # SCR-042 M2+N8: four keys always present (json and non-json alike);
-        # "failed" makes partial cleanup failures visible to cron while the
-        # exit code stays violations-driven (backward-compatible add-only).
+        # SCR-043 R6: exactly two keys (removed/failed are gone with
+        # auto-delete); the exit code stays violations-driven.
         payload = {
             "wakeAgent": bool(violations),
             "violations": len(violations),
-            "removed": removed,
-            "failed": failures,
         }
         sys.stdout.write(json.dumps(payload) + "\n")
 

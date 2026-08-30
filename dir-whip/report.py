@@ -25,6 +25,7 @@ try:
         _effective_root,
         _get_hermes_home,
         _paths_equal,
+        _profile_home,
         _profile_terminal_cwd,
         load_guard_config,
         parse_terminal_cwd,
@@ -35,6 +36,7 @@ except ImportError:
         _effective_root,
         _get_hermes_home,
         _paths_equal,
+        _profile_home,
         _profile_terminal_cwd,
         load_guard_config,
         parse_terminal_cwd,
@@ -640,13 +642,19 @@ def _handle_remove(rest):
 def _handle_list(rest):
     """/dir-whip list (v2.7 R6): the same two-section numbered format as
     remove (numbers align so a listed number can be copied directly),
-    plus the ignored-legacy hint when a flat value was ignored."""
+    plus the ignored-legacy hint when a flat value was ignored. SCR-043
+    R5: appends the current audit-quarantine path line (discoverability
+    after the relocation out of the workspace root)."""
     if (rest or "").strip():
         return "Usage: /dir-whip [allow|remove|list]"
     state_map, legacy = _load_allowlist_state()
     out = _render_two_sections(state_map["files"], state_map["dirs"])
     if legacy:
         out += "\n[!] ignored legacy entries: %d -- re-add via /dir-whip allow" % legacy
+    home = _get_hermes_home()
+    if state.session.session_profile:
+        home = _profile_home(home, state.session.session_profile)
+    out += "\nQuarantine: %s" % (home / "dir-whip" / "audit-quarantine")
     return out
 
 
