@@ -216,19 +216,12 @@ def guard(tool_name, args, task_id=None, **kwargs):
         return None
 
     for target in target_paths:
-        abs_target = _resolve_target(target, task_id, working_dir_root)
-        normalized = normalize_target(abs_target, working_dir_root)
-        verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
-        if verdict["outcome"] == "block":
-            emit(
-                "block", tool_name, verdict["rule_key"], normalized,
-                "write blocked by guard rule", session_id, is_subagent,
-            )
-            return {"action": "block", "message": verdict["message"]}
-        emit(
-            verdict["outcome"], tool_name, verdict["rule_key"], normalized,
-            _verdict_reason(verdict["outcome"]), session_id, is_subagent,
+        act = _evaluate_target(
+            target, tool_name, working_dir_root, allowlist, is_subagent,
+            session_id, is_terminal=False, task_id=task_id,
         )
+        if act:
+            return act
     return None
 
 
@@ -522,6 +515,56 @@ def _resolve_terminal_target(target, base):
     return os.path.join(base, target)
 
 
+def _evaluate_target(target, tool_name, working_dir_root, allowlist,
+                     is_subagent, session_id, is_terminal,
+                     task_id=None, base=None, rule_key=None):
+    """Evaluate one write target through the shared chain (spec 5.3
+    step 4-6; SCR-044 R2 convergence).
+
+    Shared shape: resolve -> normalize -> classify -> emit -> block.
+    is_terminal carries the only two loop differences (guard write loop
+    vs terminal block-target loop):
+
+    - is_terminal=True (terminal): device paths are exempt BEFORE
+      normalization (4.3) and emit uses the EXTRACTED rule_key
+      (terminal-touch / terminal-redirect / terminal-cp-mv, passed via
+      rule_key); resolution goes through the terminal base.
+    - is_terminal=False (write_file / patch): emit uses the classify
+      rule_key (root-file / non-session-dir / session-dir /
+      runtime-allowlist / external-write); resolution goes through the
+      session CWD chain.
+
+    Returns the block dict on block, else None; caller loops keep
+    first-block-wins ordering.
+    """
+    if is_terminal:
+        # 4.3 device paths are exempt BEFORE normalization: no
+        # verdict/stats event, no drive-inherited path fabrication.
+        if target in _DEVICE_PATHS:
+            return None
+        abs_target = _resolve_terminal_target(target, base)
+    else:
+        abs_target = _resolve_target(target, task_id, working_dir_root)
+    normalized = normalize_target(abs_target, working_dir_root)
+    verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
+    emit_rule_key = rule_key if is_terminal else verdict["rule_key"]
+    if verdict["outcome"] == "block":
+        reason = (
+            "terminal write target blocked" if is_terminal
+            else "write blocked by guard rule"
+        )
+        emit(
+            "block", tool_name, emit_rule_key, normalized, reason,
+            session_id, is_subagent,
+        )
+        return {"action": "block", "message": verdict["message"]}
+    emit(
+        verdict["outcome"], tool_name, emit_rule_key, normalized,
+        _verdict_reason(verdict["outcome"]), session_id, is_subagent,
+    )
+    return None
+
+
 def _guard_terminal(args, task_id, working_dir_root, allowlist,
                     is_subagent=False, session_id=None):
     """Terminal write interception (spec 5.10 coarse tiers, v2.6 B2).
@@ -558,23 +601,13 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             return None
 
         for target, rule_key in _terminal_block_targets(tokens):
-            # 4.3 device paths are exempt BEFORE normalization: no
-            # verdict/stats event, no drive-inherited path fabrication.
-            if target in _DEVICE_PATHS:
-                continue
-            abs_target = _resolve_terminal_target(target, base)
-            normalized = normalize_target(abs_target, working_dir_root)
-            verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
-            if verdict["outcome"] == "block":
-                emit(
-                    "block", "terminal", rule_key, normalized,
-                    "terminal write target blocked", session_id, is_subagent,
-                )
-                return {"action": "block", "message": verdict["message"]}
-            emit(
-                verdict["outcome"], "terminal", rule_key, normalized,
-                _verdict_reason(verdict["outcome"]), session_id, is_subagent,
+            act = _evaluate_target(
+                target, "terminal", working_dir_root, allowlist,
+                is_subagent, session_id, is_terminal=True, base=base,
+                rule_key=rule_key,
             )
+            if act:
+                return act
 
         if _terminal_uncertain(tokens):
             emit(
