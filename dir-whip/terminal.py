@@ -1,7 +1,8 @@
 """Terminal lexer and coarse tiering (spec 5.10) — pure functions.
 
 Tokenizes shell commands and extracts block-tier write targets
-(redirect / touch / cp-mv) and uncertain write-intent signals. Pure
+(redirect / touch / cp-mv / mkdir / downloads) and uncertain write-intent
+signals. Pure
 functions only: no host imports, no state (SCR-035 core module
 discipline, ADR-0007). Extracted from dir_whip.py (task 31.5).
 """
@@ -211,8 +212,7 @@ def _flag_value(*flags):
     """Shape factory: the literal value following one of `flags`.
 
     Exact flag-token match only (combined short flags and equals-attached
-    forms never match). Infrastructure for R4 (curl -o / wget -O); no R1
-    command registers this shape yet.
+    forms never match). Registered for curl -o / wget -O (SCR-044 R4).
     """
     wanted = frozenset(flags)
 
@@ -238,13 +238,19 @@ def _flag_value(*flags):
     return extract
 
 
-# Block-tier command specs (5.10): command -> (shape, rule_key). R1
-# carries the three current commands only; R4 registers mkdir / curl /
-# wget (terminal-mkdir / terminal-download).
+# Block-tier command specs (5.10): command -> (shape, rule_key). SCR-044
+# R4 registered mkdir / curl / wget (terminal-mkdir / terminal-download);
+# their extracted targets classify through the same T0-T4 chain as the
+# write tools. Non-literal targets are never extracted and fall to the
+# uncertain tier; _UNCERTAIN_COMMANDS stays untouched (curl / wget keep
+# their blanket uncertain signal for non-extracted forms).
 _WRITE_SPECS = {
     "touch": (_all_literal_args, "terminal-touch"),
     "cp": (_last_literal_arg, "terminal-cp-mv"),
     "mv": (_last_literal_arg, "terminal-cp-mv"),
+    "mkdir": (_all_literal_args, "terminal-mkdir"),
+    "curl": (_flag_value("-o", "--output"), "terminal-download"),
+    "wget": (_flag_value("-O", "--output-document"), "terminal-download"),
 }
 
 
