@@ -1,11 +1,12 @@
 """All mutable plugin runtime state in three cohesive containers (SCR-035).
 
 Session state (registration context, session root/profile, fail-open latch,
-emit switch, injected host callable, child-session set), audit state
-(pre-snapshots, pending violations, parent links, cap flag), stats state
-(lock, counters, session fields). Locks travel with their group; cross-group
-invariants share one lock. Anti-degradation rule: containers only - never
-re-export the individual fields as module-level names (ADR-0005).
+emit switch, injected host callable, child-session set, parent links,
+top-session fallback), audit state (pre-snapshots, pending violations,
+cap flag), stats state (lock, counters, session fields). Locks travel with
+their group; cross-group invariants share one lock. Anti-degradation rule:
+containers only - never re-export the individual fields as module-level
+names (ADR-0005).
 """
 import threading
 
@@ -32,6 +33,11 @@ class _SessionState:
         self.log_handler_installed = False  # SCR-040 R5: dir-whip.log attach 幂等标志（logsetup.setup）
         self.confirmation_issued = set()  # SCR-041 R3: allow_path 两步确认已签发集合（会话内存，受 self.lock 保护）
         self.child_session_ids = set()   # 受 self.lock 保护
+        # SCR-044 R3: session-topology pair, moved in from the audit
+        # container (historical misplacement) -- same container and lock
+        # discipline as child_session_ids above.
+        self.session_parents = {}        # child_session_id -> parent_session_id (self.lock)
+        self.top_session = None          # latest top-level session (child-inheritance fallback)
         # P6 precomputed plugin paths/version (31.13): filled once at
         # register(); None until then (direct-call fallbacks keep the
         # __file__-based derivation).
@@ -43,14 +49,12 @@ class _SessionState:
 
 class _AuditState:
     def __init__(self):
-        self.lock = threading.Lock()     # 与 top_session 共锁（跨全局不变量）
+        self.lock = threading.Lock()     # 组锁：pending / pre_snapshots 不变量（跨全局不变量）
         self.reset()
 
     def reset(self):
         self.pre_snapshots = {}          # key=(session_id, task_id)
         self.pending = {}                # owner-session -> {normpath: {...}}
-        self.session_parents = {}
-        self.top_session = None          # 与 pending 同锁（修复现状双锁竞态）
         self.cap_warned = False
         self.nudge_counts = {}           # SCR-040 R2: 续推兜底会话累计计数（owner session_id 键控，cap=3）
 

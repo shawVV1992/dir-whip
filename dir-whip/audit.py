@@ -52,9 +52,17 @@ except ImportError:
     )
 
 try:
-    from .sessions import _is_child_session, _record_top_session
+    from .sessions import (
+        _is_child_session,
+        _record_top_session,
+        owner_session,
+    )
 except ImportError:
-    from sessions import _is_child_session, _record_top_session
+    from sessions import (
+        _is_child_session,
+        _record_top_session,
+        owner_session,
+    )
 
 logger = logging.getLogger("dir-whip")
 
@@ -162,18 +170,15 @@ def _audit_now():
 
 
 def _audit_owner_session(session_id):
-    """Resolve the pending-set owner for a session (5.18 session scoping).
+    """Thin delegate to sessions.owner_session (SCR-044 R3).
 
-    Child sessions (child_session_ids gate, 5.4) write into the PARENT's
-    pending set: the explicit parent link recorded by subagent_start wins;
-    otherwise the most recent top-level session (the parent in the common
-    sequential layout). Returns None when unknown -- callers fall back to
-    the session id itself.
+    Owner resolution moved next to the session topology it reads
+    (state.session: session_parents / top_session); this same-name private
+    delegate keeps every pending read/write call site here unchanged.
+    Semantics identical: explicit parent > top_session fallback; None when
+    unknown -- callers fall back to the session id itself.
     """
-    if session_id and _is_child_session(session_id):
-        with state.audit.lock:
-            return state.audit.session_parents.get(session_id) or state.audit.top_session
-    return session_id
+    return owner_session(session_id)
 
 
 def audit_pending_snapshot(session_id=None):
@@ -880,9 +885,10 @@ def _audit_session_start(session_id):
             # SCR-040 R2: the nudge cap counter resets at session start
             # (same place session-start clears pending).
             state.audit.nudge_counts.pop(session_id, None)
-            # Lock strengthening (31.13, Controller addition #4): the
-            # top_session / cap_warned writes share the pending lock per
-            # the state.py skeleton intent.
+            # Lock note (31.13, Controller addition #4): cap_warned stays
+            # under the pending lock; SCR-044 R3 moved top_session to
+            # state.session (plain write via _record_top_session, as
+            # before).
             _record_top_session(session_id)
             state.audit.cap_warned = False
     except Exception as exc:

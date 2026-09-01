@@ -3,9 +3,12 @@
 Tracks subagent (child) sessions so on_session_start skips them and
 verdicts split as subagent, opens/closes the child stats session context,
 and records the audit parent links (child -> parent pending-set
-inheritance, plus the top-level-session fallback). All state lives in
-state.session / state.audit. No host imports (SCR-035 core module
-discipline, ADR-0007). Extracted from dir_whip.py (task 31.11).
+inheritance, plus the top-level-session fallback). Owns the session
+topology group in state.session (child_session_ids / session_parents /
+top_session, SCR-044 R3) and resolves the pending-set owner via the
+public owner_session (promoted from audit._audit_owner_session). No host
+imports (SCR-035 core module discipline, ADR-0007). Extracted from
+dir_whip.py (task 31.11).
 """
 
 import json
@@ -43,9 +46,9 @@ def _is_child_session(session_id):
 def _audit_register_child(child_session_id, parent_session_id):
     """Record a child session's parent link (pending-set inheritance)."""
     try:
-        with state.audit.lock:
-            state.audit.session_parents[child_session_id] = (
-                parent_session_id or state.audit.top_session
+        with state.session.lock:
+            state.session.session_parents[child_session_id] = (
+                parent_session_id or state.session.top_session
             )
     except Exception as exc:
         logger.debug("dir-whip: audit register child error: %s", exc)
@@ -54,15 +57,35 @@ def _audit_register_child(child_session_id, parent_session_id):
 def _audit_unregister_child(child_session_id):
     """Drop a child session's parent link when the subagent stops."""
     try:
-        with state.audit.lock:
-            state.audit.session_parents.pop(child_session_id, None)
+        with state.session.lock:
+            state.session.session_parents.pop(child_session_id, None)
     except Exception as exc:
         logger.debug("dir-whip: audit unregister child error: %s", exc)
 
 
 def _record_top_session(session_id):
     """Record the current top-level session (child-inheritance fallback)."""
-    state.audit.top_session = session_id
+    state.session.top_session = session_id
+
+
+def owner_session(session_id):
+    """Resolve the pending-set owner for a session (5.18 session scoping).
+
+    Child sessions (child_session_ids gate, 5.4) write into the PARENT's
+    pending set: the explicit parent link recorded by subagent_start wins;
+    otherwise the most recent top-level session (the parent in the common
+    sequential layout). Returns None when unknown -- callers fall back to
+    the session id itself. SCR-044 R3: promoted from
+    audit._audit_owner_session -- owner resolution reads the session
+    topology, so it lives with it.
+    """
+    if session_id and _is_child_session(session_id):
+        with state.session.lock:
+            return (
+                state.session.session_parents.get(session_id)
+                or state.session.top_session
+            )
+    return session_id
 
 
 def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
@@ -149,4 +172,4 @@ register_child = _audit_register_child
 subagent_start = on_subagent_start
 subagent_stop = on_subagent_stop
 
-__all__ = ["is_child", "register_child", "subagent_start", "subagent_stop"]
+__all__ = ["is_child", "owner_session", "register_child", "subagent_start", "subagent_stop"]
