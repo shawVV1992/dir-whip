@@ -15,7 +15,7 @@
 会话目录——并以三层保障强制执行：捆绑技能教导纪律、插件以 9 个钩子在落地前
 拦截违规、审计层捕获漏网之鱼。
 
-注意：dir-whip 权限范围仅限于工作目录（Initial Project Directory），工作目录之外的写入不受管控，新建的项目目录不受管控。
+注意：dir-whip 仅管控工作目录（Initial Project Directory）。工作目录之外的写入放行并记日志（`external-write`）；活跃 Hermes 项目覆盖 agent CWD 时仅跳过会话开始提醒，工作目录内的拦截照常生效。
 
 [核心能力](#核心能力) ·
 [安装与快速上手](#安装与快速上手) · [工作原理](#工作原理) ·
@@ -26,7 +26,7 @@
 
 1. **教罚结合：** skill 教纪律、plugin 强制执行，默认工作区管理纪律有效稳定，文件管理不再混乱。
 2. **双层检测+兜底工具：** 在插件中，前置层在落地前拦截白名单与会话目录之外的写入（含根级文件与非会话子目录）并附修正指引；审计层对放行的终端命令做快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
-3. **可观测：** 定义 7 类 `dir-whip:*` 事件保存至 stats.jsonl（5 MB 滚动），可观测溯源。
+3. **可观测：** 7 类 `dir-whip:*` 事件发总线；每次判定落一行 stats.jsonl（5 MB 滚动），可观测溯源。
 4. **定时治理：** 针对 cron 任务采用纯审计 + 两态唤醒（`{"wakeAgent": bool, "violations": N}`），全插件零自动删除；静默 tick 不打断执行，有违规才唤醒 agent 清偿。
 5. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
 6. **项目模式感知：** 当活跃 Hermes 项目包含 agent CWD 时，会话开始提醒整体跳过（`skipped-project`）。
@@ -88,7 +88,7 @@ hermes plugins disable dir-whip
 
 - **教罚分离** —— skill 与 plugin 零运行时耦合，只共享同一份配置与同一套
   判定规则。
-- **允许误放、绝不误拦** —— 前置层fail-open策略，审计层可靠兜底。
+- **允许误放、绝不误拦** —— 前置层刻意宽容（宁可误放），审计层可靠兜底。
 - **观察事实，而非推断意图** —— 审计层 diff 实际落盘的文件，而非解析
   命令字符串。
 
@@ -115,7 +115,7 @@ hermes plugins disable dir-whip
 
 - 命名 `YYYYMMDD_HHMMSS_TaskName/`，时间戳必须真实（插件校验）。
 - 懒创建：首次文件写入时才建，不产出文件的对话不建目录。
-- 根目录只允许两样东西：白名单 `files` 条目、会话格式目录。（审计隔离区已迁至
+- 根目录只允许三样东西：白名单 `files` 条目、`dirs` 条目的顶层目录、会话格式目录。（审计隔离区已迁至
   dir-whip home：`<profile home>/dir-whip/audit-quarantine/`。）
 
 ### 执行策略
@@ -167,7 +167,7 @@ hermes plugins disable dir-whip
 
 > **注意事项**
 >
-> - 闩锁期间*所有*写入类调用均被冻结——含 `rm` 与代理发起的配置编辑，会话内无法自行解除。
+> - 闩锁期间*所有*写入类调用均被冻结——含 `rm` 与代理发起的配置编辑；会话内除清偿外无任何解除旁路（`dir_whip_settle` / 移入会话目录 / 用户 allow / 带外移除）。
 > - 运行时豁免**不清偿**已记录违规；闩锁仅限当前会话，文件离开根目录即恢复放行。
 
 ## 命令
@@ -177,7 +177,7 @@ hermes plugins disable dir-whip
 | 命令 | 作用 | 示例 | 说明 |
 | ---- | ---- | ---- | ---- |
 | `/dir-whip` | 输出合并报告（字段见「报告字段」） | `/dir-whip` | |
-| `/dir-whip list` | 查看当前白名单（两段式编号列表） | `/dir-whip list` | Files 段在前、Dirs 段在后，共用一段连续编号（allow / remove 的编号即此编号） |
+| `/dir-whip list` | 查看当前白名单（两段式编号列表） | `/dir-whip list` | Files 段在前、Dirs 段在后，共用一段连续编号（allow / remove 的编号即此编号）；末行为 `Quarantine:` 隔离区路径 |
 | `/dir-whip allow` | 枚举白名单候选条目（两段式编号列表 + Add 提示） | `/dir-whip allow` | 编号规则同 `list` |
 | `/dir-whip allow <编号\|名称\|路径>` | 向白名单登记条目，逗号批量；现存路径按磁盘判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议 | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | 路径接受相对或绝对输入，根外/根自身输入被引导拒绝；`--create` 按输入形态创建产物：末尾斜杠或嵌套路径→目录，裸文件名→根级文件 |
 | `/dir-whip remove` | 枚举白名单当前条目（两段式编号列表 + Remove 提示） | `/dir-whip remove` | 编号规则同 `list` |
@@ -249,7 +249,7 @@ Allowlist:
   Files: README.md
   Dirs: projects/foo
 Stats File: C:/Users/me/AppData/Local/hermes/dir-whip/stats.jsonl
-Debug Log: C:/Users/me/AppData/Local/hermes/dir-whip/dir-whip/dir-whip.log
+Debug Log: C:/Users/me/AppData/Local/hermes/dir-whip/dir-whip.log
 Health: Good
 ```
 
@@ -340,10 +340,10 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 | `is_subagent` | 子代理标记 | 统计按父/子代理切分 |
 | `started_at` | 会话开始时间 | 会话上下文的一部分 |
 | `ts` | 事件时间戳 | ISO 格式，判定发生时刻 |
-| `outcome` | 判定结果 | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block` 等 |
+| `outcome` | 判定结果 | `block` / `allow` / `external-write` / `fail-open` 等 |
 | `reason` | 结果原因 | 短语说明，如根外写入记 `target outside working_dir_root` |
 | `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `allow-path` 等 |
-| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `allow-path-external-rejected` |
+| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
 
 全文件不含文件内容、绝对路径或提示词文本。可观察入口：

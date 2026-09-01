@@ -16,9 +16,10 @@ layers: a bundled skill teaches the discipline, the plugin blocks violations
 before they land with 9 hooks, and the audit layer catches what slips
 through.
 
-**Note:** dir-whip only applies to the Working Directory (Initial Project
-Directory). Writes outside the Working Directory and newly created project
-directories are not subject to enforcement.
+**Note:** dir-whip enforces the Working Directory (Initial Project
+Directory) only. Writes outside it are allowed + logged (`external-write`);
+when an active Hermes project covers the agent CWD, only the session-start
+reminder is skipped — in-Working-Directory interception still applies.
 
 [Core Capabilities](#core-capabilities) ·
 [Installation & Quick Start](#installation--quick-start) ·
@@ -36,8 +37,8 @@ directories are not subject to enforcement.
    message; the audit layer snapshot-diffs allowed terminal commands to
    catch what slips past — with same-turn self-heal (`dir_whip_settle`)
    and a dir-whip continuation nudge.
-3. **Observable.** 7 `dir-whip:*` events recorded to stats.jsonl
-   (5 MB rollover) for audit and diagnostics.
+3. **Observable.** 7 `dir-whip:*` bus events, plus one stats.jsonl line
+   per verdict (5 MB rollover), for audit and diagnostics.
 4. **Scheduled governance.** Pure audit + two-state wake
    (`{"wakeAgent": bool, "violations": N}`) for cron tasks — zero
    auto-delete anywhere; a silent tick never interrupts, violations wake
@@ -134,8 +135,9 @@ the Working Directory root:
   validates it).
 - Created lazily at the first file write — conversations that produce no
   files create no directory.
-- The root allows exactly two things: allowlist `files` entries and
-  session-format directories. (The audit quarantine lives in the
+- The root allows exactly three things: allowlist `files` entries, the
+  top-level directories behind `dirs` entries, and session-format
+  directories. (The audit quarantine lives in the
   dir-whip home: `<profile home>/dir-whip/audit-quarantine/`.)
 
 ### Enforcement
@@ -204,7 +206,9 @@ terminal commands actually landed:
 > **Notes**
 >
 > - While latched, *every* write-class call is frozen — incl. `rm` and
->   agent-driven config edits; the latch cannot be cleared in-session.
+>   agent-driven config edits; nothing but remediation clears it in-session
+>   (`dir_whip_settle` / move into a Session Directory / user allow /
+>   out-of-band removal).
 > - A runtime exemption does **not** clear a recorded violation; the latch
 >   is session-scoped — once the file leaves the root, writes pass again.
 
@@ -215,7 +219,7 @@ terminal commands actually landed:
 | Command | Action | Example | Notes |
 | ------- | ------ | ------- | ----- |
 | `/dir-whip` | Print the merged report (fields under "Report Fields") | `/dir-whip` | |
-| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` | Files section first, Dirs second, one continuous numbering (the numbers used by allow / remove) |
+| `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` | Files section first, Dirs second, one continuous numbering (the numbers used by allow / remove); ends with a `Quarantine:` line (the audit-quarantine path) |
 | `/dir-whip allow` | Enumerate allowlist candidates (two-section numbered listing + Add hint) | `/dir-whip allow` | numbering same as `list` |
 | `/dir-whip allow <number\|name\|path>` | Register entries into the allowlist, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | paths accept relative or absolute input; outside-root / root-itself inputs are rejected with guidance; `--create` decides the artifact by form: trailing slash or nested path → directory, bare name → root-level file |
 | `/dir-whip remove` | Enumerate the allowlist's current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` | numbering same as `list` |
@@ -288,7 +292,7 @@ Allowlist:
   Files: README.md
   Dirs: projects/foo
 Stats File: C:/Users/me/AppData/Local/hermes/dir-whip/stats.jsonl
-Debug Log: C:/Users/me/AppData/Local/hermes/dir-whip/dir-whip/dir-whip.log
+Debug Log: C:/Users/me/AppData/Local/hermes/dir-whip/dir-whip.log
 Health: Good
 ```
 
@@ -399,10 +403,10 @@ Each line carries two groups of fields:
 | `is_subagent` | Subagent flag | Stats are split parent/subagent |
 | `started_at` | Session start time | Part of the session context |
 | `ts` | Event timestamp | ISO format, moment of the verdict |
-| `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `write-audit-violation` / `write-audit-gate-block`, etc. |
+| `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `fail-open`, etc. |
 | `reason` | Outcome reason | Short phrase, e.g. `target outside working_dir_root` for out-of-root writes |
 | `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `allow-path`, etc. |
-| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `allow-path-external-rejected` |
+| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
 
 The file never contains file contents, absolute paths, or prompt text.
