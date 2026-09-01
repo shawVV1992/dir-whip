@@ -64,6 +64,14 @@ except ImportError:
         owner_session,
     )
 
+# SCR-044 R5 (spec 5.19): the script-vector binding observer lives in
+# session_dirs; the audit -> session_dirs direction is sanctioned (the
+# reverse import would be a cycle and does not exist).
+try:
+    from . import session_dirs
+except ImportError:
+    import session_dirs
+
 logger = logging.getLogger("dir-whip")
 
 # Classification chain, injected by the assembly layer (register() now;
@@ -539,6 +547,14 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
         if after is None:
             return
         diff = diff_snapshots(before, after)
+        # SCR-044 R5 (spec 5.19): script-vector creation observer.
+        # Fires only when a pending_create marker exists; binds the
+        # FIRST new compliant session dir under the root and ALWAYS
+        # consumes the marker (a failed script leaves no ghost slot).
+        if state.session_dirs.pending_create:
+            session_dirs.observe_added(
+                working_dir_root, session_id, diff.get("added", []),
+            )
         classified = audit_classify_diff(
             diff, before, after, working_dir_root, list(allowlist), is_subagent,
         )

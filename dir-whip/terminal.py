@@ -366,6 +366,41 @@ def is_session_dir_script(tokens):
     return False
 
 
+def terminal_cp_mv_src(tokens, dst):
+    """Pure helper (SCR-044 R5 form b, spec 5.19): the literal source
+    token of the mv/cp command segment whose destination is `dst`.
+
+    Scans chain segments; a segment qualifies when its command token is
+    mv/cp and its LAST literal arg (the _last_literal_arg destination
+    shape, same filtering as target extraction: operator tokens, flags,
+    redirect target slots and non-literal residues skipped) equals `dst`
+    exactly. Returns the literal arg immediately before that
+    destination, or None. The guard's session-dir creation gate
+    consults this to distinguish a rename OF the bound directory (claim
+    transfer, MV-1) from a second creation via mv (BLK-5).
+    """
+    for seg in _chain_segments(tokens):
+        if len(seg) < 3 or seg[0] not in ("mv", "cp"):
+            continue
+        redirect_idx = {
+            i + 1
+            for i, tok in enumerate(seg)
+            if tok in _REDIRECT_TOKENS and i + 1 < len(seg)
+        }
+        literals = [
+            tok
+            for i, tok in enumerate(seg)
+            if i
+            and tok not in _OPERATOR_TOKENS
+            and i not in redirect_idx
+            and not tok.startswith("-")
+            and not _NON_LITERAL_RE.search(tok)
+        ]
+        if len(literals) >= 2 and literals[-1] == dst:
+            return literals[-2]
+    return None
+
+
 # Public thin aliases (SCR-035 interface convergence point).
 tokenize_command = _tokenize_command
 terminal_block_targets = _terminal_block_targets
@@ -376,4 +411,5 @@ __all__ = [
     "terminal_block_targets",
     "terminal_uncertain",
     "is_session_dir_script",
+    "terminal_cp_mv_src",
 ]

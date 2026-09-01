@@ -56,6 +56,11 @@ except ImportError:
     from paths import is_absolute_any, normalize_target, within_working_dir
 
 try:
+    from . import session_dirs
+except ImportError:
+    import session_dirs
+
+try:
     from .sessions import _is_child_session
 except ImportError:
     from sessions import _is_child_session
@@ -517,22 +522,30 @@ def _resolve_terminal_target(target, base):
 
 def _evaluate_target(target, tool_name, working_dir_root, allowlist,
                      is_subagent, session_id, is_terminal,
-                     task_id=None, base=None, rule_key=None):
+                     task_id=None, base=None, rule_key=None, tokens=None):
     """Evaluate one write target through the shared chain (spec 5.3
     step 4-6; SCR-044 R2 convergence).
 
-    Shared shape: resolve -> normalize -> classify -> emit -> block.
-    is_terminal carries the only two loop differences (guard write loop
-    vs terminal block-target loop):
+    Shared shape: resolve -> normalize -> classify -> session-dir gate
+    -> emit -> block. is_terminal carries the only two loop differences
+    (guard write loop vs terminal block-target loop):
 
     - is_terminal=True (terminal): device paths are exempt BEFORE
       normalization (4.3) and emit uses the EXTRACTED rule_key
       (terminal-touch / terminal-redirect / terminal-cp-mv, passed via
-      rule_key); resolution goes through the terminal base.
+      rule_key); resolution goes through the terminal base; the raw
+      command tokens ride along for the session-dir mv-source lookup.
     - is_terminal=False (write_file / patch): emit uses the classify
       rule_key (root-file / non-session-dir / session-dir /
       runtime-allowlist / external-write); resolution goes through the
       session CWD chain.
+
+    SCR-044 R5 (spec 5.19): the SINGLE session-dir-limit enforcement
+    point sits between classify and emit -- session_dirs.guard_create
+    is a no-op for every non-session-dir rule_key (T1/T2 exempt by
+    structure), binds a first creation, transfers an mv rename of the
+    bound dir, or overrides the allow with a block dict (the block
+    event is emitted inside the gate).
 
     Returns the block dict on block, else None; caller loops keep
     first-block-wins ordering.
@@ -547,6 +560,12 @@ def _evaluate_target(target, tool_name, working_dir_root, allowlist,
         abs_target = _resolve_target(target, task_id, working_dir_root)
     normalized = normalize_target(abs_target, working_dir_root)
     verdict = classify_target(normalized, working_dir_root, allowlist, is_subagent)
+    limit_block = session_dirs.guard_create(
+        verdict, normalized, working_dir_root, session_id, is_subagent,
+        tool_name=tool_name, target=target, tokens=tokens,
+    )
+    if limit_block:
+        return limit_block
     emit_rule_key = rule_key if is_terminal else verdict["rule_key"]
     if verdict["outcome"] == "block":
         reason = (
@@ -592,6 +611,17 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             return None
         base = _terminal_base(args, task_id, working_dir_root)
 
+        # SCR-044 R5 (spec 5.19): session-dir script gate BEFORE the
+        # heredoc blanket demotion -- a second create_session_dir.py
+        # attempt is blocked even in heredoc form (BLK-3); a first
+        # attempt arms the pending_create marker that the audit
+        # post-diff observer consumes (OB-1/OB-2).
+        act = session_dirs.guard_script(
+            tokens, working_dir_root, session_id, is_subagent,
+        )
+        if act:
+            return act
+
         # 4.4 heredoc blanket demotion: never parse the body, never block.
         if "<<" in command:
             emit(
@@ -604,7 +634,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             act = _evaluate_target(
                 target, "terminal", working_dir_root, allowlist,
                 is_subagent, session_id, is_terminal=True, base=base,
-                rule_key=rule_key,
+                rule_key=rule_key, tokens=tokens,
             )
             if act:
                 return act

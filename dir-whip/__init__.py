@@ -38,7 +38,7 @@ except ImportError:
     _projects_get_active_id = None
 
 try:
-    from . import audit, config, events, logsetup, report, sessions, state, stats, verdict
+    from . import audit, config, events, logsetup, report, sessions, session_dirs, state, stats, verdict
 except ImportError:
     import audit
     import config
@@ -46,6 +46,7 @@ except ImportError:
     import logsetup
     import report
     import sessions
+    import session_dirs
     import state
     import stats
     import verdict
@@ -335,6 +336,10 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         # violations, leftover pre snapshots, cap warning); child sessions
         # skip and inherit the parent's latched state.
         audit._audit_session_start(session_id)
+        # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
+        # the session-dir claim + pending marker (child sessions returned
+        # above and inherit the parent's slot).
+        session_dirs.on_session_start(session_id)
         config.runtime_allowlist_clear()
         # SCR-041 R3: the confirmation-issued set follows the runtime
         # allowlist lifecycle -- cleared at every top-level session start.

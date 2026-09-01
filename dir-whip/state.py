@@ -1,12 +1,13 @@
-"""All mutable plugin runtime state in three cohesive containers (SCR-035).
+"""All mutable plugin runtime state in four cohesive containers (SCR-035).
 
 Session state (registration context, session root/profile, fail-open latch,
 emit switch, injected host callable, child-session set, parent links,
 top-session fallback), audit state (pre-snapshots, pending violations,
-cap flag), stats state (lock, counters, session fields). Locks travel with
-their group; cross-group invariants share one lock. Anti-degradation rule:
-containers only - never re-export the individual fields as module-level
-names (ADR-0005).
+cap flag), session-dir state (SCR-044 R5: per-session unique Session
+Directory claims + in-flight script-creation markers), stats state (lock,
+counters, session fields). Locks travel with their group; cross-group
+invariants share one lock. Anti-degradation rule: containers only - never
+re-export the individual fields as module-level names (ADR-0005).
 """
 import threading
 
@@ -59,6 +60,28 @@ class _AuditState:
         self.nudge_counts = {}           # SCR-040 R2: 续推兜底会话累计计数（owner session_id 键控，cap=3）
 
 
+class _SessionDirState:
+    """Per-session unique Session Directory slot (SCR-044 R5, spec 5.19).
+
+    claims maps owner_session -> bound dir name (root-relative first
+    segment, Windows-casefold compared); pending_create marks a script
+    creation in flight (owner_session -> True). Owner resolution goes
+    through sessions.owner_session (subagent -> parent attribution,
+    mirroring the audit pending propagation). Session-lifetime memory:
+    cleared at every top-level session start (CLR-1) and by reset_all
+    (CLR-2); a restart loses it (accepted, same class as the runtime
+    allowlist).
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        self.claims = {}          # owner_session -> dir name (root-relative first segment)
+        self.pending_create = {}  # owner_session -> True (script creation in flight)
+
+
 class _StatsState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -72,6 +95,7 @@ class _StatsState:
 
 session = _SessionState()
 audit = _AuditState()
+session_dirs = _SessionDirState()
 stats = _StatsState()
 
 
@@ -79,4 +103,5 @@ def reset_all():
     """Single test-cleanup entry point replacing ~10 hand-cleared globals."""
     session.reset()
     audit.reset()
+    session_dirs.reset()
     stats.reset()
