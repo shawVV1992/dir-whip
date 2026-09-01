@@ -29,6 +29,10 @@ _DEVICE_PATHS = frozenset(("/dev/null", "/dev/stdout", "/dev/stderr"))
 # is NOT a boundary. Newlines are emitted as "\n" marker tokens.
 _CHAIN_BOUNDARY_TOKENS = frozenset((";", "|", "&", "\n"))
 
+# SCR-044 R1 (5.19): inputs of the is_session_dir_script predicate.
+_SESSION_SCRIPT_INTERPRETERS = frozenset(("python", "python3", "py"))
+_SESSION_SCRIPT_NAME = "create_session_dir.py"
+
 
 def _tokenize_command(command):
     """Split a shell command into tokens (lightweight, POSIX-ish).
@@ -166,13 +170,92 @@ def _chain_segments(tokens):
     return segments
 
 
+# --- Command-target extraction shapes (SCR-044 R1, spec 5.10) -----------
+# Declarative shapes consumed by _WRITE_SPECS. Each shape is a pure
+# function (seg, redirect_idx) -> literal target tokens. All shapes share
+# the same filtering: operator tokens, flag tokens (leading "-"), redirect
+# target slots and non-literal ($ / `) tokens are never extracted -- the
+# non-literal residue falls to the uncertain tier instead.
+
+
+def _all_literal_args(seg, redirect_idx):
+    """Every literal arg after the command token (touch shape)."""
+    out = []
+    for i, tok in enumerate(seg):
+        if i == 0:
+            continue
+        if (
+            tok in _OPERATOR_TOKENS
+            or i in redirect_idx
+            or tok.startswith("-")
+            or _NON_LITERAL_RE.search(tok)
+        ):
+            continue
+        out.append(tok)
+    return out
+
+
+def _last_literal_arg(seg, redirect_idx):
+    """Last (rightmost) literal arg = destination (cp/mv shape)."""
+    for i in range(len(seg) - 1, -1, -1):
+        tok = seg[i]
+        if tok in _OPERATOR_TOKENS or i in redirect_idx or tok.startswith("-"):
+            continue
+        if not _NON_LITERAL_RE.search(tok):
+            return [tok]
+        break
+    return []
+
+
+def _flag_value(*flags):
+    """Shape factory: the literal value following one of `flags`.
+
+    Exact flag-token match only (combined short flags and equals-attached
+    forms never match). Infrastructure for R4 (curl -o / wget -O); no R1
+    command registers this shape yet.
+    """
+    wanted = frozenset(flags)
+
+    def extract(seg, redirect_idx):
+        out = []
+        for i, tok in enumerate(seg):
+            if tok not in wanted:
+                continue
+            j = i + 1
+            if j >= len(seg):
+                continue
+            nxt = seg[j]
+            if (
+                nxt in _OPERATOR_TOKENS
+                or j in redirect_idx
+                or nxt.startswith("-")
+                or _NON_LITERAL_RE.search(nxt)
+            ):
+                continue
+            out.append(nxt)
+        return out
+
+    return extract
+
+
+# Block-tier command specs (5.10): command -> (shape, rule_key). R1
+# carries the three current commands only; R4 registers mkdir / curl /
+# wget (terminal-mkdir / terminal-download).
+_WRITE_SPECS = {
+    "touch": (_all_literal_args, "terminal-touch"),
+    "cp": (_last_literal_arg, "terminal-cp-mv"),
+    "mv": (_last_literal_arg, "terminal-cp-mv"),
+}
+
+
 def _segment_block_targets(seg):
     """Block-tier targets of ONE command segment (5.10).
 
     Redirect targets (token after a redirect operator, unless it is an
     operator, non-literal, or starts with "=" -- the residue of an
-    unquoted `>=` comparison), touch args and cp/mv destinations within
-    this segment only. Returns (target, rule_key) pairs.
+    unquoted `>=` comparison) plus the command targets declared in
+    _WRITE_SPECS, within this segment only. Returns (target, rule_key)
+    pairs.
     """
     out = []
     n = len(seg)
@@ -188,23 +271,11 @@ def _segment_block_targets(seg):
                 out.append((nxt, "terminal-redirect"))
                 redirect_idx.add(i + 1)
 
-    first = seg[0]
-    if first == "touch":
-        for i in range(1, n):
-            tok = seg[i]
-            if tok in _OPERATOR_TOKENS or i in redirect_idx or tok.startswith("-"):
-                continue
-            if not _NON_LITERAL_RE.search(tok):
-                out.append((tok, "terminal-touch"))
-
-    if first in ("cp", "mv"):
-        for i in range(n - 1, -1, -1):
-            tok = seg[i]
-            if tok in _OPERATOR_TOKENS or i in redirect_idx or tok.startswith("-"):
-                continue
-            if not _NON_LITERAL_RE.search(tok):
-                out.append((tok, "terminal-cp-mv"))
-            break
+    spec = _WRITE_SPECS.get(seg[0])
+    if spec is not None:
+        shape, rule_key = spec
+        for tok in shape(seg, redirect_idx):
+            out.append((tok, rule_key))
 
     return out
 
@@ -254,9 +325,49 @@ def _terminal_uncertain(tokens):
     )
 
 
+def _script_basename(tok):
+    """Final path component of `tok` (quotes stripped; forward and
+    backslash separators both count)."""
+    return re.split(r"[/\\]", tok.strip("\"'"))[-1]
+
+
+def is_session_dir_script(tokens):
+    """Pure predicate (SCR-044 R1, spec 5.19): does the command invoke
+    the session-dir creation script under a Python interpreter?
+
+    Per-segment judgment: a chain segment triggers True only if it
+    simultaneously contains an interpreter token (python / python3 / py)
+    AND a token whose final path component is create_session_dir.py
+    (relative or absolute, quoted or not, forward or backslash paths).
+    Quoted nested-shell bodies stay inside a single token, so every token
+    is also split on whitespace to keep the inner command visible
+    (bash -c "python ... create_session_dir.py ..." -> True). An
+    interpreter and the script name in DIFFERENT segments -> False;
+    `cat` / `echo` mentions without an interpreter, `python -V` and the
+    module form `python -m create_session_dir` (basename without .py)
+    -> False.
+    """
+    if not tokens:
+        return False
+    for seg in _chain_segments(tokens):
+        words = []
+        for tok in seg:
+            words.extend(tok.split())
+        if not any(w in _SESSION_SCRIPT_INTERPRETERS for w in words):
+            continue
+        if any(_script_basename(w) == _SESSION_SCRIPT_NAME for w in words):
+            return True
+    return False
+
+
 # Public thin aliases (SCR-035 interface convergence point).
 tokenize_command = _tokenize_command
 terminal_block_targets = _terminal_block_targets
 terminal_uncertain = _terminal_uncertain
 
-__all__ = ["tokenize_command", "terminal_block_targets", "terminal_uncertain"]
+__all__ = [
+    "tokenize_command",
+    "terminal_block_targets",
+    "terminal_uncertain",
+    "is_session_dir_script",
+]
