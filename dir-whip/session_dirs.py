@@ -1,9 +1,12 @@
-"""Per-session unique Session Directory lifecycle (SCR-044 R5, spec 5.19).
+"""Per-session unique Session Directory lifecycle (SCR-044 R5, spec 5.19)
++ the R7 on_session_start orphan scan (advisory).
 
 Pure decision layer: statically imports state / sessions / config /
 paths / events / terminal only -- NEVER audit or verdict (no import
 cycle: audit imports this module for the post-diff binding observer).
-No host imports (ADR-0007 core discipline).
+No host imports (ADR-0007 core discipline). The R7 scan consumes the
+classify chain through an injected slot (set_classifier, same
+ADR-0007 pattern as audit) instead of importing verdict.
 
 Slot model: one Session Directory per conversation. state.session_dirs
 claims maps the owner session (sessions.owner_session: subagent ->
@@ -234,6 +237,98 @@ def script_invocation_line(task, working_dir_root):
     )
 
 
+# ---------------------------------------------------------------- Orphan scan (R7)
+
+# Classification chain, injected by the assembly layer (SCR-044 R7;
+# ADR-0007 inject-don't-import, mirroring audit.set_classifier -- the
+# verdict module imports this one, so a static verdict import is a
+# cycle). Unwired -> scan_orphans fails open to None
+# (production-unreachable: register() wires before any hook runs).
+_classify_fn = None
+
+# R7 advisory notice verbatim locks (testing-standards 7.14.7 O-1:
+# header/tail pinned). ADVISE-ONLY: the notice is plain TEXT -- it
+# never blocks, never deletes, and lands at most once per top-level
+# session start (fire-once by construction).
+ORPHAN_NOTICE_HEADER = (
+    "NOTICE: Working Directory root has entries outside a session directory:"
+)
+ORPHAN_NOTICE_TAIL = (
+    "If a project directory, add it to the allowlist dirs in "
+    "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
+    "Directory root)."
+)
+
+
+def set_classifier(fn):
+    """Wire the classification chain (assembly-layer injection)."""
+    global _classify_fn
+    _classify_fn = fn
+
+
+def _orphan_notice(working_dir_root, names):
+    """Build the advisory notice (O-1 shape): verbatim header, one
+    listed entry per orphan, cleanup guidance -- the create + relocate
+    path via the shared R6 builder (MB-2 single source) -- then the
+    allowlist registration alternative (verbatim tail)."""
+    lines = [ORPHAN_NOTICE_HEADER]
+    lines.extend("  - %s" % name for name in names)
+    lines.append("Create a session directory, then relocate them:")
+    lines.append(
+        "  %s" % script_invocation_line("<task_name>", working_dir_root)
+    )
+    lines.append('  mv "<root>/<entry>" "<session_dir>/Outputs/"')
+    lines.append(ORPHAN_NOTICE_TAIL)
+    return "\n".join(lines)
+
+
+def scan_orphans(working_dir_root, allowlist=None):
+    """Advisory orphan scan at top-level session start (SCR-044 R7,
+    spec 5.4). Returns ONE compact notice string, or None.
+
+    Filter: every TOP-LEVEL entry of the root passes through the
+    injected classify_target -- a T4 block verdict = orphan candidate;
+    T0-T3 (external / runtime allowlist / config allowlist / valid
+    session dir) are auto-exempt. No hand-written exclusion list and
+    no second session-dir regex (ADR-0006: no new vector). The
+    session's own bound dir is compliant by definition (T3), so it can
+    never appear (O-8).
+
+    Semantics: advise-only (never a block dict, never a deletion,
+    O-6); called once per top-level session start so the notice is
+    fire-once by construction; unresolved/missing root -> None without
+    raising (O-7); the CWD-outside-root and child-session skips live
+    upstream in the assembly flow (O-4 / O-5). Fail-open: any error
+    -> None, session start is never broken (5.8).
+    """
+    try:
+        root = str(working_dir_root) if working_dir_root else None
+        if not root or not os.path.isdir(root) or _classify_fn is None:
+            return None
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            return None
+        orphans = []
+        for name in names:
+            verdict = _classify_fn(
+                os.path.join(root, name), root, allowlist
+            )
+            if (
+                isinstance(verdict, dict)
+                and verdict.get("outcome") == "block"
+            ):
+                orphans.append(name)
+        if not orphans:
+            return None
+        return _orphan_notice(root, orphans)
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: session_dirs scan_orphans error (fail-open): %s", exc
+        )
+        return None
+
+
 # ---------------------------------------------------------------- Gates
 
 def guard_create(verdict, normalized, working_dir_root, session_id=None,
@@ -381,6 +476,8 @@ __all__ = [
     "SESSION_DIR_LIMIT_RULE_KEY",
     "SESSION_DIR_LIMIT_BLOCK_MESSAGE",
     "SESSION_DIR_LIMIT_SUBAGENT_MESSAGE",
+    "ORPHAN_NOTICE_HEADER",
+    "ORPHAN_NOTICE_TAIL",
     "guard_create",
     "guard_script",
     "observe_added",
@@ -388,4 +485,6 @@ __all__ = [
     "claim_of",
     "scripts_path",
     "script_invocation_line",
+    "set_classifier",
+    "scan_orphans",
 ]

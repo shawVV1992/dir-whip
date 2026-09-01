@@ -222,6 +222,10 @@ def register(ctx):
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
         audit.set_classifier(verdict.classify_target)
+        # SCR-044 R7: the orphan-scan classifier is wired the same way
+        # (ADR-0007 inject-don't-import; session_dirs never imports
+        # verdict).
+        session_dirs.set_classifier(verdict.classify_target)
         # Host API injection slots (ADR-0007): session CWD accessor +
         # agent CWD accessor (R2 conditional injection) filled at register
         # time; absent host API -> None -> on_start always injects.
@@ -317,6 +321,20 @@ def _record_session_reminder(session_id, status):
     )
 
 
+def _record_orphan_notice(session_id):
+    """One orphan-notice stats row when the R7 advisory notice is
+    delivered at session start (SCR-044 R7: allow/session/orphan-notice
+    via the events/stats setdefault chain, same non-verdict advisory
+    convention as _record_session_reminder; allow outcome -> no bus
+    fanout, the 5.14 emit surface stays at 7). Top-level path only, so
+    is_subagent is False by construction. Fail-open: events.emit never
+    raises."""
+    events.emit(
+        "allow", "session", "orphan-notice", None,
+        "orphan scan notice at session start", session_id, False,
+    )
+
+
 def on_start(session_id, model=None, platform=None, **kwargs):
     """on_session_start hook adapter (5.4): top-level sessions only.
 
@@ -396,7 +414,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
                             active_id,
                         )
                         return
-        working_dir_root, _ = verdict._resolved_config()
+        working_dir_root, allowlist = verdict._resolved_config()
         if not verdict.discipline_applies(cwd, working_dir_root):
             state.session.reminder_status = "skipped-outside"
             _record_session_reminder(session_id, "skipped-outside")
@@ -424,6 +442,16 @@ def on_start(session_id, model=None, platform=None, **kwargs):
                 "dir-whip: session-start reminder skipped "
                 "(inject_message unavailable)"
             )
+        # SCR-044 R7 (spec 5.4): advisory orphan scan -- ONE call after
+        # the REMINDER injection (child sessions returned at the top, so
+        # subagents never scan; CWD-outside sessions returned at the
+        # skipped-outside branch). Decision logic lives in session_dirs;
+        # advise-only TEXT, never a block action. Stats row lands via
+        # the events/stats setdefault chain when the notice is delivered.
+        notice = session_dirs.scan_orphans(working_dir_root, allowlist)
+        if notice and ctx is not None and hasattr(ctx, "inject_message"):
+            if ctx.inject_message(notice):
+                _record_orphan_notice(session_id)
     except Exception as exc:
         logger.debug("dir-whip: session start hook error: %s", exc)
 
