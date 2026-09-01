@@ -456,46 +456,73 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
     }
 
 
+def _orphan_rename_line(target, working_dir_root):
+    """Conditional orphan repair line (spec 5.3 v2.12 R6, MSG-4/5).
+
+    When the target's FIRST segment under the working root exists on
+    disk as a directory with a non-compliant name (an orphan candidate,
+    feedback/15 double-directory incident), return the executable
+    relocation line -- run the script (the fix block's
+    session_dirs.script_invocation_line output) THEN move the orphan
+    into the created session dir's Outputs/. None otherwise (MSG-5:
+    absent dir / compliant name; also for the root target itself).
+    """
+    try:
+        rel = os.path.relpath(str(target), str(working_dir_root))
+        first = rel.replace("\\", "/").split("/")[0]
+        if not first or first == ".":
+            return None
+        first_path = os.path.join(str(working_dir_root), first)
+        if not os.path.isdir(first_path):
+            return None
+        if is_inside_session_dir(first_path, str(working_dir_root)):
+            return None
+        return 'mv "%s/%s" "<session_dir>/Outputs/"' % (
+            str(working_dir_root).replace("\\", "/"), first
+        )
+    except Exception:
+        return None
+
+
 def _block_message(target, working_dir_root, is_subagent=False):
-    """Exact block message (spec 5.3; C6-aligned, v2.6 B2).
+    """Exact block message (spec 5.3; C6-aligned, v2.6 B2; v2.12 R6:
+    the command line is built by the shared session_dirs builder (MB-2),
+    the uniqueness line is appended to both top-level variants (MSG-3),
+    and a conditional orphan rename line follows when the target's
+    top-level directory already exists non-compliant (MSG-4/5)).
 
     Subagent variant: the fix line is replaced by the parent-target
-    guidance -- subagents never create session directories.
+    guidance -- subagents never create session directories; no
+    uniqueness / rename lines (MSG-6).
     """
     target_fwd = str(target).replace("\\", "/")
-    wdr_fwd = str(working_dir_root).replace("\\", "/")
     if is_subagent:
         fix_line = "Fix: write to the target directory passed by the parent agent."
+        post_lines = ""
     else:
-        # D11: scripts path precomputed at register (P6, 31.13):
-        # <plugin_dir>/skills/workspace-organization/scripts; falls back
-        # to the __file__-based derivation for unregistered direct calls.
-        scripts_path = state.session.script_resolver_path
-        if not scripts_path:
-            scripts_path = os.path.normpath(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "skills", "workspace-organization", "scripts",
-                )
-            )
-        scripts_path = scripts_path.replace("\\", "/")
         fix_line = (
             "Fix: Create a session directory first:\n"
-            "  python %s/create_session_dir.py <task_name> --workspace %s\n"
+            "  %s\n"
             "Then write the deliverable to Outputs/<filename> "
             "(or scratch to .tmp/<filename>).\n"
             "User-specified path -> dir_whip_allow_path first."
-            % (scripts_path, wdr_fwd)
+            % session_dirs.script_invocation_line(
+                "<task_name>", working_dir_root
+            )
         )
+        post_lines = "\nOne session directory per conversation."
+        rename_line = _orphan_rename_line(target, working_dir_root)
+        if rename_line:
+            post_lines += "\n" + rename_line
     return (
         "BLOCKED: File writes in the Working Directory require a Session "
         "Directory or an allowed root file.\n"
         "Target: %s\n"
-        "%s\n"
+        "%s%s\n"
         "If this is a project directory, add it to the allowlist dirs in "
         "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
         "Directory root, e.g. projects/foo)\n"
-        "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line)
+        "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line, post_lines)
     )
 
 

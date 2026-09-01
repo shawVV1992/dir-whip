@@ -201,6 +201,39 @@ def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
     return {"action": "block", "message": message}
 
 
+# ---------------------------------------------------------------- Message builders
+
+def scripts_path():
+    """Resolved skills scripts directory (SCR-044 R6: single source).
+
+    D11 precomputed slot (state.session.script_resolver_path, set at
+    register) when present; __file__-based derivation for unregistered
+    direct calls. Forward-slash rendering (message convention).
+    """
+    resolved = state.session.script_resolver_path
+    if not resolved:
+        resolved = os.path.normpath(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "skills", "workspace-organization", "scripts",
+            )
+        )
+    return str(resolved).replace("\\", "/")
+
+
+def script_invocation_line(task, working_dir_root):
+    """create_session_dir.py command line (SCR-044 R6, MB-1/MB-2).
+
+    The SINGLE source for the invocation shape -- consumed by the
+    verdict fix_line, the conditional orphan rename line (verdict) and
+    the R7 orphan-notice cleanup hint. `<task>` may stay a placeholder
+    (verdict passes "<task_name>").
+    """
+    return "python %s/create_session_dir.py %s --workspace %s" % (
+        scripts_path(), task, str(working_dir_root).replace("\\", "/"),
+    )
+
+
 # ---------------------------------------------------------------- Gates
 
 def guard_create(verdict, normalized, working_dir_root, session_id=None,
@@ -353,4 +386,6 @@ __all__ = [
     "observe_added",
     "on_session_start",
     "claim_of",
+    "scripts_path",
+    "script_invocation_line",
 ]
