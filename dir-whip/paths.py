@@ -29,13 +29,19 @@ def _get_hermes_home():
     """Return the Hermes home directory path (D5).
 
     HERMES_HOME environment override FIRST, then the platform default:
-    Windows LOCALAPPDATA/hermes, POSIX ~/.hermes.
+    Windows LOCALAPPDATA/hermes -- with a Path.home()/"hermes" fallback
+    when LOCALAPPDATA is unset/blank so the home is NEVER a relative
+    path resolvable against the CWD (SCR-044 R8, script-side SCR-042 N7
+    parity) --, POSIX ~/.hermes.
     """
     env_home = os.environ.get("HERMES_HOME")
     if env_home:
         return Path(env_home)
     if os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA", "")) / "hermes"
+        local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
+        if local_app_data:
+            return Path(local_app_data) / "hermes"
+        return Path.home() / "hermes"   # R8: unset/blank fallback (script-side N7 parity)
     return Path.home() / ".hermes"
 
 
