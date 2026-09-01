@@ -4,6 +4,9 @@
 intercepted via chain-aware extraction (splits on `&&` / `;` / `|` /
 newlines); root violations blocked with a fix-it message. Device paths
 (`/dev/null`, etc.) are exempt; heredoc commands are demoted to allow+log.
+Blocks now carry a uniqueness line (one Session Directory per conversation;
+a second creation attempt is blocked) and, when a non-compliant directory
+for the target already exists, a conditional orphan-relocation line.
 
 **Write audit**: A post-hoc snapshot diff catches root writes the front
 guard lets through. The L1 notice names the file and the remediation;

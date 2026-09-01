@@ -132,11 +132,12 @@ Subagent variant: replace "I will create..." with "I will write to the target di
 
 ## Terminal Write Discipline
 
-Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations; uncertain intent is allowed + logged.
+Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations, and resolvable `mkdir` / `curl -o` / `wget -O` targets; uncertain intent is allowed + logged.
 
 1. Prefer Session Directories for all writes
-2. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged)
-3. Blocked → create a Session Directory and re-target (never bypass the guard)
+2. One session directory per conversation - a second creation attempt is blocked (session-dir limit)
+3. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged)
+4. Blocked → create a Session Directory and re-target (never bypass the guard)
 
 ## Governance & Cron
 

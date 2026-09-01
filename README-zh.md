@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.3](https://img.shields.io/badge/version-0.6.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.4](https://img.shields.io/badge/version-0.6.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -137,7 +137,7 @@ hermes plugins disable dir-whip
 **前置层（拦截，宽容快速）** —— 设计原则是**允许误放、绝不误拦**：
 
 - 拦截对象仅三种写类工具：`write_file` / `patch` / `terminal`；其余工具与只读命令不进入判定。
-- **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
+- **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地 / 可解析的 `mkdir`、`curl -o`、`wget -O` 目标——rule_key `terminal-mkdir` / `terminal-download`）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
 - **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头目标排除。
 - **统一分类链**（与审计层共用，判定永不矛盾），定稿 T0-T4、范围置首：
 
@@ -148,6 +148,8 @@ hermes plugins disable dir-whip
 | **T2** | config 白名单（`dirs` 子树 / 根级 `files` 条目） | 放行 | |
 | **T3** | 会话目录 | 放行 | |
 | **T4** | 其余（含工作目录根自身） | block（`root-file` / `non-session-dir`） | block 消息自带修正指引 |
+
+每对话一个会话目录：首次创建即与该目录绑定，第二次创建尝试被拦截（`session-dir-limit`）；写入已存在的会话目录与用户 `allow_path` 登记照常豁免。
 
 **审计层（兜底，四级阶梯）** —— 只观察放行的终端命令实际落盘了什么：
 
@@ -242,7 +244,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.3
+[dir-whip] v0.6.4
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -343,7 +345,7 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 | `outcome` | 判定结果 | `block` / `allow` / `external-write` / `fail-open` 等 |
 | `reason` | 结果原因 | 短语说明，如根外写入记 `target outside working_dir_root` |
 | `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `allow-path` 等 |
-| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
+| `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
 
 全文件不含文件内容、绝对路径或提示词文本。可观察入口：

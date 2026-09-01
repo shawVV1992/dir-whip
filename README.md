@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.3](https://img.shields.io/badge/version-0.6.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.4](https://img.shields.io/badge/version-0.6.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -163,10 +163,12 @@ false passes, never false blocks**:
 - Only three write-class tools are judged: `write_file` / `patch` /
   `terminal`; other tools and read-only commands never enter the chain.
 - **Three-tier verdict**: deterministic targets (tool paths, terminal
-  redirects / `touch` / `cp`·`mv` destinations) enter the unified classify
-  chain; uncertain write intent (heredoc, interpreter-led segments, nested
-  shells, `$`/backtick variables) is allowed + logged; device paths and
-  read-only commands are silently exempt.
+  redirects / `touch` / `cp`·`mv` destinations / resolvable `mkdir`,
+  `curl -o` and `wget -O` targets — rule_keys `terminal-mkdir` /
+  `terminal-download`) enter the unified classify chain; uncertain write
+  intent (heredoc, interpreter-led segments, nested shells, `$`/backtick
+  variables) is allowed + logged; device paths and read-only commands are
+  silently exempt.
 - **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
   newlines, targets extracted per segment; `=`-leading targets excluded.
 - **Unified classify chain** (shared with the audit layer — the two can
@@ -179,6 +181,11 @@ false passes, never false blocks**:
 | **T2** | Config allowlist (`dirs` subtree / root-level `files` entry) | allowed | |
 | **T3** | Session Directory | allowed | |
 | **T4** | Everything else (incl. the Working Directory root itself) | block (`root-file` / `non-session-dir`) | Fix-it guidance in the message |
+
+One Session Directory per conversation: the first creation binds the
+conversation to that directory, and a second creation attempt is blocked
+(`session-dir-limit`); writes into already-existing Session Directories and
+user `allow_path` registrations stay exempt.
 
 **Audit layer (backstop, four-level ladder)** — observes only what allowed
 terminal commands actually landed:
@@ -285,7 +292,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.3
+[dir-whip] v0.6.4
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -406,7 +413,7 @@ Each line carries two groups of fields:
 | `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `fail-open`, etc. |
 | `reason` | Outcome reason | Short phrase, e.g. `target outside working_dir_root` for out-of-root writes |
 | `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `allow-path`, etc. |
-| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
+| `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
 
 The file never contains file contents, absolute paths, or prompt text.
