@@ -1,4 +1,4 @@
-# dir-whip installed (v0.6.4)
+# dir-whip installed (v0.6.5)
 
 **Plugin guard**: Active after next Hermes restart. Terminal writes are
 intercepted via chain-aware extraction (splits on `&&` / `;` / `|` /
