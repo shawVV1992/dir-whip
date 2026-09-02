@@ -162,7 +162,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
         if result is None:
             pre_snapshot(
                 session_id, task_id, working_dir_root,
-                _allowlist_snapshot_transport(allowlist),
+                _parsed_allowlist_raw(allowlist),
             )
         return result
 
@@ -306,38 +306,15 @@ def _resolve_parsed_allowlist(allowlist):
 
     - dict with files/dirs keys -> parsed mapping (raw config value or
       an already-parsed dict; both carry the same keys).
-    - a 1-element list/tuple wrapping such a dict -> the audit
-      pre-snapshot transport round-trip (audit stores tuple(allowlist);
-      a bare dict would flatten to its keys, so guard wraps the parsed
-      mapping in a 1-tuple -- see _allowlist_snapshot_transport).
     - anything else (legacy flat list, None) -> parse_allowlist
       (fail-closed: legacy values yield empty sets).
     """
     try:
         if isinstance(allowlist, dict) and "files" in allowlist and "dirs" in allowlist:
             return allowlist
-        if (
-            isinstance(allowlist, (list, tuple))
-            and len(allowlist) == 1
-            and isinstance(allowlist[0], dict)
-            and "files" in allowlist[0]
-            and "dirs" in allowlist[0]
-        ):
-            return allowlist[0]
         return _parsed_allowlist_raw(allowlist)
     except Exception:
         return {"files": set(), "dirs": set()}
-
-
-def _allowlist_snapshot_transport(allowlist):
-    """Audit pre-snapshot transport (v2.7 R9).
-
-    audit.pre_snapshot stores tuple(allowlist); a mapping dict
-    would flatten to its KEY strings and be lost. Wrap the PARSED
-    mapping in a 1-tuple so the tuple() round-trip preserves it;
-    classify_target unwraps it via _resolve_parsed_allowlist.
-    """
-    return (_parsed_allowlist_raw(allowlist),)
 
 
 def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,

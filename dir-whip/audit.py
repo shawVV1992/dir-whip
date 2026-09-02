@@ -25,8 +25,7 @@ from .stats import record as _stats_record
 from .events import bus_emit, emit
 
 from .paths import (
-    get_hermes_home,
-    profile_home,
+    dirwhip_home,
     relativize_target,
     within_working_dir,
 )
@@ -274,13 +273,11 @@ def _remediation_instruction(paths_display):
     ruling 2026-08-27). Fail-open: home unresolved -> the literal <home>
     placeholder."""
     try:
-        home = get_hermes_home()
-        if state.session.session_profile:
-            home = profile_home(home, state.session.session_profile)
+        home = dirwhip_home(state.session.session_profile)
     except Exception:
         home = None
-    quarantine = "%s/dir-whip/audit-quarantine/" % (
-        str(home).replace("\\", "/") if home else "<home>"
+    quarantine = "%s/audit-quarantine/" % (
+        str(home).replace("\\", "/") if home else "<home>/dir-whip"
     )
     return (
         "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
@@ -466,10 +463,12 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
 def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
     """Take the pre snapshot for an ALLOWED terminal call (5.18).
 
-    Root entry count above WRITE_AUDIT_ENTRY_CAP -> round skipped + ONE
-    WARNING per session (not repeated). Scan OSError -> fail-open (no
-    snapshot stored, so the post skips). Any exception -> nothing
-    (fail-open, 5.8).
+    allowlist is the PARSED {files, dirs} mapping (SCR-045 R7: the
+    caller parses at the call site; the 1-tuple transport hack is gone
+    and the value is stored as-is). Root entry count above
+    WRITE_AUDIT_ENTRY_CAP -> round skipped + ONE WARNING per session
+    (not repeated). Scan OSError -> fail-open (no snapshot stored, so
+    the post skips). Any exception -> nothing (fail-open, 5.8).
     """
     try:
         snap = snapshot(working_dir_root)
@@ -486,7 +485,7 @@ def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
             return
         with state.audit.lock:
             state.audit.pre_snapshots[(session_id, task_id)] = (
-                snap, working_dir_root, tuple(allowlist),
+                snap, working_dir_root, allowlist,
             )
     except Exception as exc:
         logger.debug("dir-whip: audit pre-snapshot error (fail-open): %s", exc)
@@ -727,11 +726,9 @@ def audit_settle_paths(session_id, paths):
         # (<profile home>/dir-whip/audit-quarantine/<ts>/), layout-aware
         # via paths.profile_home -- the stats.jsonl / dir-whip.log
         # family. Out of the workspace root; no legacy data migration.
-        home = get_hermes_home()
-        if state.session.session_profile:
-            home = profile_home(home, state.session.session_profile)
+        home = dirwhip_home(state.session.session_profile)
         quarantine_dir = os.path.join(
-            str(home), "dir-whip", "audit-quarantine",
+            str(home), "audit-quarantine",
             datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
         )
         settled = []

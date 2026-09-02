@@ -16,7 +16,7 @@ import os
 
 from . import state
 
-from .paths import get_hermes_home, profile_home, relativize_target
+from .paths import dirwhip_home, relativize_target
 
 logger = logging.getLogger("dir-whip")
 
@@ -92,10 +92,7 @@ def _stats_jsonl_path():
     session profile is set yet, use HERMES_HOME directly (register-time
     behavior).
     """
-    home = get_hermes_home()
-    if state.session.session_profile:
-        home = profile_home(home, state.session.session_profile)
-    return home / "dir-whip" / STATS_JSONL_NAME
+    return dirwhip_home(state.session.session_profile) / STATS_JSONL_NAME
 
 
 def _append_stats_event(event):

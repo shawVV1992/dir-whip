@@ -25,7 +25,7 @@ from .config import (
     profile_terminal_cwd,
 )
 
-from .paths import get_hermes_home, is_absolute_any, paths_equal, profile_home
+from .paths import dirwhip_home, get_hermes_home, is_absolute_any, paths_equal
 from .stats import stats_jsonl_path
 
 # Diagnostic log path (v2.8 R6): single source of truth from logsetup.
@@ -289,10 +289,11 @@ def _render_current_state():
 
 
 def _case_eq(a, b):
-    """Casefold-aware equality on Windows (SCR-006)."""
-    if os.name == "nt":
-        return str(a).casefold() == str(b).casefold()
-    return str(a) == str(b)
+    """Casefold-aware equality on Windows (SCR-006).
+
+    One-line delegate to paths.paths_equal (SCR-045 R7 single source).
+    """
+    return paths_equal(a, b)
 
 
 def _relativize_input(token, root):
@@ -601,10 +602,8 @@ def _handle_list(rest):
     out = _render_two_sections(state_map["files"], state_map["dirs"])
     if legacy:
         out += "\n[!] ignored legacy entries: %d -- re-add via /dir-whip allow" % legacy
-    home = get_hermes_home()
-    if state.session.session_profile:
-        home = profile_home(home, state.session.session_profile)
-    out += "\nQuarantine: %s" % (home / "dir-whip" / "audit-quarantine")
+    home = dirwhip_home(state.session.session_profile)
+    out += "\nQuarantine: %s" % (home / "audit-quarantine")
     return out
 
 

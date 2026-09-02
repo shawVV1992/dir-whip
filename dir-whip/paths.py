@@ -215,6 +215,22 @@ def _paths_equal(a, b):
     return a == b
 
 
+def dirwhip_home(profile=None):
+    """The profile-aware dir-whip home directory (SCR-045 R7 single source).
+
+    Pure function: profile comes from the caller (usually
+    state.session.session_profile); None -> HERMES_HOME directly
+    (register-time / no session profile). Returns <home>/dir-whip --
+    the stats.jsonl / dir-whip.log / audit-quarantine family home. The
+    five former hand-rolled get_hermes_home + profile dance sites
+    (stats / logsetup / audit x2 / report) all call this now.
+    """
+    home = _get_hermes_home()
+    if profile:
+        home = _profile_home(home, profile)
+    return Path(home) / "dir-whip"
+
+
 # Public thin aliases (SCR-035 interface convergence point; SCR-045 R6
 # publicized the cross-module home/equality helpers).
 get_hermes_home = _get_hermes_home
@@ -229,4 +245,5 @@ __all__ = [
     "get_hermes_home",
     "profile_home",
     "paths_equal",
+    "dirwhip_home",
 ]

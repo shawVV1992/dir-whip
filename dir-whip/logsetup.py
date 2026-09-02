@@ -25,7 +25,7 @@ import logging
 import logging.handlers
 
 from . import state
-from .paths import get_hermes_home, profile_home
+from .paths import dirwhip_home
 
 # Tier 1: cross-process-safe rotation (host venv). The try-import is the
 # ADR-0007 same-pattern fail-open loading; absence -> None -> stdlib tier.
@@ -48,15 +48,12 @@ def diagnostic_log_path():
     Profile-aware placement mirroring stats.stats_jsonl_path (spec 5.13
     R5; single source of truth for the log path — report.py reuses this):
     the path follows the SESSION profile (set at on_session_start) via
-    paths.profile_home, so a profile-home process (HERMES_HOME IS
+    paths.dirwhip_home, so a profile-home process (HERMES_HOME IS
     <root>/profiles/<name>) uses HERMES_HOME itself while a root-home
     process resolves HERMES_HOME/profiles/<name>. When no session profile
     is set yet (register-time attach), HERMES_HOME is used directly.
     """
-    home = get_hermes_home()
-    if state.session.session_profile:
-        home = profile_home(home, state.session.session_profile)
-    return home / "dir-whip" / LOG_FILE_NAME
+    return dirwhip_home(state.session.session_profile) / LOG_FILE_NAME
 
 
 def setup():

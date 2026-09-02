@@ -242,6 +242,27 @@ def _record_orphan_notice(session_id):
     )
 
 
+def _inject_reminder(ctx, session_id):
+    """Inject the session-start discipline reminder (5.4 R2/R6).
+
+    The injected/unavailable two arms collapsed into one helper
+    (SCR-045 R7): inject when the ctx channel exists and accepts the
+    message; otherwise record unavailable with the same debug line.
+    """
+    if ctx and hasattr(ctx, "inject_message"):
+        injected = ctx.inject_message(verdict.REMINDER_MESSAGE)
+        if injected:
+            state.session.reminder_status = "injected"
+            _record_session_reminder(session_id, "injected")
+            return
+    state.session.reminder_status = "unavailable"
+    _record_session_reminder(session_id, "unavailable")
+    logger.debug(
+        "dir-whip: session-start reminder skipped "
+        "(inject_message unavailable)"
+    )
+
+
 def on_start(session_id, model=None, platform=None, **kwargs):
     """on_session_start hook adapter (5.4): top-level sessions only.
 
@@ -330,25 +351,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
                 "(agent CWD outside the Working Directory)"
             )
             return
-        if ctx and hasattr(ctx, "inject_message"):
-            injected = ctx.inject_message(verdict.REMINDER_MESSAGE)
-            if injected:
-                state.session.reminder_status = "injected"
-                _record_session_reminder(session_id, "injected")
-            else:
-                state.session.reminder_status = "unavailable"
-                _record_session_reminder(session_id, "unavailable")
-                logger.debug(
-                    "dir-whip: session-start reminder skipped "
-                    "(inject_message unavailable)"
-                )
-        else:
-            state.session.reminder_status = "unavailable"
-            _record_session_reminder(session_id, "unavailable")
-            logger.debug(
-                "dir-whip: session-start reminder skipped "
-                "(inject_message unavailable)"
-            )
+        _inject_reminder(ctx, session_id)
         # SCR-044 R7 (spec 5.4): advisory orphan scan -- ONE call after
         # the REMINDER injection (child sessions returned at the top, so
         # subagents never scan; CWD-outside sessions returned at the

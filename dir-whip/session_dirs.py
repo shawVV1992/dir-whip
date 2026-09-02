@@ -61,7 +61,7 @@ from .config import is_inside_session_dir
 
 from .events import emit
 
-from .paths import is_absolute_any
+from .paths import is_absolute_any, paths_equal
 
 from .sessions import owner_session
 
@@ -128,12 +128,14 @@ def _slot_occupied(owner):
 # ---------------------------------------------------------------- Pure helpers
 
 def _same_name(a, b):
-    """Session-dir name comparison: Windows casefold (BND-7)."""
+    """Session-dir name comparison: Windows casefold (BND-7).
+
+    One-line delegate to paths.paths_equal (SCR-045 R7 single source);
+    the None-guard stays (two Nones are NOT equal names).
+    """
     if a is None or b is None:
         return False
-    if os.name == "nt":
-        return str(a).casefold() == str(b).casefold()
-    return str(a) == str(b)
+    return paths_equal(a, b)
 
 
 def _first_segment(normalized, working_dir_root):
