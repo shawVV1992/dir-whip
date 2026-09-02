@@ -21,6 +21,7 @@ from .config import (
     _effective_root,
     _get_hermes_home,
     _paths_equal,
+    _profile_config_path,
     _profile_home,
     _profile_terminal_cwd,
     load_guard_config,
@@ -70,11 +71,10 @@ def _resolution_source(ctx):
         profile = getattr(ctx, "profile_name", None)
         if profile:
             hermes_home = _get_hermes_home()
-            if profile == "default":
-                cfg_path = hermes_home / "config.yaml"
-            else:
-                cfg_path = hermes_home / "profiles" / profile / "config.yaml"
-            if parse_terminal_cwd(cfg_path):
+            # SCR-045 R5: reuse the layout-aware resolver (both home
+            # layouts; the former hand-built profiles/<name>/ probe
+            # missed the profile-dir layout and mislabeled fail-open).
+            if parse_terminal_cwd(_profile_config_path(hermes_home, profile)):
                 return "profile-config"
     except Exception:
         pass
