@@ -18,7 +18,7 @@ import shutil
 
 from . import state
 
-from .config import get_cached_config, write_audit_enabled, write_audit_entry_cap
+from .config import get_cached_config
 
 from .stats import record as _stats_record
 
@@ -43,6 +43,11 @@ from .sessions import (
 from . import session_dirs
 
 logger = logging.getLogger("dir-whip")
+
+# Audit entry guardrail (spec 5.6/5.18 v2.8 R7 de-configuration): the DoS
+# cap is an internal audit-owned constant (SCR-045 R2 moved it home from
+# the config shim); no config key adjusts it.
+WRITE_AUDIT_ENTRY_CAP = 2000
 
 # Classification chain, injected by the assembly layer (register() now;
 # __init__.py at 31.13). Unwired -> RuntimeError (production-unreachable:
@@ -344,8 +349,6 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
     try:
         if tool_name != "terminal":
             return None
-        if not write_audit_enabled():
-            return None
         # Ordering fix: run the audit re-scan BEFORE reading the pending set
         # (transform fires before post_tool_call for terminal). Safe even if
         # the command was blocked-at-pre (no snapshot -> early return).
@@ -383,14 +386,12 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
 def _audit_gate_unresolved(session_id, working_dir_root, allowlist):
     """Unresolved pending paths for the L3 gate (empty -> gate open).
 
-    Respects the write_audit switch (disabled -> open). A failed root
+    The write audit is always on (v2.8 R7; no switch). A failed root
     re-scan is handled inside audit_unresolved_paths (full pending set ->
     latch stays); any other gate-side error fails OPEN (5.8 -- the gate
     never breaks the guard).
     """
     try:
-        if not write_audit_enabled():
-            return []
         return audit_unresolved_paths(session_id, working_dir_root, allowlist)
     except Exception as exc:
         logger.debug("dir-whip: audit gate check error (fail-open): %s", exc)
@@ -465,18 +466,16 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
 def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
     """Take the pre snapshot for an ALLOWED terminal call (5.18).
 
-    Audit disabled (write_audit: false) -> nothing. Root entry count
-    above write_audit_entry_cap -> round skipped + ONE WARNING per session
-    (not repeated). Scan OSError -> fail-open (no snapshot stored, so the
-    post skips). Any exception -> nothing (fail-open, 5.8).
+    Root entry count above WRITE_AUDIT_ENTRY_CAP -> round skipped + ONE
+    WARNING per session (not repeated). Scan OSError -> fail-open (no
+    snapshot stored, so the post skips). Any exception -> nothing
+    (fail-open, 5.8).
     """
     try:
-        if not write_audit_enabled():
-            return
         snap = snapshot(working_dir_root)
         if snap is None:
             return
-        cap = write_audit_entry_cap()
+        cap = WRITE_AUDIT_ENTRY_CAP
         if len(snap) > cap:
             if not state.audit.cap_warned:
                 state.audit.cap_warned = True
@@ -511,8 +510,6 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
         if record is None:
             return
         before, working_dir_root, allowlist = record
-        if not write_audit_enabled():
-            return
         after = snapshot(working_dir_root)
         if after is None:
             return
@@ -786,8 +783,6 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         if not changed_paths:
             return None
         if session_id and _is_child_session(session_id):
-            return None
-        if not write_audit_enabled():
             return None
         unresolved = audit_unresolved_paths(session_id)
         if not unresolved:

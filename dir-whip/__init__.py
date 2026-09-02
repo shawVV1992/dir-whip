@@ -446,7 +446,9 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
     try:
         if tool_name not in ("write_file", "patch", "terminal"):
             return
-        working_dir_root, _ = verdict._resolved_config()
+        # Seed the config cache / session root (SCR-045 R2: explicit
+        # side-effect call; the resolved values are not needed here).
+        config.ensure_session_root()
         targets = verdict._extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
         # 5.18: terminal re-scan -> diff -> violation classification. Runs
@@ -504,7 +506,9 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
     when present, rule_key ``pre-command:<command>``.
     """
     try:
-        working_dir_root, _ = verdict._resolved_config()
+        # Seed the config cache / session root (SCR-045 R2: explicit
+        # side-effect call; the resolved values are not needed here).
+        config.ensure_session_root()
         detail = {"surface": surface, "alias_used": alias_used}
         if args_raw is not None:
             detail["args_raw"] = args_raw

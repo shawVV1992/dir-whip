@@ -85,38 +85,6 @@ def parse_terminal_cwd(config_path):
     return None
 
 
-def terminal_guard_enabled(config_path=None):
-    """Terminal write interception is ALWAYS on (spec 5.6/5.10 v2.8 R7).
-
-    The terminal_guard config key is removed (three-key de-configuration,
-    BREAKING): interception is an internal constant with no switch. The
-    config_path parameter is kept for call-site compatibility only.
-    """
-    return True
-
-
-def write_audit_enabled(config_path=None):
-    """The root write audit is ALWAYS on (spec 5.6/5.18 v2.8 R7).
-
-    The write_audit config key is removed (three-key de-configuration,
-    BREAKING): the audit is an internal constant with no switch. The
-    config_path parameter is kept for call-site compatibility only.
-    """
-    return True
-
-
-def write_audit_entry_cap(config_path=None):
-    """The audit entry guardrail: internal constant 2000 (spec 5.6/5.18
-    v2.8 R7).
-
-    The write_audit_entry_cap config key is removed (three-key
-    de-configuration, BREAKING): the DoS guardrail is kept but is no
-    longer adjustable. The config_path parameter is kept for call-site
-    compatibility only.
-    """
-    return 2000
-
-
 def _parse_allowlist(value):
     """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
 
@@ -170,9 +138,10 @@ def load_guard_config(config_path=None):
     (str). v2.8 BREAKING (R7 three-key de-configuration): terminal_guard
     / write_audit / write_audit_entry_cap (and the reserved
     write_audit_autofix) are NO LONGER read — behavior is internally
-    constant (see terminal_guard_enabled / write_audit_enabled /
-    write_audit_entry_cap) and leftover occurrences of these keys in
-    runtime configs are COMPLETELY ignored (no hint, no log entry).
+    constant (terminal interception and the write audit are always on;
+    the entry guardrail is audit.WRITE_AUDIT_ENTRY_CAP) and leftover
+    occurrences of these keys in runtime configs are COMPLETELY ignored
+    (no hint, no log entry).
     Old keys exempt_paths / allowed_root_files stay removed (B2 clean
     break, no backward compat).
     """
@@ -499,6 +468,21 @@ def get_cached_config(ctx, config_path=None):
         state.session.session_root = result[0]
         state.session.session_root_initialized = True
     return (get_session_root(), result[1])
+
+
+def ensure_session_root():
+    """Explicitly seed the config cache + session root (SCR-045 R2).
+
+    The observation adapters (on_post_tool_call / on_pre_command) used
+    to call verdict._resolved_config() and discard the value; the actual
+    purpose was get_cached_config's seeding side effect (cache warm-up,
+    registered_ctx capture, session-root seed). Same semantics, explicit
+    intent. Fail-open: any error -> None (never raises).
+    """
+    try:
+        get_cached_config(state.session.registered_ctx)
+    except Exception:
+        return None
 
 
 def _refresh_allowlist_cache():

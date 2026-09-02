@@ -27,6 +27,7 @@ from .config import (
     parse_terminal_cwd,
 )
 
+from .paths import is_absolute_any
 from .stats import _stats_jsonl_path
 
 # Diagnostic log path (v2.8 R6): single source of truth from logsetup.
@@ -297,12 +298,6 @@ def _case_eq(a, b):
     return str(a) == str(b)
 
 
-def _is_abs_any(path):
-    """Absolute check incl. drive-rooted forms (paths.is_absolute_any proxy)."""
-    from .paths import is_absolute_any
-    return is_absolute_any(path)
-
-
 def _relativize_input(token, root):
     """Relativize an input token against working_dir_root (5.6 input layer).
 
@@ -312,7 +307,7 @@ def _relativize_input(token, root):
     """
     t = str(token).replace("\\", "/").strip()
     r = str(root).replace("\\", "/").rstrip("/")
-    cf = os.name == "nt" or (_is_abs_any(t) and _is_abs_any(r))
+    cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
     t_cmp = t.casefold() if cf else t
     r_cmp = r.casefold() if cf else r
     if t_cmp == r_cmp:
@@ -444,7 +439,7 @@ def _handle_allow(rest):
         # Path token: ABSOLUTE input is relativized against the root
         # (input tolerance); a relative token is taken as-is.
         tok_fwd = tok.replace("\\", "/")
-        if _is_abs_any(tok_fwd) or tok_fwd.startswith("/"):
+        if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
             rel_raw, reason = _relativize_input(tok, root)
             if rel_raw is None:
                 return "%s\n%s" % (_ALLOW_GUIDED_REJECTION % root_fwd, reason)
@@ -560,7 +555,7 @@ def _handle_remove(rest):
             # by NAME against both sets -- no disk-aware discrimination.
             tok_fwd = tok.replace("\\", "/")
             rel = None
-            if _is_abs_any(tok_fwd) or tok_fwd.startswith("/"):
+            if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
                 if root:
                     rel, _reason = _relativize_input(tok, root)
             if rel is None:
