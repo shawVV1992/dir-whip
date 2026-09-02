@@ -282,48 +282,6 @@ def is_allowlist_dir(path, working_dir_root, parsed):
     return False
 
 
-def is_allowlist_prefix(path, parsed):
-    """DEPRECATED v2.6 shim (kept so legacy importers keep collecting).
-
-    Prefix entries no longer exist in the structured model; the parsed
-    dict carries ``dirs`` (root-relative) instead of absolute prefixes,
-    so this always returns False unless a caller hand-builds a legacy
-    ``prefixes`` set. New code must use is_allowlist_dir.
-    """
-    if not isinstance(path, str):
-        return False
-    stripped = path.strip()
-    if not stripped:
-        return False
-    target_norm = _normalize_for_match(stripped)
-    prefixes = (parsed or {}).get("prefixes") or set()
-    if os.name == "nt":
-        target_cf = target_norm.casefold()
-        for pref in prefixes:
-            if not isinstance(pref, str):
-                continue
-            pref_norm = _normalize_for_match(pref).casefold()
-            if target_cf == pref_norm:
-                return True
-            if target_cf.startswith(pref_norm.rstrip("/") + "/"):
-                return True
-        return False
-    for pref in prefixes:
-        if not isinstance(pref, str):
-            continue
-        pref_norm = _normalize_for_match(pref)
-        drive_re = re.compile(r"^[A-Za-z]:/")
-        if drive_re.match(target_norm) and drive_re.match(pref_norm):
-            t_cf = target_norm.casefold()
-            p_cf = pref_norm.casefold()
-            if t_cf == p_cf or t_cf.startswith(p_cf.rstrip("/") + "/"):
-                return True
-        else:
-            if target_norm == pref_norm or target_norm.startswith(pref_norm.rstrip("/") + "/"):
-                return True
-    return False
-
-
 # ---------------------------------------------------------------- Supplemental helpers (for config_writer / report)
 
 
@@ -355,7 +313,6 @@ __all__ = [
     "format_allowlist",
     "is_allowlist_file",
     "is_allowlist_dir",
-    "is_allowlist_prefix",  # deprecated v2.6 shim
     "validate_file_entry",
     "validate_dir_entry",
     "normalize_dir_entry",
