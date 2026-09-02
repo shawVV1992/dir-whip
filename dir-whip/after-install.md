@@ -1,9 +1,11 @@
-# dir-whip installed
+# dir-whip installed (v0.6.4)
 
 **Plugin guard**: Active after next Hermes restart. Terminal writes are
 intercepted via chain-aware extraction (splits on `&&` / `;` / `|` /
 newlines); root violations blocked with a fix-it message. Device paths
 (`/dev/null`, etc.) are exempt; heredoc commands are demoted to allow+log.
+Resolvable `mkdir`, `curl -o`, and `wget -O` targets are also judged
+(rule_keys `terminal-mkdir` / `terminal-download`).
 Blocks now carry a uniqueness line (one Session Directory per conversation;
 a second creation attempt is blocked) and, when a non-compliant directory
 for the target already exists, a conditional orphan-relocation line.
@@ -18,11 +20,19 @@ conditional session-start reminder (injected only when the agent CWD is
 inside the Working Directory and no active project covers it) covers
 day-to-day behavior.
 
-**Quick command**:
-    /dir-whip   # merged report: version, state, Working Directory +
-                # source, config detail, stats file, debug log, health
+**Session-start orphan scan**: at every top-level session start (after
+the reminder injection) the plugin scans the Working Directory root for
+entries left outside any Session Directory, judged by the same classify
+chain (allowlisted and compliant Session Directories are auto-exempt).
+Advise-only: it never blocks or deletes; orphans are reported once with
+create-then-relocate guidance, and any scan error is silently skipped.
 
-**Debug log**: v0.6.0 writes a dedicated diagnostic log (dir-whip.log)
+**Quick command**:
+    /dir-whip   # merged report: version, State, Working Directory +
+                # source, Allowlist block, WARNING, Stats File, Debug
+                # Log, Health
+
+**Debug log**: a dedicated diagnostic log (dir-whip.log) is written
 under HERMES_HOME/dir-whip/ at DEBUG level; the /dir-whip report shows
 the exact path.
 
@@ -34,8 +44,8 @@ empty paths, and registrations outside the Working Directory are rejected
 with a self-explaining message — the value domain is paths INSIDE the
 Working Directory; writes outside it need no entry, they are allowed and
 logged). dir_whip_settle — lazily registered on the first write-audit
-notice; moves flagged root files into the audit quarantine (same-turn
-self-heal).
+notice; moves flagged root files into the audit quarantine
+(`<dir-whip home>/audit-quarantine/`; same-turn self-heal).
 
 **Configure** (optional): edit HERMES_HOME/dir-whip/dir-whip-config.yaml
 (structured allowlist mapping {files, dirs}, working_dir_root override).
