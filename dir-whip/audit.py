@@ -589,7 +589,8 @@ SETTLE_TOOL_SCHEMA = {
     "name": "dir_whip_settle",
     "description": (
         "Move files that the dir-whip write audit flagged in the Working "
-        "Directory root into the audit quarantine (.hermes/audit-quarantine/), "
+        "Directory root into the audit quarantine "
+        "(<dir-whip home>/audit-quarantine/), "
         "settling the write block. Hard-constrained to paths currently "
         "listed as unresolved by the write-audit notice/gate."
     ),
