@@ -39,20 +39,7 @@ ADR-0007). Import surface: stdlib + ``paths``.
 import os
 import re
 
-try:
-    from .paths import is_absolute_any as _is_absolute_any
-except ImportError:
-    try:
-        from paths import is_absolute_any as _is_absolute_any  # type: ignore
-    except ImportError:
-        _DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
-
-        def _is_absolute_any(target):  # fallback
-            if os.path.isabs(target):
-                return True
-            if _DRIVE_ROOTED_RE.match(target):
-                return True
-            return target.startswith("\\") and not target.startswith("\\\\")
+from .paths import is_absolute_any as _is_absolute_any
 
 MAX_FILENAME_LEN = 255
 MAX_DIR_LEN = 4096

@@ -31,49 +31,26 @@ SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 # (fail-open: get_cached_config degrades to a local lock-guarded cache).
 try:
     from plugins.plugin_utils import lazy_singleton
-except Exception:
+except ImportError:
     lazy_singleton = None
 
-try:
-    from . import state, stats
-except ImportError:
-    import state
-    import stats
+from . import state, stats
 
-try:
-    from .paths import (
-        _get_hermes_home,
-        _paths_equal,
-        _profile_home,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
-except ImportError:
-    from paths import (
-        _get_hermes_home,
-        _paths_equal,
-        _profile_home,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
+from .paths import (
+    _get_hermes_home,
+    _paths_equal,
+    _profile_home,
+    normalize_target,
+    relativize_target,
+    within_working_dir,
+)
 
 # Unified allowlist core: parsing/validation/matching lives in allowlist.py.
-# Guarded import to keep core zero-host-import and survive test venv.
-try:
-    from .allowlist import (
-        parse_allowlist as _allowlist_parse,
-        format_allowlist as _allowlist_format,
-        is_allowlist_prefix as _is_allowlist_prefix,
-    )
-except ImportError:
-    try:
-        from allowlist import parse_allowlist as _allowlist_parse, format_allowlist as _allowlist_format, is_allowlist_prefix as _is_allowlist_prefix  # type: ignore
-    except ImportError:
-        _allowlist_parse = None
-        _allowlist_format = None
-        _is_allowlist_prefix = None
+from .allowlist import (
+    parse_allowlist as _allowlist_parse,
+    format_allowlist as _allowlist_format,
+    is_allowlist_prefix as _is_allowlist_prefix,
+)
 
 _cache_lock = threading.Lock()
 _cached_result = None

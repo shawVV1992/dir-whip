@@ -55,35 +55,17 @@ import os
 
 logger = logging.getLogger("dir-whip")
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .config import is_inside_session_dir
-except ImportError:
-    from config import is_inside_session_dir
+from .config import is_inside_session_dir
 
-try:
-    from .events import emit
-except ImportError:
-    from events import emit
+from .events import emit
 
-try:
-    from .paths import is_absolute_any
-except ImportError:
-    from paths import is_absolute_any
+from .paths import is_absolute_any
 
-try:
-    from .sessions import owner_session
-except ImportError:
-    from sessions import owner_session
+from .sessions import owner_session
 
-try:
-    from .terminal import is_session_dir_script, terminal_cp_mv_src
-except ImportError:
-    from terminal import is_session_dir_script, terminal_cp_mv_src
+from .terminal import is_session_dir_script, terminal_cp_mv_src
 
 # Spec 5.19: rule_key of the per-session uniqueness block.
 SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"

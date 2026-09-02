@@ -12,20 +12,11 @@ import datetime
 import json
 import logging
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .paths import normalize_target, relativize_target, within_working_dir
-except ImportError:
-    from paths import normalize_target, relativize_target, within_working_dir
+from .paths import normalize_target, relativize_target, within_working_dir
 
-try:
-    from .stats import record as stats_record
-except ImportError:
-    from stats import record as stats_record
+from .stats import record as stats_record
 
 logger = logging.getLogger("dir-whip")
 

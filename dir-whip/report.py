@@ -14,68 +14,32 @@ import os
 import re
 from pathlib import Path
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .config import (
-        SESSION_DIR_RE,
-        _effective_root,
-        _get_hermes_home,
-        _paths_equal,
-        _profile_home,
-        _profile_terminal_cwd,
-        load_guard_config,
-        parse_terminal_cwd,
-    )
-except ImportError:
-    from config import (
-        SESSION_DIR_RE,
-        _effective_root,
-        _get_hermes_home,
-        _paths_equal,
-        _profile_home,
-        _profile_terminal_cwd,
-        load_guard_config,
-        parse_terminal_cwd,
-    )
+from .config import (
+    SESSION_DIR_RE,
+    _effective_root,
+    _get_hermes_home,
+    _paths_equal,
+    _profile_home,
+    _profile_terminal_cwd,
+    load_guard_config,
+    parse_terminal_cwd,
+)
 
-try:
-    from .stats import _stats_jsonl_path
-except ImportError:
-    from stats import _stats_jsonl_path
+from .stats import _stats_jsonl_path
 
 # Diagnostic log path (v2.8 R6): single source of truth from logsetup.
-try:
-    from . import logsetup
-except ImportError:
-    import logsetup  # type: ignore
+from . import logsetup
 
 # Unified allowlist core (v2.7 R9 structured mapping)
-try:
-    from .allowlist import (
-        parse_allowlist,
-        validate_dir_entry,
-    )
-except ImportError:
-    try:
-        from allowlist import (  # type: ignore
-            parse_allowlist,
-            validate_dir_entry,
-        )
-    except ImportError:
-        def parse_allowlist(raw):  # type: ignore
-            return {"files": set(), "dirs": set()}
-        def validate_dir_entry(rel):  # type: ignore
-            return False, "allowlist core unavailable"
+from .allowlist import (
+    parse_allowlist,
+    validate_dir_entry,
+)
 
 # Structured allowlist persistence (v2.7 R9): row-level mapping writer.
-try:
-    from . import config_writer
-except ImportError:
-    import config_writer  # type: ignore
+from . import config_writer
 
 logger = logging.getLogger("dir-whip")
 
@@ -335,13 +299,7 @@ def _case_eq(a, b):
 
 def _is_abs_any(path):
     """Absolute check incl. drive-rooted forms (paths.is_absolute_any proxy)."""
-    try:
-        from .paths import is_absolute_any
-    except ImportError:
-        try:
-            from paths import is_absolute_any  # type: ignore
-        except ImportError:
-            return os.path.isabs(path)
+    from .paths import is_absolute_any
     return is_absolute_any(path)
 
 

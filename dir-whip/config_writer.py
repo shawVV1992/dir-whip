@@ -26,28 +26,12 @@ from pathlib import Path
 
 import yaml
 
-try:
-    from .paths import _get_hermes_home, _profile_home
-except ImportError:
-    from paths import _get_hermes_home, _profile_home  # type: ignore
+from .paths import _get_hermes_home, _profile_home
 
-try:
-    from . import state
-except ImportError:
-    import state  # type: ignore
+from . import state
 
-try:
-    from .allowlist import parse_allowlist as _allowlist_parse
-    from .allowlist import format_allowlist as _allowlist_format
-except ImportError:
-    try:
-        from allowlist import (  # type: ignore
-            parse_allowlist as _allowlist_parse,
-            format_allowlist as _allowlist_format,
-        )
-    except ImportError:
-        _allowlist_parse = None  # type: ignore
-        _allowlist_format = None  # type: ignore
+from .allowlist import parse_allowlist as _allowlist_parse
+from .allowlist import format_allowlist as _allowlist_format
 
 # ---------------------------------------------------------------- Constants
 
@@ -270,12 +254,7 @@ def _refresh_cache():
         elif hasattr(_cfg, "refresh_allowlist_cache"):
             _cfg.refresh_allowlist_cache()
     except Exception:
-        try:
-            import config as _cfg2
-            if hasattr(_cfg2, "_refresh_allowlist_cache"):
-                _cfg2._refresh_allowlist_cache()
-        except Exception:
-            pass
+        pass
 
 
 # Backwards-compat aliases

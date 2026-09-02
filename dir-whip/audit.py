@@ -16,61 +16,31 @@ import logging
 import os
 import shutil
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .config import get_cached_config, write_audit_enabled, write_audit_entry_cap
-except ImportError:
-    from config import get_cached_config, write_audit_enabled, write_audit_entry_cap
+from .config import get_cached_config, write_audit_enabled, write_audit_entry_cap
 
-try:
-    from .stats import record as _stats_record
-except ImportError:
-    from stats import record as _stats_record
+from .stats import record as _stats_record
 
-try:
-    from .events import _bus_emit, emit
-except ImportError:
-    from events import _bus_emit, emit
+from .events import _bus_emit, emit
 
-try:
-    from .paths import (
-        _get_hermes_home,
-        _profile_home,
-        relativize_target,
-        within_working_dir,
-    )
-except ImportError:
-    from paths import (
-        _get_hermes_home,
-        _profile_home,
-        relativize_target,
-        within_working_dir,
-    )
+from .paths import (
+    _get_hermes_home,
+    _profile_home,
+    relativize_target,
+    within_working_dir,
+)
 
-try:
-    from .sessions import (
-        _is_child_session,
-        _record_top_session,
-        owner_session,
-    )
-except ImportError:
-    from sessions import (
-        _is_child_session,
-        _record_top_session,
-        owner_session,
-    )
+from .sessions import (
+    _is_child_session,
+    _record_top_session,
+    owner_session,
+)
 
 # SCR-044 R5 (spec 5.19): the script-vector binding observer lives in
 # session_dirs; the audit -> session_dirs direction is sanctioned (the
 # reverse import would be a cycle and does not exist).
-try:
-    from . import session_dirs
-except ImportError:
-    import session_dirs
+from . import session_dirs
 
 logger = logging.getLogger("dir-whip")
 

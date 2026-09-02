@@ -14,25 +14,13 @@ dir_whip.py (task 31.11).
 import json
 import logging
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .config import get_cached_config
-except ImportError:
-    from config import get_cached_config
+from .config import get_cached_config
 
-try:
-    from .stats import stats_set_session
-except ImportError:
-    from stats import stats_set_session
+from .stats import stats_set_session
 
-try:
-    from .events import emit
-except ImportError:
-    from events import emit
+from .events import emit
 
 logger = logging.getLogger("dir-whip")
 

@@ -12,88 +12,38 @@ import logging
 import os
 import re
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .audit import (
-        _audit_gate_block,
-        _audit_gate_unresolved,
-        _audit_pre_snapshot,
-    )
-except ImportError:
-    from audit import (
-        _audit_gate_block,
-        _audit_gate_unresolved,
-        _audit_pre_snapshot,
-    )
+from .audit import (
+    _audit_gate_block,
+    _audit_gate_unresolved,
+    _audit_pre_snapshot,
+)
 
-try:
-    from .config import (
-        get_cached_config,
-        is_inside_session_dir,
-        is_runtime_allowlisted,
-        load_guard_config,
-    )
-except ImportError:
-    from config import (
-        get_cached_config,
-        is_inside_session_dir,
-        is_runtime_allowlisted,
-        load_guard_config,
-    )
+from .config import (
+    get_cached_config,
+    is_inside_session_dir,
+    is_runtime_allowlisted,
+    load_guard_config,
+)
 
-try:
-    from .events import _verdict_reason, emit
-except ImportError:
-    from events import _verdict_reason, emit
+from .events import _verdict_reason, emit
 
-try:
-    from .paths import is_absolute_any, normalize_target, within_working_dir
-except ImportError:
-    from paths import is_absolute_any, normalize_target, within_working_dir
+from .paths import is_absolute_any, normalize_target, within_working_dir
 
-try:
-    from . import session_dirs
-except ImportError:
-    import session_dirs
+from . import session_dirs
 
-try:
-    from .sessions import _is_child_session
-except ImportError:
-    from sessions import _is_child_session
+from .sessions import _is_child_session
 
-try:
-    from .terminal import (
-        _DEVICE_PATHS,
-        _terminal_block_targets,
-        _terminal_uncertain,
-        _tokenize_command,
-    )
-except ImportError:
-    from terminal import (
-        _DEVICE_PATHS,
-        _terminal_block_targets,
-        _terminal_uncertain,
-        _tokenize_command,
-    )
+from .terminal import (
+    _DEVICE_PATHS,
+    _terminal_block_targets,
+    _terminal_uncertain,
+    _tokenize_command,
+)
 
 # Unified allowlist helpers (spec v2.7 R9 structured mapping)
-try:
-    from .allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist
-except ImportError:
-    try:
-        from allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist  # type: ignore
-    except ImportError:
-        # Fallback stubs (should never happen in repo)
-        def parse_allowlist(raw):  # type: ignore
-            return {"files": set(), "dirs": set()}
-        def is_allowlist_file(name, parsed):  # type: ignore
-            return False
-        def is_allowlist_dir(path, root, parsed):  # type: ignore
-            return False
+from .allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist
 
 logger = logging.getLogger("dir-whip")
 

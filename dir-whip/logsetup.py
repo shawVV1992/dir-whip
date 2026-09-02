@@ -24,12 +24,8 @@ profile-aware recognition).
 import logging
 import logging.handlers
 
-try:
-    from . import state
-    from .paths import _get_hermes_home, _profile_home
-except ImportError:
-    import state
-    from paths import _get_hermes_home, _profile_home
+from . import state
+from .paths import _get_hermes_home, _profile_home
 
 # Tier 1: cross-process-safe rotation (host venv). The try-import is the
 # ADR-0007 same-pattern fail-open loading; absence -> None -> stdlib tier.

@@ -37,34 +37,14 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-try:
-    from . import audit, config, events, logsetup, report, sessions, session_dirs, state, stats, verdict
-except ImportError:
-    import audit
-    import config
-    import events
-    import logsetup
-    import report
-    import sessions
-    import session_dirs
-    import state
-    import stats
-    import verdict
+from . import audit, config, events, logsetup, report, sessions, session_dirs, state, stats, verdict
 
-try:
-    from .paths import (
-        _paths_equal,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
-except ImportError:
-    from paths import (
-        _paths_equal,
-        normalize_target,
-        relativize_target,
-        within_working_dir,
-    )
+from .paths import (
+    _paths_equal,
+    normalize_target,
+    relativize_target,
+    within_working_dir,
+)
 
 logger = logging.getLogger("dir-whip")
 

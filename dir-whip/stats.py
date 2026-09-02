@@ -14,15 +14,9 @@ import json
 import logging
 import os
 
-try:
-    from . import state
-except ImportError:
-    import state
+from . import state
 
-try:
-    from .paths import _get_hermes_home, _profile_home, relativize_target
-except ImportError:
-    from paths import _get_hermes_home, _profile_home, relativize_target
+from .paths import _get_hermes_home, _profile_home, relativize_target
 
 logger = logging.getLogger("dir-whip")
 
