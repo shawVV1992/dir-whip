@@ -16,7 +16,7 @@ import os
 
 from . import state
 
-from .paths import _get_hermes_home, _profile_home, relativize_target
+from .paths import get_hermes_home, profile_home, relativize_target
 
 logger = logging.getLogger("dir-whip")
 
@@ -92,9 +92,9 @@ def _stats_jsonl_path():
     session profile is set yet, use HERMES_HOME directly (register-time
     behavior).
     """
-    home = _get_hermes_home()
+    home = get_hermes_home()
     if state.session.session_profile:
-        home = _profile_home(home, state.session.session_profile)
+        home = profile_home(home, state.session.session_profile)
     return home / "dir-whip" / STATS_JSONL_NAME
 
 
@@ -167,5 +167,14 @@ set_session = stats_set_session
 snapshot = stats_snapshot
 end_session = stats_end_session
 reset = stats_reset
+# SCR-045 R6: the report-facing jsonl location.
+stats_jsonl_path = _stats_jsonl_path
 
-__all__ = ["record", "set_session", "snapshot", "end_session", "reset"]
+__all__ = [
+    "record",
+    "set_session",
+    "snapshot",
+    "end_session",
+    "reset",
+    "stats_jsonl_path",
+]

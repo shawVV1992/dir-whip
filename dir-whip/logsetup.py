@@ -17,7 +17,7 @@ process serving multiple profiles the log lands in the registering
 profile's directory and lines from other profiles interleave; the stdlib
 fallback path has the known Windows multi-process rotation WinError 32
 risk. No host imports (ADR-0007); the path layout mirrors
-stats._stats_jsonl_path via paths._profile_home (SCR-026/027
+stats.stats_jsonl_path via paths.profile_home (SCR-026/027
 profile-aware recognition).
 """
 
@@ -25,7 +25,7 @@ import logging
 import logging.handlers
 
 from . import state
-from .paths import _get_hermes_home, _profile_home
+from .paths import get_hermes_home, profile_home
 
 # Tier 1: cross-process-safe rotation (host venv). The try-import is the
 # ADR-0007 same-pattern fail-open loading; absence -> None -> stdlib tier.
@@ -45,17 +45,17 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 def diagnostic_log_path():
     """dir-whip.log location: the session profile's home dir-whip dir.
 
-    Profile-aware placement mirroring stats._stats_jsonl_path (spec 5.13
+    Profile-aware placement mirroring stats.stats_jsonl_path (spec 5.13
     R5; single source of truth for the log path — report.py reuses this):
     the path follows the SESSION profile (set at on_session_start) via
-    paths._profile_home, so a profile-home process (HERMES_HOME IS
+    paths.profile_home, so a profile-home process (HERMES_HOME IS
     <root>/profiles/<name>) uses HERMES_HOME itself while a root-home
     process resolves HERMES_HOME/profiles/<name>. When no session profile
     is set yet (register-time attach), HERMES_HOME is used directly.
     """
-    home = _get_hermes_home()
+    home = get_hermes_home()
     if state.session.session_profile:
-        home = _profile_home(home, state.session.session_profile)
+        home = profile_home(home, state.session.session_profile)
     return home / "dir-whip" / LOG_FILE_NAME
 
 

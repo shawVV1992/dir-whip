@@ -148,4 +148,7 @@ def _bus_emit(event_name, payload):
 # Public thin alias (SCR-035 interface convergence point).
 emit = _emit_verdict
 
-__all__ = ["emit"]
+# Public thin aliases (SCR-045 R6): the bus sidecar fan-out entry point.
+bus_emit = _bus_emit
+
+__all__ = ["emit", "bus_emit"]

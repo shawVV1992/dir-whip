@@ -22,17 +22,17 @@ from .config import get_cached_config
 
 from .stats import record as _stats_record
 
-from .events import _bus_emit, emit
+from .events import bus_emit, emit
 
 from .paths import (
-    _get_hermes_home,
-    _profile_home,
+    get_hermes_home,
+    profile_home,
     relativize_target,
     within_working_dir,
 )
 
 from .sessions import (
-    _is_child_session,
+    is_child,
     _record_top_session,
     owner_session,
 )
@@ -267,16 +267,16 @@ def _remediation_instruction(paths_display):
     the exact dir_whip_settle(paths=[...]) call form with absolute
     forward-slash paths and the quarantine location under the dir-whip
     home (<profile home>/dir-whip/audit-quarantine/; SCR-043 R5 moved it
-    out of the workspace root -- layout-aware via paths._profile_home,
+    out of the workspace root -- layout-aware via paths.profile_home,
     the stats.jsonl / dir-whip.log family). Used by BOTH the L1 notice
     and the continuation nudge; the L3 gate message keeps its
     2026-08-26 short form. allow_path is never mentioned (settle-first
     ruling 2026-08-27). Fail-open: home unresolved -> the literal <home>
     placeholder."""
     try:
-        home = _get_hermes_home()
+        home = get_hermes_home()
         if state.session.session_profile:
-            home = _profile_home(home, state.session.session_profile)
+            home = profile_home(home, state.session.session_profile)
     except Exception:
         home = None
     quarantine = "%s/dir-whip/audit-quarantine/" % (
@@ -353,7 +353,7 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
         # (transform fires before post_tool_call for terminal). Safe even if
         # the command was blocked-at-pre (no snapshot -> early return).
         _audit_post_check(
-            session_id, task_id, is_subagent=_is_child_session(session_id),
+            session_id, task_id, is_subagent=is_child(session_id),
         )
         if not isinstance(result, str):
             return None
@@ -450,7 +450,7 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
         "%d unresolved root write audit violation(s)" % len(unresolved),
         session_id, is_subagent,
     )
-    _bus_emit("write-audit-gate-block", {
+    bus_emit("write-audit-gate-block", {
         "outcome": "block",
         "rule_key": "write-audit-gate-block",
         "paths": list(rel_paths),
@@ -531,7 +531,7 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
                 "block", "audit", "write-audit-violation", path,
                 "root write audit violation (5.18)", session_id, is_subagent,
             )
-            _bus_emit("write-audit-violation", {
+            bus_emit("write-audit-violation", {
                 "outcome": "block",
                 "rule_key": "write-audit-violation",
                 "path": relativize_target(path, working_dir_root),
@@ -689,7 +689,7 @@ def audit_settle_paths(session_id, paths):
     a move error leaves the latch latched.
     """
     try:
-        if session_id and _is_child_session(session_id):
+        if session_id and is_child(session_id):
             _record_settle_rejected("subagent-rejected", is_subagent=True)
             return {"error": "subagent sessions cannot settle; report the "
                              "pending path(s) to the parent agent"}
@@ -725,11 +725,11 @@ def audit_settle_paths(session_id, paths):
             keys.append(key)
         # SCR-043 R5: the quarantine lives under the dir-whip home
         # (<profile home>/dir-whip/audit-quarantine/<ts>/), layout-aware
-        # via paths._profile_home -- the stats.jsonl / dir-whip.log
+        # via paths.profile_home -- the stats.jsonl / dir-whip.log
         # family. Out of the workspace root; no legacy data migration.
-        home = _get_hermes_home()
+        home = get_hermes_home()
         if state.session.session_profile:
-            home = _profile_home(home, state.session.session_profile)
+            home = profile_home(home, state.session.session_profile)
         quarantine_dir = os.path.join(
             str(home), "dir-whip", "audit-quarantine",
             datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -782,7 +782,7 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
     try:
         if not changed_paths:
             return None
-        if session_id and _is_child_session(session_id):
+        if session_id and is_child(session_id):
             return None
         unresolved = audit_unresolved_paths(session_id)
         if not unresolved:
@@ -827,32 +827,6 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         return None
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-classify_diff = audit_classify_diff
-unresolved_paths = audit_unresolved_paths
-transform_tool_result = on_transform_tool_result
-pending_snapshot = audit_pending_snapshot
-pending_add = audit_pending_add
-pending_clear = audit_pending_clear
-mark_announced = audit_mark_announced
-settle_paths = audit_settle_paths
-pre_verify_nudge = audit_pre_verify_nudge
-
-__all__ = [
-    "set_classifier",
-    "snapshot",
-    "classify_diff",
-    "unresolved_paths",
-    "transform_tool_result",
-    "pending_snapshot",
-    "pending_add",
-    "pending_clear",
-    "mark_announced",
-    "settle_paths",
-    "pre_verify_nudge",
-]
-
-
 def _audit_session_start(session_id):
     """Top-level session start: clear this session's pending violations
     and leftover pre snapshots, reset the one-time cap warning and the
@@ -875,3 +849,38 @@ def _audit_session_start(session_id):
             state.audit.cap_warned = False
     except Exception as exc:
         logger.debug("dir-whip: audit session start error: %s", exc)
+
+
+# Public thin aliases (SCR-035 interface convergence point).
+classify_diff = audit_classify_diff
+unresolved_paths = audit_unresolved_paths
+transform_tool_result = on_transform_tool_result
+pending_snapshot = audit_pending_snapshot
+pending_add = audit_pending_add
+pending_clear = audit_pending_clear
+mark_announced = audit_mark_announced
+settle_paths = audit_settle_paths
+pre_verify_nudge = audit_pre_verify_nudge
+# SCR-045 R6: the guard-chain-facing gate/snapshot/session entry points.
+gate_block = _audit_gate_block
+gate_unresolved = _audit_gate_unresolved
+pre_snapshot = _audit_pre_snapshot
+session_start = _audit_session_start
+
+__all__ = [
+    "set_classifier",
+    "snapshot",
+    "classify_diff",
+    "unresolved_paths",
+    "transform_tool_result",
+    "pending_snapshot",
+    "pending_add",
+    "pending_clear",
+    "mark_announced",
+    "settle_paths",
+    "pre_verify_nudge",
+    "gate_block",
+    "gate_unresolved",
+    "pre_snapshot",
+    "session_start",
+]

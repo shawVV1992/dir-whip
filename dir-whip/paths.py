@@ -215,4 +215,18 @@ def _paths_equal(a, b):
     return a == b
 
 
-__all__ = ["normalize_target", "relativize_target", "within_working_dir", "is_absolute_any"]
+# Public thin aliases (SCR-035 interface convergence point; SCR-045 R6
+# publicized the cross-module home/equality helpers).
+get_hermes_home = _get_hermes_home
+profile_home = _profile_home
+paths_equal = _paths_equal
+
+__all__ = [
+    "normalize_target",
+    "relativize_target",
+    "within_working_dir",
+    "is_absolute_any",
+    "get_hermes_home",
+    "profile_home",
+    "paths_equal",
+]

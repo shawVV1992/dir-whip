@@ -20,10 +20,10 @@ import logging
 from . import config, sessions, state, verdict
 from .audit import audit_unresolved_paths
 from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
-from .events import _bus_emit, emit
+from .events import bus_emit, emit
 from .paths import (
-    _paths_equal,
     normalize_target,
+    paths_equal,
     relativize_target,
     within_working_dir,
 )
@@ -130,7 +130,7 @@ def _resolves_to_root(path, working_dir_root):
         normalized = normalize_target(str(path), working_dir_root)
     except Exception:
         return False
-    return _paths_equal(normalized, working_dir_root)
+    return paths_equal(normalized, working_dir_root)
 
 
 def _confirmation_payload(path, session_id):
@@ -172,7 +172,7 @@ def handle(args, session_id=None, **kwargs):
     confirm = bool(args.get("confirm")) if isinstance(args, dict) else False
     # R2a: subagents are rejected before any other check (the sanction
     # flows top-down only; parent-guidance variant, 5.11 v2.9).
-    if sessions._is_child_session(session_id):
+    if sessions.is_child(session_id):
         emit(
             "block", "allow-path", "allow-path-subagent-rejected", None,
             "subagent-rejected", session_id, True,
@@ -180,7 +180,7 @@ def handle(args, session_id=None, **kwargs):
         return ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE
     # R2b: the Working Directory root itself is never allowlisted.
     if path:
-        working_dir_root, _ = verdict._resolved_config()
+        working_dir_root, _ = verdict.resolved_config()
         if working_dir_root and _resolves_to_root(path, working_dir_root):
             emit(
                 "block", "allow-path", "allow-path-root-rejected", None,
@@ -223,13 +223,13 @@ def handle(args, session_id=None, **kwargs):
     # resolved BEFORE the add call and passed through so the add layer
     # can assert the strict-subtree value domain (None = fail-open,
     # assertion skipped).
-    working_dir_root, _ = verdict._resolved_config()
+    working_dir_root, _ = verdict.resolved_config()
     result = config.dir_whip_allow_path(
         args, working_dir_root=working_dir_root, session_id=session_id,
         **kwargs,
     )
     if path:
-        _bus_emit("allowlisted", {
+        bus_emit("allowlisted", {
             "outcome": "allowlisted",
             "rule_key": "runtime-allowlist",
             "target": relativize_target(path, working_dir_root),
@@ -241,6 +241,6 @@ def handle(args, session_id=None, **kwargs):
         emit(
             "allow", "allow-path", "runtime-allowlist-add", path,
             "runtime allowlist entry added", session_id,
-            sessions._is_child_session(session_id),
+            sessions.is_child(session_id),
         )
     return result

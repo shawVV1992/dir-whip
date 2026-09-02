@@ -224,7 +224,7 @@ def _record_session_reminder(session_id, status):
     surface stays at 7). Fail-open: events.emit never raises."""
     events.emit(
         "allow", "session", "session-reminder", None,
-        status, session_id, sessions._is_child_session(session_id),
+        status, session_id, sessions.is_child(session_id),
     )
 
 
@@ -251,7 +251,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
     unavailable or falsy -> DEBUG log, no crash.
     """
     try:
-        if sessions._is_child_session(session_id):
+        if sessions.is_child(session_id):
             state.session.reminder_status = "skipped-child"
             # 5.13 v2.8: the five-state stats outlet covers skipped-child
             # too (the report Reminder line is removed in v2.8).
@@ -260,7 +260,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         # 5.18: top-level session start clears the audit state (pending
         # violations, leftover pre snapshots, cap warning); child sessions
         # skip and inherit the parent's latched state.
-        audit._audit_session_start(session_id)
+        audit.session_start(session_id)
         # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
         # the session-dir claim + pending marker (child sessions returned
         # above and inherit the parent's slot).
@@ -270,7 +270,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         # allowlist lifecycle -- cleared at every top-level session start.
         with state.session.lock:
             state.session.confirmation_issued.clear()
-        verdict._reset_fail_open_flag()
+        verdict.reset_fail_open_flag()
         ctx = verdict._get_ctx()
         profile = getattr(ctx, "profile_name", None) if ctx else None
         # SCR-027: session-scoped resolution — re-resolve working_dir_root
@@ -321,7 +321,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
                             active_id,
                         )
                         return
-        working_dir_root, allowlist = verdict._resolved_config()
+        working_dir_root, allowlist = verdict.resolved_config()
         if not verdict.discipline_applies(cwd, working_dir_root):
             state.session.reminder_status = "skipped-outside"
             _record_session_reminder(session_id, "skipped-outside")
@@ -376,19 +376,19 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
         # Seed the config cache / session root (SCR-045 R2: explicit
         # side-effect call; the resolved values are not needed here).
         config.ensure_session_root()
-        targets = verdict._extract_target_paths(tool_name, args) if isinstance(args, dict) else []
+        targets = verdict.extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
         # 5.18: terminal re-scan -> diff -> violation classification. Runs
         # alongside (never instead of) the landed: observation below; a
         # blocked-at-pre call has no pre snapshot and skips here.
         if tool_name == "terminal":
             audit._audit_post_check(
-                session_id, task_id, is_subagent=sessions._is_child_session(session_id),
+                session_id, task_id, is_subagent=sessions.is_child(session_id),
             )
         events.emit(
             "allow", tool_name, "landed:" + str(tool_name), target,
             "write tool call completed (status: %s)" % (status or "ok"),
-            session_id, sessions._is_child_session(session_id),
+            session_id, sessions.is_child(session_id),
         )
     except Exception as exc:
         logger.debug("dir-whip: post_tool_call hook error: %s", exc)
@@ -411,12 +411,12 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
             "host approval %s" % ("granted" if granted else "denied"),
             kwargs.get("session_id"), False,
         )
-        events._bus_emit("approval-resolved", {
+        events.bus_emit("approval-resolved", {
             "outcome": "granted" if granted else "denied",
             "rule_key": rule_key,
         })
         if "request" in kwargs or "entry" in kwargs:
-            events._bus_emit("approval-requested", {
+            events.bus_emit("approval-requested", {
                 "outcome": "requested",
                 "rule_key": "approval-requested",
             })

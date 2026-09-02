@@ -15,9 +15,9 @@ import re
 from . import state
 
 from .audit import (
-    _audit_gate_block,
-    _audit_gate_unresolved,
-    _audit_pre_snapshot,
+    gate_block,
+    gate_unresolved,
+    pre_snapshot,
 )
 
 from .config import (
@@ -33,7 +33,7 @@ from .paths import is_absolute_any, normalize_target, within_working_dir
 
 from . import session_dirs
 
-from .sessions import _is_child_session
+from .sessions import is_child
 
 from .terminal import (
     _DEVICE_PATHS,
@@ -130,7 +130,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
     session_id = kwargs.get("session_id")
     # 5.13: verdicts split by is_subagent -child membership in the
     # child_session_ids set (5.4) implies a subagent write.
-    if not is_subagent and session_id and _is_child_session(session_id):
+    if not is_subagent and session_id and is_child(session_id):
         is_subagent = True
     ctx = _get_ctx()
     working_dir_root, allowlist = get_cached_config(ctx)
@@ -145,10 +145,10 @@ def guard(tool_name, args, task_id=None, **kwargs):
     # extraction / classification / the audit pre snapshot; a gated call
     # never snapshots (the command did not run). Fail-open: a gate-side
     # error allows the call (5.8), a failed re-scan keeps the latch.
-    unresolved = _audit_gate_unresolved(session_id, working_dir_root,
+    unresolved = gate_unresolved(session_id, working_dir_root,
                                         allowlist)
     if unresolved:
-        return _audit_gate_block(tool_name, session_id, is_subagent,
+        return gate_block(tool_name, session_id, is_subagent,
                                  working_dir_root, unresolved)
 
     if tool_name == "terminal":
@@ -160,7 +160,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
         # demotion, guard-disabled, device exemption, uncertain tier);
         # blocked calls never snapshot (nothing to pair at post).
         if result is None:
-            _audit_pre_snapshot(
+            pre_snapshot(
                 session_id, task_id, working_dir_root,
                 _allowlist_snapshot_transport(allowlist),
             )
@@ -332,7 +332,7 @@ def _resolve_parsed_allowlist(allowlist):
 def _allowlist_snapshot_transport(allowlist):
     """Audit pre-snapshot transport (v2.7 R9).
 
-    audit._audit_pre_snapshot stores tuple(allowlist); a mapping dict
+    audit.pre_snapshot stores tuple(allowlist); a mapping dict
     would flatten to its KEY strings and be lost. Wrap the PARSED
     mapping in a 1-tuple so the tuple() round-trip preserves it;
     classify_target unwraps it via _resolve_parsed_allowlist.
@@ -626,3 +626,9 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
     except Exception as exc:
         logger.debug("dir-whip: terminal guard error (fail-open): %s", exc)
         return None
+
+
+# Public thin aliases (SCR-045 R6): the assembly-layer-facing surface.
+extract_target_paths = _extract_target_paths
+reset_fail_open_flag = _reset_fail_open_flag
+resolved_config = _resolved_config

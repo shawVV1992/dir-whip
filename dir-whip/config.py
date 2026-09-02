@@ -93,7 +93,7 @@ def _parse_allowlist(value):
 
 
 def _get_guard_config_path():
-    """Profile-aware dir-whip-config.yaml location (stats._stats_jsonl_path pattern).
+    """Profile-aware dir-whip-config.yaml location (stats.stats_jsonl_path pattern).
 
     HERMES_HOME may be a profile dir (parent == "profiles") -> use it directly;
     otherwise when a session profile is set, resolve via _profile_home so
@@ -467,7 +467,7 @@ def ensure_session_root():
     """Explicitly seed the config cache + session root (SCR-045 R2).
 
     The observation adapters (on_post_tool_call / on_pre_command) used
-    to call verdict._resolved_config() and discard the value; the actual
+    to call verdict.resolved_config() and discard the value; the actual
     purpose was get_cached_config's seeding side effect (cache warm-up,
     registered_ctx capture, session-root seed). Same semantics, explicit
     intent. Fail-open: any error -> None (never raises).
@@ -523,3 +523,9 @@ def reset_cache():
     state.session.session_root_initialized = False
     state.session.session_profile = None
     stats.reset()
+
+
+# Public thin aliases (SCR-045 R6): the report-facing resolution surface.
+effective_root = _effective_root
+profile_terminal_cwd = _profile_terminal_cwd
+profile_config_path = _profile_config_path

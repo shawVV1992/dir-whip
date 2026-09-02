@@ -18,18 +18,15 @@ from . import state
 
 from .config import (
     SESSION_DIR_RE,
-    _effective_root,
-    _get_hermes_home,
-    _paths_equal,
-    _profile_config_path,
-    _profile_home,
-    _profile_terminal_cwd,
+    effective_root,
     load_guard_config,
     parse_terminal_cwd,
+    profile_config_path,
+    profile_terminal_cwd,
 )
 
-from .paths import is_absolute_any
-from .stats import _stats_jsonl_path
+from .paths import get_hermes_home, is_absolute_any, paths_equal, profile_home
+from .stats import stats_jsonl_path
 
 # Diagnostic log path (v2.8 R6): single source of truth from logsetup.
 from . import logsetup
@@ -70,11 +67,11 @@ def _resolution_source(ctx):
     try:
         profile = getattr(ctx, "profile_name", None)
         if profile:
-            hermes_home = _get_hermes_home()
+            hermes_home = get_hermes_home()
             # SCR-045 R5: reuse the layout-aware resolver (both home
             # layouts; the former hand-built profiles/<name>/ probe
             # missed the profile-dir layout and mislabeled fail-open).
-            if parse_terminal_cwd(_profile_config_path(hermes_home, profile)):
+            if parse_terminal_cwd(profile_config_path(hermes_home, profile)):
                 return "profile-config"
     except Exception:
         pass
@@ -83,7 +80,7 @@ def _resolution_source(ctx):
 
 def _stats_writable():
     """Check stats.jsonl writability (Health). Returns (ok, error)."""
-    path = _stats_jsonl_path()
+    path = stats_jsonl_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
@@ -143,7 +140,7 @@ def _dir_whip_report():
     try:
         ctx = _get_cmd_ctx()
         cfg = load_guard_config()
-        root = _effective_root(ctx)
+        root = effective_root(ctx)
         lines = []
 
         # Line 1: version (plugin.yaml, unknown fallback).
@@ -185,8 +182,8 @@ def _dir_whip_report():
         # from the profile terminal.cwd (doctor logic retained).
         override = cfg.get("working_dir_root")
         if override:
-            profile_cwd = _profile_terminal_cwd(ctx)
-            if profile_cwd is not None and not _paths_equal(override, profile_cwd):
+            profile_cwd = profile_terminal_cwd(ctx)
+            if profile_cwd is not None and not paths_equal(override, profile_cwd):
                 lines.append(
                     "WARNING: dir-whip-config working_dir_root (%s) differs from "
                     "profile terminal.cwd (%s); the desktop-settings edit is "
@@ -195,7 +192,7 @@ def _dir_whip_report():
 
         # Stats File (always): stats.jsonl absolute path (session profile
         # home, 5.13/SCR-027), placed before Debug Log.
-        lines.append("Stats File: %s" % _stats_jsonl_path())
+        lines.append("Stats File: %s" % stats_jsonl_path())
 
         # Debug Log (v2.8, second-to-last): absolute path from logsetup
         # (single source of truth); suffixed (no records yet) when the
@@ -326,7 +323,7 @@ def _list_candidates():
     covered by a dirs entry. Sorted for determinism.
     """
     ctx = _get_cmd_ctx()
-    root = _effective_root(ctx)
+    root = effective_root(ctx)
     if not root:
         return None, "[dir-whip] Working Directory unresolved: cannot list candidates"
     state_map, _legacy = _load_allowlist_state()
@@ -386,7 +383,7 @@ def _handle_allow(rest):
         create = True
         rest = (rest[:m.start()] + " " + rest[m.end():]).strip()
     ctx = _get_cmd_ctx()
-    root = _effective_root(ctx)
+    root = effective_root(ctx)
     root_fwd = str(root).replace("\\", "/") if root else ""
     if not rest:
         if not root:
@@ -535,7 +532,7 @@ def _handle_remove(rest):
             files, dirs, tail="Remove: /dir-whip remove <number|name>",
         )
     ctx = _get_cmd_ctx()
-    root = _effective_root(ctx)
+    root = effective_root(ctx)
     tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
         return "Usage: /dir-whip [allow|remove|list]"
@@ -604,9 +601,9 @@ def _handle_list(rest):
     out = _render_two_sections(state_map["files"], state_map["dirs"])
     if legacy:
         out += "\n[!] ignored legacy entries: %d -- re-add via /dir-whip allow" % legacy
-    home = _get_hermes_home()
+    home = get_hermes_home()
     if state.session.session_profile:
-        home = _profile_home(home, state.session.session_profile)
+        home = profile_home(home, state.session.session_profile)
     out += "\nQuarantine: %s" % (home / "dir-whip" / "audit-quarantine")
     return out
 

@@ -17,7 +17,7 @@ line-level; comments ABOVE the key are preserved; block-style
 ``- item`` lists are never produced.
 
 Path resolution: HERMES_HOME/dir-whip/dir-whip-config.yaml with
-_profile_home awareness (stats._stats_jsonl_path pattern).
+profile_home awareness (stats.stats_jsonl_path pattern).
 """
 
 import json
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from .paths import _get_hermes_home, _profile_home
+from .paths import get_hermes_home, profile_home
 
 from . import state
 
@@ -77,13 +77,13 @@ def _format_mapping(parsed):
 def _get_config_path():
     """Locate dir-whip-config.yaml, profile-aware.
 
-    Mirrors stats._stats_jsonl_path pattern: HERMES_HOME is layout-aware.
-    When state.session.session_profile is set, resolve via _profile_home;
+    Mirrors stats.stats_jsonl_path pattern: HERMES_HOME is layout-aware.
+    When state.session.session_profile is set, resolve via profile_home;
     otherwise fallback to report's captured ctx profile or registered_ctx.
     For tests (HERMES_HOME=tmp/hermes, profile default) this returns
     tmp/hermes/dir-whip/dir-whip-config.yaml.
     """
-    home = _get_hermes_home()
+    home = get_hermes_home()
     profile = None
     try:
         if getattr(state.session, "session_profile", None):
@@ -107,7 +107,7 @@ def _get_config_path():
             pass
     if profile:
         try:
-            home = _profile_home(home, profile)
+            home = profile_home(home, profile)
         except Exception:
             pass
     return Path(home) / "dir-whip" / "dir-whip-config.yaml"
