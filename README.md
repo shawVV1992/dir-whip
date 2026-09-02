@@ -146,7 +146,7 @@ The runtime flow is built on the four-level audit ladder of spec §5.18:
 
 | Level | Name | Mechanism & surface |
 |-------|------|---------------------|
-| **L1** | teach | The fire-once notice — the only in-conversation prompt naming violations and remedies (`transform_tool_result` hook, enters the conversation exactly once) |
+| **L1** | teach | The fire-once notice — the only non-blocking, fire-once in-conversation notice naming violations and remedies (`transform_tool_result` hook, enters the conversation exactly once; the L3 gate message and the `pre_verify` nudge name them too, but only by blocking or continuing the turn) |
 | **L2** | record | `write-audit-violation` / `write-audit-gate-block` stats rows and bus events — background observability only, never in the conversation, never blocking |
 | **L3** | gate | The unresolved-violation latch — freezes all write-class calls until settlement completes |
 | **L4** | remediate | Remedies and fallback — `dir_whip_settle` / move into a Session Directory / user `/dir-whip allow` / out-of-band removal |
@@ -170,7 +170,9 @@ false passes, never false blocks**:
   variables) is allowed + logged; device paths and read-only commands are
   silently exempt.
 - **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
-  newlines, targets extracted per segment; `=`-leading targets excluded.
+  newlines, targets extracted per segment; `=`-leading redirect targets
+  excluded (redirect slots only — the `touch` / `mkdir` / `cp·mv`
+  literal-argument shapes do not filter them).
 - **Unified classify chain** (shared with the audit layer — the two can
   never disagree), scope-first T0-T4:
 
@@ -200,7 +202,7 @@ terminal commands actually landed:
 
 | Level | Audit-layer behavior |
 |-------|----------------------|
-| **L1** | The fire-once notice is the only in-conversation prompt |
+| **L1** | The fire-once notice is the only non-blocking in-conversation prompt |
 | **L2** | Stats + events stay in the background |
 | **L3** | The latch freezes every write-class call (incl. `rm` and agent-driven config edits) |
 | **L4** | Four remedies — settle / move into a session dir (out-of-band) / user `/dir-whip allow` / out-of-band removal |
@@ -219,6 +221,27 @@ terminal commands actually landed:
 > - A runtime exemption does **not** clear a recorded violation; the latch
 >   is session-scoped — once the file leaves the root, writes pass again.
 
+### Session-Start Orphan Scan
+
+At every top-level session start (after the reminder injection), the plugin
+scans the Working Directory root for **orphans** — entries left outside any
+Session Directory by a previous conversation:
+
+- **Judged by the same classify chain**: every root entry passes through
+  `classify_target`; a T4 verdict (`root-file` / `non-session-dir`) marks
+  an orphan candidate, while T0–T3 targets (outside the root, runtime
+  allowlist, config allowlist, compliant Session Directories) are
+  auto-exempt.
+- **Advise-only**: the scan never blocks and never deletes. Orphans are
+  reported once, as an in-conversation notice:
+  `NOTICE: Working Directory root has entries outside a session directory:`
+  followed by per-entry guidance — create a session directory (the same
+  `create_session_dir.py` line) then relocate the entry
+  (`mv "<root>/<entry>" "<session_dir>/Outputs/"`).
+- **Fail-open**: any scan error is silently skipped; recorded in stats as
+  the `orphan-notice` rule_key, with no bus event (the 7-event emit
+  surface is unchanged).
+
 ## Commands
 
 ### Command List
@@ -228,7 +251,7 @@ terminal commands actually landed:
 | `/dir-whip` | Print the merged report (fields under "Report Fields") | `/dir-whip` | |
 | `/dir-whip list` | Show the current allowlist (two-section numbered listing) | `/dir-whip list` | Files section first, Dirs second, one continuous numbering (the numbers used by allow / remove); ends with a `Quarantine:` line (the audit-quarantine path) |
 | `/dir-whip allow` | Enumerate allowlist candidates (two-section numbered listing + Add hint) | `/dir-whip allow` | numbering same as `list` |
-| `/dir-whip allow <number\|name\|path>` | Register entries into the allowlist, batch via commas; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | paths accept relative or absolute input; outside-root / root-itself inputs are rejected with guidance; `--create` decides the artifact by form: trailing slash or nested path → directory, bare name → root-level file |
+| `/dir-whip allow <number\|name\|path>` | Register entries into the allowlist, batch via commas or whitespace; existing paths are classified disk-aware (directory → `dirs`, file → `files`), non-existent paths follow a confirm-create protocol | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | paths accept relative or absolute input; outside-root / root-itself inputs are rejected with guidance; an existing file inside a subdirectory is rejected outright (a `files` entry can only be a root-level file); `--create` decides the artifact by form: trailing slash or nested path → directory, bare name → root-level file |
 | `/dir-whip remove` | Enumerate the allowlist's current entries (two-section numbered listing + Remove hint) | `/dir-whip remove` | numbering same as `list` |
 | `/dir-whip remove <number\|name>` | Remove entries from the allowlist; matched by name with no disk discrimination (a hand-edited double entry is removed from both sets) | `/dir-whip remove 2` · `/dir-whip remove notes.txt` | numbers are the continuous two-section numbering |
 
@@ -266,6 +289,8 @@ Fix: Create a session directory first:
   python <plugin>/skills/workspace-organization/scripts/create_session_dir.py <task_name> --workspace <Working Directory>
 Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
 User-specified path -> dir_whip_allow_path first.
+One session directory per conversation.
+mv "<Working Directory>/<first-segment>" "<session_dir>/Outputs/"    # only appended when the target's first path segment already exists as a non-compliant directory
 If this is a project directory, add it to the allowlist dirs in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
 Reply using the [Reason]/[Next] template.
 
@@ -334,10 +359,13 @@ session start):
 
 ![Config resolution chain — plugin side](assert/image/config-plugin-chain-en.svg)
 
-- Safe YAML parsing (`safe_load`): a missing or unparseable file fails open
-  to an empty config; a `/dir-whip` WARNING prints when the override differs
-  from the profile `terminal.cwd`; on fail-open the guard is off
-  (`State: disabled`, Health lists the issues).
+- Safe YAML parsing (`safe_load`): a missing or unparseable file falls
+  back to an empty config (strict empty allowlist) while Working
+  Directory resolution continues through the profile `terminal.cwd` —
+  the guard stays enabled; only when the whole resolution chain fails
+  does the guard turn off (`State: disabled`, Health lists the issues).
+  A `/dir-whip` WARNING prints when the override differs from the
+  profile `terminal.cwd`.
 
 **Script side** (standalone · line-parse fallback when no yaml library):
 
@@ -400,7 +428,10 @@ Every verdict is appended as one JSON line to
 `HERMES_HOME/dir-whip/stats.jsonl` (rolls over to `stats.jsonl.1` at 5 MB).
 Recorded: interception verdicts, runtime exemptions, approval observations,
 and the write audit's violations and gate blocks
-(`write-audit-violation` / `write-audit-gate-block`), split by subagent.
+(`write-audit-violation` / `write-audit-gate-block`), split by subagent;
+observe-only rows (`session-reminder`, `orphan-notice`, `pre-verify-nudge`,
+`write-audit-settle` / `-rejected`, `subagent-start` / `subagent-stop`,
+`pre-command:*`) are recorded alongside.
 Each line carries two groups of fields:
 
 | Field | Meaning | Notes |
@@ -416,11 +447,19 @@ Each line carries two groups of fields:
 | `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
 
-The file never contains file contents, absolute paths, or prompt text.
+The file never contains file contents or absolute paths, and verdict rows
+carry no free text. Observe-only rows are the one exception: `pre-command`
+and subagent lifecycle rows record host-provided fields (raw command
+arguments, child role/goal) verbatim in the `reason` field.
 Observability surfaces:
 
 - **Live event stream** — verdicts and audit results fan out as the 7
-  `dir-whip:*` events on the Hermes event bus; subscribe to observe.
+  `dir-whip:*` events on the Hermes event bus; subscribe to observe:
+  `blocked` / `external-write` / `allowlisted` / `approval-requested` /
+  `approval-resolved` / `write-audit-violation` /
+  `write-audit-gate-block`. (`approval-requested` fires only when the
+  host approval payload carries `request`/`entry` fields, which current
+  hermes-agent payloads do not — in practice it stays silent.)
 - **`/dir-whip` report** — the Stats File path (cross-session totals),
   Health (stats health), and Debug Log (config source checks).
 - **Log levels** — `block` / fail-open log at WARNING, `external-write` at

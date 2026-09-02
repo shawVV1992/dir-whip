@@ -84,6 +84,9 @@
   <text x="680" y="440" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">兜底工具</text>
   <text x="680" y="463" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">allow_path · settle · /dir-whip</text>
 
+  <rect x="560" y="496" width="240" height="40" rx="10" fill="url(#slateGrad)" stroke="#8b949e" stroke-width="1.5" filter="url(#soft)"/>
+  <text x="680" y="516" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#8b949e">会话开始孤儿扫描 · 只劝不拦</text>
+
   <g fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round">
     <path d="M680,226 L680,272" marker-end="url(#ah-cyan)"/>
     <path d="M680,356 L680,402" marker-end="url(#ah-cyan)"/>
@@ -110,7 +113,7 @@
   <path d="M902,486 V600 A98,20 0 0 0 1098,600 V486" fill="url(#cylGrad)" stroke="#67e8f9" stroke-width="1.5"/>
   <ellipse cx="1000" cy="486" rx="98" ry="20" fill="#232d3b" stroke="#67e8f9" stroke-width="1.5"/>
   <text x="1000" y="548" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="#e6edf3">工作目录</text>
-  <text x="1000" y="572" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">会话目录 / 白名单 / .hermes</text>
+  <text x="1000" y="572" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">会话目录 / 白名单条目</text>
 
   <!-- ======== 边 ======== -->
   <g fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">

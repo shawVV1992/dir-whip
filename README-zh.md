@@ -124,7 +124,7 @@ hermes plugins disable dir-whip
 
 | 级别 | 名称 | 机制与位置 |
 |------|------|-----------|
-| **L1** | teach（教育） | fire-once 通告——违规与出路的唯一对话内提示（`transform_tool_result` 钩子，只进对话一次） |
+| **L1** | teach（教育） | fire-once 通告——唯一**不阻断**的对话内违规通告，点名违规与出路（`transform_tool_result` 钩子，只进对话一次；L3 闸门消息与 `pre_verify` 续推也会点名，但分别以拦截、续推的方式） |
 | **L2** | record（记录） | `write-audit-violation` / `write-audit-gate-block` 的统计行与总线事件——纯后台可观测，不进对话、不拦截 |
 | **L3** | gate（闸门） | 未清偿违规的闩锁——冻结所有写类调用，直至清偿完成 |
 | **L4** | remediate（清偿） | 清偿出路与兜底——`dir_whip_settle` / 移入会话目录 / 用户 `/dir-whip allow` / 带外移除 |
@@ -138,7 +138,7 @@ hermes plugins disable dir-whip
 
 - 拦截对象仅三种写类工具：`write_file` / `patch` / `terminal`；其余工具与只读命令不进入判定。
 - **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地 / 可解析的 `mkdir`、`curl -o`、`wget -O` 目标——rule_key `terminal-mkdir` / `terminal-download`）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
-- **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头目标排除。
+- **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头的重定向目标排除（仅限重定向槽位——`touch` / `mkdir` / `cp`·`mv` 字面参数形状不过滤）。
 - **统一分类链**（与审计层共用，判定永不矛盾），定稿 T0-T4、范围置首：
 
 | 级别 | 判定范围 | 结果 | 说明 |
@@ -159,7 +159,7 @@ hermes plugins disable dir-whip
 
 | 级别 | 审计层表现 |
 |------|-----------|
-| **L1** | fire-once 通告是对话内唯一提示 |
+| **L1** | fire-once 通告是唯一不阻断的对话内提示 |
 | **L2** | 统计与事件纯后台 |
 | **L3** | 闩锁冻结一切写类调用（含 `rm` 与代理发起的配置编辑） |
 | **L4** | 四条出路——settle / 移入会话目录（须带外）/ 用户 `/dir-whip allow` / 带外移除 |
@@ -172,6 +172,21 @@ hermes plugins disable dir-whip
 > - 闩锁期间*所有*写入类调用均被冻结——含 `rm` 与代理发起的配置编辑；会话内除清偿外无任何解除旁路（`dir_whip_settle` / 移入会话目录 / 用户 allow / 带外移除）。
 > - 运行时豁免**不清偿**已记录违规；闩锁仅限当前会话，文件离开根目录即恢复放行。
 
+### 会话开始孤儿扫描
+
+每个顶层会话开始时（提醒注入之后），插件扫描工作目录根下的**孤儿**——先前对话
+遗留在任何会话目录之外的条目：
+
+- **同一分类链判定**：每个根级条目都过 `classify_target`；T4 判定
+  （`root-file` / `non-session-dir`）即孤儿候选，T0-T3 目标（根外、运行时
+  白名单、config 白名单、合规会话目录）自动豁免。
+- **只劝不拦**：扫描永不阻断、永不删除。孤儿以对话内通告形式报告一次：
+  `NOTICE: Working Directory root has entries outside a session directory:`，
+  随后逐条给出指引——先建会话目录（同一条 `create_session_dir.py` 命令行），
+  再搬迁条目（`mv "<root>/<entry>" "<session_dir>/Outputs/"`）。
+- **fail-open**：扫描出错一律静默跳过；stats 记 `orphan-notice` 规则键，
+  不发总线事件（7 事件发射面不变）。
+
 ## 命令
 
 ### 命令清单
@@ -181,7 +196,7 @@ hermes plugins disable dir-whip
 | `/dir-whip` | 输出合并报告（字段见「报告字段」） | `/dir-whip` | |
 | `/dir-whip list` | 查看当前白名单（两段式编号列表） | `/dir-whip list` | Files 段在前、Dirs 段在后，共用一段连续编号（allow / remove 的编号即此编号）；末行为 `Quarantine:` 隔离区路径 |
 | `/dir-whip allow` | 枚举白名单候选条目（两段式编号列表 + Add 提示） | `/dir-whip allow` | 编号规则同 `list` |
-| `/dir-whip allow <编号\|名称\|路径>` | 向白名单登记条目，逗号批量；现存路径按磁盘判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议 | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | 路径接受相对或绝对输入，根外/根自身输入被引导拒绝；`--create` 按输入形态创建产物：末尾斜杠或嵌套路径→目录，裸文件名→根级文件 |
+| `/dir-whip allow <编号\|名称\|路径>` | 向白名单登记条目，逗号或空白批量；现存路径按磁盘判别（目录→`dirs`、文件→`files`），不存在路径走确认-创建协议 | `/dir-whip allow notes.txt` · `/dir-whip allow projects/foo` · `/dir-whip allow 1,3` · `/dir-whip allow docs/ --create` | 路径接受相对或绝对输入，根外/根自身输入被引导拒绝；已存在于子目录中的文件直接拒绝（`files` 条目仅限根级文件）；`--create` 按输入形态创建产物：末尾斜杠或嵌套路径→目录，裸文件名→根级文件 |
 | `/dir-whip remove` | 枚举白名单当前条目（两段式编号列表 + Remove 提示） | `/dir-whip remove` | 编号规则同 `list` |
 | `/dir-whip remove <编号\|名称>` | 从白名单移除条目；按名称匹配、不做磁盘判别（双段同名一并移除） | `/dir-whip remove 2` · `/dir-whip remove notes.txt` | 编号即两段式连续编号 |
 
@@ -218,6 +233,8 @@ Fix: Create a session directory first:
   python <plugin>/skills/workspace-organization/scripts/create_session_dir.py <task_name> --workspace <Working Directory>
 Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
 User-specified path -> dir_whip_allow_path first.
+One session directory per conversation.
+mv "<Working Directory>/<first-segment>" "<session_dir>/Outputs/"    # 仅当目标首段路径已是命名不合规的现存目录时才追加
 If this is a project directory, add it to the allowlist dirs in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
 Reply using the [Reason]/[Next] template.
 
@@ -284,7 +301,7 @@ allowlist:
 
 ![config 解析链——插件侧](assert/image/config-plugin-chain.svg)
 
-- 安全 YAML 解析（`safe_load`）：文件缺失或解析失败 fail-open 到空配置；覆盖值与档案 `terminal.cwd` 不一致时 `/dir-whip` 输出 WARNING；fail-open 时守卫关闭（`State: disabled`，Health 列出问题）。
+- 安全 YAML 解析（`safe_load`）：文件缺失或解析失败回退空配置（白名单严格为空），Working Directory 解析链继续走档案 `terminal.cwd`——守卫保持开启；仅当整条解析链失败时守卫才关闭（`State: disabled`，Health 列出问题）。覆盖值与档案 `terminal.cwd` 不一致时 `/dir-whip` 输出 WARNING。
 
 **脚本侧**（独立运行 · 无 yaml 库时行解析兜底）：
 
@@ -333,7 +350,10 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 每次判定以一行 JSON 追加写入 `HERMES_HOME/dir-whip/stats.jsonl`（超过 5 MB
 滚动为 `stats.jsonl.1`）。记录范围：拦截判定、运行时豁免、审批观察，以及
 写入审计的违规与闸门拦截（`write-audit-violation` /
-`write-audit-gate-block`），按子代理切分。每行字段分两组：
+`write-audit-gate-block`），按子代理切分；observe-only 行
+（`session-reminder`、`orphan-notice`、`pre-verify-nudge`、
+`write-audit-settle` / `-rejected`、`subagent-start` / `subagent-stop`、
+`pre-command:*`）一并记录。每行字段分两组：
 
 | 字段 | 含义 | 说明 |
 | ---- | ---- | ---- |
@@ -348,10 +368,16 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 | `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
 
-全文件不含文件内容、绝对路径或提示词文本。可观察入口：
+全文件不含文件内容与绝对路径，判定行不含自由文本。唯一例外是 observe-only
+行：`pre-command` 与子代理生命周期行会把宿主提供的原文（原始命令参数、子代理
+角色/目标）逐字记入 `reason` 字段。可观察入口：
 
 - **实时事件流**——判定与审计结果以 7 类 `dir-whip:*` 事件发到 Hermes 事件
-  总线，订阅即观测；
+  总线，订阅即观测：`blocked` / `external-write` / `allowlisted` /
+  `approval-requested` / `approval-resolved` / `write-audit-violation` /
+  `write-audit-gate-block`（`approval-requested` 仅在宿主审批 payload 携带
+  `request`/`entry` 字段时触发，当前 hermes-agent 的 payload 不带——实际
+  保持静默）；
 - **`/dir-whip` 报告**——Stats File 路径（跨会话汇总入口）、Health（统计
   健康）与 Debug Log（配置来源核对）；
 - **日志分级**——`block` / fail-open 记 WARNING，`external-write` 记 INFO，

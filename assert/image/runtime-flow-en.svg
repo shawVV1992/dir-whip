@@ -58,7 +58,7 @@
   <g fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M430,116 L430,150" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
     <path d="M566,184 L654,184" stroke="#f85149" marker-end="url(#ah-red)"/>
-    <path d="M430,228 L430,262" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
+    <path d="M430,240 L430,262" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
     <path d="M566,304 L654,304" stroke="#3fb950" marker-end="url(#ah-green)"/>
     <path d="M430,340 L430,374" stroke="#f85149" marker-end="url(#ah-red)"/>
     <path d="M430,440 L430,478" stroke="#d29922" marker-end="url(#ah-amber)"/>
@@ -88,10 +88,11 @@
   <text x="430" y="80" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ffffff">Write-class tool call</text>
   <text x="430" y="101" text-anchor="middle" dominant-baseline="central" font-size="10.5" fill="#cffafe">write_file · patch · terminal</text>
 
-  <rect x="300" y="156" width="260" height="72" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
+  <rect x="300" y="156" width="260" height="84" rx="10" fill="url(#cyanGrad)" stroke="#67e8f9" stroke-width="1.5" filter="url(#soft)"/>
   <text x="430" y="178" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="700" fill="#ffffff">Front layer: three-tier verdict</text>
   <text x="430" y="198" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">deterministic → classify chain · uncertain → allow+log</text>
-  <text x="430" y="216" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">device paths / read-only → silent allow</text>
+  <text x="430" y="212" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">device paths / read-only → silent allow</text>
+  <text x="430" y="226" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#cffafe">2nd session-dir creation → block (session-dir-limit)</text>
 
   <rect x="660" y="156" width="260" height="56" rx="10" fill="url(#redGrad)" stroke="#f85149" stroke-width="1.8" filter="url(#soft)"/>
   <text x="790" y="184" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ff7b72">block + fix guidance</text>
@@ -110,7 +111,8 @@
   <!-- ======== Four-level ladder ======== -->
   <rect x="280" y="484" width="300" height="84" rx="12" fill="url(#amberGrad)" stroke="#d29922" stroke-width="2" filter="url(#glow)"/>
   <text x="430" y="510" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#f0b429">L1 · teach notice</text>
-  <text x="430" y="538" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">fire-once — the only in-conversation prompt · lists remedies</text>
+  <text x="430" y="536" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">fire-once — the only non-blocking in-conversation notice</text>
+  <text x="430" y="552" text-anchor="middle" dominant-baseline="central" font-size="9.5" fill="#8b949e">lists remedies · lazily registers settle</text>
 
   <rect x="280" y="600" width="300" height="84" rx="12" fill="url(#slateGrad)" stroke="#8b949e" stroke-width="2" filter="url(#soft)"/>
   <text x="430" y="626" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="800" fill="#e6edf3">L2 · record</text>

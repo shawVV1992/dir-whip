@@ -49,8 +49,8 @@
     <path d="M430,215 L430,255" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
     <path d="M430,345 L430,385" stroke="#22d3ee" marker-end="url(#ah-cyan)"/>
     <path d="M540,170 L590,170" stroke="#3fb950" marker-end="url(#ah-green)"/>
-    <path d="M545,300 L650,300 L650,198" stroke="#3fb950" marker-end="url(#ah-green)"/>
-    <path d="M540,430 L690,430 L690,198" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M545,300 L590,300" stroke="#3fb950" marker-end="url(#ah-green)"/>
+    <path d="M540,430 L590,430" stroke="#3fb950" marker-end="url(#ah-green)"/>
     <path d="M430,475 L430,527" stroke="#f85149" marker-end="url(#ah-red)"/>
   </g>
 
@@ -58,8 +58,8 @@
      paint-order="stroke" stroke="#0a0e14" stroke-width="3.5" stroke-linejoin="round">
     <text x="564" y="157" fill="#7ee787">yes</text>
     <text x="404" y="238" fill="#22d3ee">no</text>
-    <text x="594" y="287" fill="#7ee787">yes</text>
-    <text x="596" y="417" fill="#7ee787">hit</text>
+    <text x="566" y="287" fill="#7ee787">yes</text>
+    <text x="566" y="417" fill="#7ee787">hit</text>
     <text x="404" y="368" fill="#22d3ee">no</text>
     <text x="396" y="505" fill="#ff7b72">miss</text>
   </g>
@@ -73,11 +73,17 @@
   <rect x="590" y="142" width="250" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
   <text x="715" y="170" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="700" fill="#7ee787">Working Directory = override</text>
 
+  <rect x="590" y="272" width="250" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="715" y="300" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="700" fill="#7ee787">Working Directory = profile value</text>
+
   <polygon points="430,255 545,300 430,345 315,300" fill="url(#diaGrad)" stroke="#a371f7" stroke-width="1.8" filter="url(#soft)"/>
   <text x="430" y="300" text-anchor="middle" dominant-baseline="central" font-size="13.5" font-weight="600" fill="#e6edf3">profile terminal.cwd?</text>
 
   <polygon points="430,385 540,430 430,475 320,430" fill="url(#diaGrad)" stroke="#a371f7" stroke-width="1.8" filter="url(#soft)"/>
   <text x="430" y="430" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="600" fill="#e6edf3">candidate-root matching</text>
+
+  <rect x="590" y="402" width="250" height="56" rx="10" fill="url(#allowGrad)" stroke="#3fb950" stroke-width="1.8" filter="url(#soft)"/>
+  <text x="715" y="430" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="700" fill="#7ee787">Working Directory = matched root</text>
 
   <rect x="290" y="527" width="280" height="56" rx="10" fill="url(#blockGrad)" stroke="#f85149" stroke-width="1.8" filter="url(#soft)"/>
   <text x="430" y="555" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#ff7b72">CWD fallback / exit 2</text>
