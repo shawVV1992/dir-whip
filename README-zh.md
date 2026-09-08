@@ -11,11 +11,11 @@
 
 每个产出文件的会话都可能把工作区搅乱：报告、草稿、临时文件散落在 agent
 当时所在的目录里。**dir-whip** 为 [Hermes-agent](https://github.com/NousResearch/hermes-agent)
-的每次对话在工作目录（Initial Project Directory）内安一个唯一的家——带时间戳的
+的每次对话在工作目录内安一个唯一的家——带时间戳的
 会话目录——并以三层保障强制执行：捆绑技能教导纪律、插件以 9 个钩子在落地前
 拦截违规、审计层捕获漏网之鱼。
 
-注意：dir-whip 仅管控工作目录（Initial Project Directory）。工作目录之外的写入放行并记日志（`external-write`）；活跃 Hermes 项目覆盖 agent CWD 时仅跳过会话开始提醒，工作目录内的拦截照常生效。
+注意：dir-whip 仅管控工作目录。工作目录之外的写入放行并记日志（`external-write`）；活跃 Hermes 项目覆盖 agent CWD 时仅跳过会话开始提醒，工作目录内的拦截照常生效。
 
 [核心能力](#核心能力) ·
 [安装与快速上手](#安装与快速上手) · [工作原理](#工作原理) ·
@@ -278,7 +278,7 @@ Health: Good
 
 可选、由用户维护，位于 `HERMES_HOME/dir-whip/dir-whip-config.yaml`
 （`HERMES_HOME` 环境变量优先；Windows 默认 `%LOCALAPPDATA%/hermes`，未设时
-回退 `~/hermes`；POSIX 默认 `~/.hermes`）。会话档案启用时落至
+回退 `~/hermes`；POSIX 默认 `~/.hermes`）。档案启用时落至
 `profiles/<name>/dir-whip/`。
 
 | 字段 | 含义 |
@@ -357,7 +357,7 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 
 | 字段 | 含义 | 说明 |
 | ---- | ---- | ---- |
-| `profile` | 会话档案 | 统计文件落在该档案的 dir-whip 目录，路径随会话档案切换 |
+| `profile` | 档案 | 统计文件落在该档案的 dir-whip 目录，路径随档案切换 |
 | `session_id` | 会话标识 | 当前判定所属会话 |
 | `is_subagent` | 子代理标记 | 统计按父/子代理切分 |
 | `started_at` | 会话开始时间 | 会话上下文的一部分 |
