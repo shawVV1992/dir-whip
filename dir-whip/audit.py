@@ -109,7 +109,7 @@ def audit_classify_diff(diff, before, after, working_dir_root, allowlist,
     """Classify a snapshot diff into violations (spec 5.18, v2.6 B2).
 
     Only FILE entries are judged (is_dir -> never a violation; directory
-    mtimes -- session dirs, `.git/`, `.hermes/` -- are ignored). A
+    mtimes -- session dirs, `.git/` -- are ignored). A
     violation is a NEW or MODIFIED root-level file that classifies as a
     root-file block through the shared chain: not on the allowlist file
     entries, not under an allowlist prefix, not inside any session directory
