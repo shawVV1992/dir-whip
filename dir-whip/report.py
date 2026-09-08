@@ -320,8 +320,9 @@ def _list_candidates():
 
     Returns ((file_candidates, dir_candidates), error_string). Files =
     top-level files minus already-listed files entries; Dirs = top-level
-    directories minus session-format dirs, .hermes/, and subtrees already
-    covered by a dirs entry. Sorted for determinism.
+    directories minus session-format dirs and subtrees already
+    covered by a dirs entry (a leftover .hermes/ is enumerated like any
+    other non-session dir, SCR-046 R1). Sorted for determinism.
     """
     ctx = _get_cmd_ctx()
     root = effective_root(ctx)
@@ -344,8 +345,10 @@ def _list_candidates():
                         name = entry.name
                         if SESSION_DIR_RE.match(name):
                             continue
-                        if _case_eq(name, ".hermes"):
-                            continue
+                        # SCR-046 R1 (v2.14): the .hermes skip is removed --
+                        # a leftover root .hermes/ (pre-v0.6.3 quarantine
+                        # residue) is enumerated like any other non-session
+                        # directory (the SCR-043 R5 four-way consistency).
                         if any(_case_eq(name, seg) for seg in dir_first_segments):
                             continue
                         dir_cands.append(name)
