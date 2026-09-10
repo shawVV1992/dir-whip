@@ -17,7 +17,7 @@ File placement discipline for Hermes agent workspaces: session directory structu
 ## When to Use
 
 Use when:
-- Before first file write in a Hermes workspace - you MUST create session dir first
+- Before first file write in a Hermes workspace - Session Directory first: reuse the conversation's, or create one when none exists
 - Creating, saving, writing, moving, or deleting files in a Hermes workspace
 - Organizing deliverables or designing workspace layout
 - Auditing workspace compliance ("tidy workspace", cron governance)
@@ -120,7 +120,7 @@ Reply with the [Reason]/[Next] template:
 
 ```
 [Reason] The target <path> is not allowed: <rule reason>.
-[Next] I will create a Session Directory and write there:
+[Next] I will write into the conversation's Session Directory (reuse it if it already exists; create one only when none does):
   python scripts/create_session_dir.py <task_name> --workspace <working_dir>
   then write to its Outputs/ or .tmp/ subdirectory.
 ```
@@ -146,7 +146,7 @@ Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touc
 1. Prefer Session Directories for all writes
 2. One session directory per conversation - a second creation attempt is blocked (session-dir limit)
 3. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged)
-4. Blocked -> create a Session Directory and re-target (never bypass the guard)
+4. Blocked -> re-target into the conversation's Session Directory (reuse it; create one only when none exists; never bypass the guard)
 
 ## Governance & Cron
 
@@ -196,4 +196,4 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 
 ## Remember
 
-Classify before write -> session dir for all writes -> root forbid -> when blocked, create a session dir and retry.
+Classify before write -> session dir for all writes -> root forbid -> when blocked, reuse the conversation's session dir (create one only when none exists) and retry.
