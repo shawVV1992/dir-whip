@@ -213,8 +213,18 @@ def register(ctx):
 # ---------------------------------------------------------------- Hook adapters (fail-open single layer)
 
 def _guard_hook(tool_name, args, task_id=None, **kwargs):
-    """Pre-tool-call hook adapter (5.8: never raises; fail-open -> None)."""
+    """Pre-tool-call hook adapter (5.8: never raises; fail-open -> None).
+
+    SCR-048 R6 (5.13 v2.16): lazy stats session-field backfill -- after a
+    host process restart (on_session_start not yet re-fired) the first
+    guarded call whose payload carries a session_id restores stats
+    attribution from this call onward. Existing values are NEVER
+    overwritten (idempotent); profile / started_at stay unknown (None).
+    """
     try:
+        session_id = kwargs.get("session_id")
+        if session_id and not state.stats.session.get("session_id"):
+            stats.set_session(session_id=session_id)
         return verdict.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
