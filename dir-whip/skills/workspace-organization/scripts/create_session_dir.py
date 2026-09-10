@@ -54,6 +54,12 @@ for _stream in (sys.stdout, sys.stderr):
 ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_TASK_NAME_LEN = 80
 
+# SCR-048 R5 (spec 4.1): session-name detection is a script-local copy of
+# the audit_workspace.py precedent (SESSION_NAME_RE + strptime) -- scripts
+# stay stdlib-only with no package imports (the dual-implementation
+# boundary is kept).
+SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
+
 EXIT_OK = 0
 EXIT_PARAM_ERROR = 1
 EXIT_BOUNDARY_ERROR = 2
@@ -65,11 +71,55 @@ PLACEMENT_HINT = (
     "Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>."
 )
 
+# Same-day advisory (spec 4.1 v2.16 SCR-048 R5): ONE stderr note line when
+# the workspace already holds same-day Session Directories. Advisory only:
+# creation is never blocked, exit codes and the two-line stdout contract
+# are unchanged; when the note coexists with the fail-open resolution
+# WARNING the warning comes first (the resolver wrote it earlier).
+ADVISORY_NOTE_TEMPLATE = (
+    "note: workspace already has Session Directory(s) today: %s; reuse the "
+    "existing one for the same conversation instead of creating another\n"
+)
+
 
 def sanitize_task_name(name):
     """Replace Windows-illegal filename chars with underscore, truncate to 80."""
     name = ILLEGAL_CHARS.sub("_", name)
     return name[:MAX_TASK_NAME_LEN]
+
+
+def is_session_name(name):
+    """True if name is YYYYMMDD_HHMMSS or YYYYMMDD_HHMMSS_TaskName with a real timestamp."""
+    if not SESSION_NAME_RE.match(name):
+        return False
+    try:
+        datetime.datetime.strptime(name[:15].replace("_", ""), "%Y%m%d%H%M%S")
+    except ValueError:
+        return False
+    return True
+
+
+def same_day_session_dirs(workspace, today):
+    """Sorted names of same-day session-format DIRECTORIES under workspace."""
+    names = []
+    try:
+        entries = os.listdir(workspace)
+    except OSError:
+        return names
+    for name in sorted(entries):
+        if name[:8] != today or not is_session_name(name):
+            continue
+        if os.path.isdir(os.path.join(workspace, name)):
+            names.append(name)
+    return names
+
+
+def advisory_note(workspace):
+    """Append ONE same-day reuse note to stderr (advisory only; spec 4.1)."""
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    names = same_day_session_dirs(workspace, today)
+    if names:
+        sys.stderr.write(ADVISORY_NOTE_TEMPLATE % ", ".join(names))
 
 
 def main(argv=None):
@@ -132,6 +182,12 @@ def main(argv=None):
         sys.stdout.write(target.replace(os.sep, "/") + "\n")
         sys.stdout.write(PLACEMENT_HINT + "\n")
         return EXIT_BOUNDARY_ERROR
+
+    # SCR-048 R5 (spec 4.1): same-day advisory AFTER validation and the
+    # target-absent check, BEFORE creation. The exit-2 boundary-mismatch
+    # path never reaches here; creation is not blocked, the exit code is
+    # unchanged, and stdout stays exactly two lines.
+    advisory_note(workspace)
 
     os.makedirs(os.path.join(target, "Outputs"))
     os.makedirs(os.path.join(target, ".tmp"))

@@ -35,18 +35,18 @@ IF project_list tool available AND active_id not null AND CWD under project fold
   -> PROJECT MODE. Stop. This skill does not apply.
 IF CWD not under the current profile's Working Directory
   -> PROJECT MODE. Stop. This skill does not apply.
-IF no session dir exists for this task
-  -> DEFAULT MODE. Create session dir first: python scripts/create_session_dir.py <task> --workspace <root>, then proceed to Layer 1.
+IF a Session Directory exists for this conversation
+  -> DEFAULT MODE. Reuse it: write to its Outputs/ (deliverables) or .tmp/ (scratch), then proceed to Layer 1.
 OTHERWISE
-  -> DEFAULT MODE. Proceed to Layer 1.
+  -> DEFAULT MODE. Create a Session Directory first: python scripts/create_session_dir.py <task> --workspace <root>, then proceed to Layer 1.
 ```
 
 ## Quick Reference
 
 | Scenario | Action |
 |----------|--------|
-| Writing any file | Classify target -> create session dir if needed -> write to `Outputs/` or `.tmp/` |
-| Root write blocked | Create session dir, re-target there |
+| Writing any file | Classify target -> reuse the conversation's Session Directory (create only when none exists) -> write to `Outputs/` or `.tmp/` |
+| Root write blocked | Reuse the conversation's Session Directory, re-target there (create only when none exists) |
 | Delete / overwrite / move | Confirmation Protocol (list files -> wait for explicit yes) |
 | User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged) |
 | Subagent writing | Write to parent-passed dir, never create own session dir |
@@ -66,11 +66,20 @@ Triggered by: any file write, create, save, delete, or move.
 
 ### 2. Session directory discipline
 
-- Session dirs are created LAZILY at first file write, not at conversation start - you MUST create session dir before first write
-- Not inside a session dir? You MUST create one before first write:
-  `python scripts/create_session_dir.py <task> --workspace <root>`
-  Example: `python scripts/create_session_dir.py auth-refactor --workspace E:/ws` (replace <task> and <root> with your values)
-- Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
+One session directory per conversation: a conversation that already has a
+Session Directory REUSES it; never create a second one for the same
+conversation (the guard blocks a second creation attempt).
+
+1. Am I inside a valid Session Directory? YES -> proceed with the operation.
+2. NO -> does THIS CONVERSATION already have a Session Directory? Judge by
+   conversation identity, NOT by the current task or the current location.
+   - YES -> REUSE it: write into its `Outputs/` and `.tmp/`
+   - NO -> create it first (lazy creation at first file write, NOT at
+     conversation start):
+     `python scripts/create_session_dir.py <task> --workspace <root>`
+     Example: `python scripts/create_session_dir.py auth-refactor --workspace E:/ws` (replace <task> and <root> with your values)
+     then write to `Outputs/` or `.tmp/` within it
+3. Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
 - Root allows ONLY: `allowlist` `files` entries, session-format dirs (`allowlist` `dirs` subtrees likewise exempt)
 - Project directories inside the workspace can be exempted wholesale via an
   `allowlist` `dirs` entry (recursive subtree) - add via `/dir-whip allow <path>`
@@ -164,17 +173,21 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Root write blocked | No session dir created yet | Run create_session_dir.py, re-target |
+| Root write blocked | No session dir available | Reuse the conversation's Session Directory (create only when none exists), re-target |
 | Deliverable in `.tmp/` | Placement not classified | User-requested files -> `Outputs/` |
 | Session dir created at conversation start | Misunderstood lazy creation | Create at first file write only |
+| Second Session Directory in one conversation | Reuse rule missed | Reuse the existing Session Directory; a second creation is blocked |
+| Lazy creation misread as per-task | Task-domain judgment | Judge by conversation, not by task; a new task reuses the same dir |
+| Existing Session Directory ignored | New task treated as a new conversation | Reuse it: write to its `Outputs/` or `.tmp/` |
 | Deleted without confirmation | Instruction treated as confirmation | List files, wait for explicit yes |
 | Existing repos outside workspace | Relocation attempted | Point via rules file, don't relocate |
-| First write without session dir (missed trigger) | Skill not triggered before first write | Before first file write, you MUST create session dir: `python scripts/create_session_dir.py <task> --workspace <root>` |
+| First write without session dir (missed trigger) | Skill not triggered before first write | Before first file write, reuse the conversation's Session Directory or create one: `python scripts/create_session_dir.py <task> --workspace <root>` |
 
 ## Verification
 
 - Classified the target before every write?
-- Created session dir before first write?
+- Reused the conversation's existing Session Directory (no second dir created)?
+- Judged reuse by conversation, not by the current task or location?
 - File inside a session dir, in the correct `Outputs/`/`.tmp/`?
 - No non-whitelist files at the Working Directory root? (root allows only
   `allowlist` `files` entries, session-format dirs, and `allowlist` `dirs`
