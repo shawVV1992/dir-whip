@@ -319,6 +319,33 @@ def _slot_occupied(owner):
         )
 
 
+def _heal_missing_claim(owner, root):
+    """Release a claim whose bound directory vanished (spec 5.19, SCR-048 R2).
+
+    A claim exists but `root/<claim>` is no longer a directory on disk ->
+    pop the claim + its sidecar metadata and persist (write-through
+    deletion). Called ahead of the occupied determination in guard_create
+    and guard_script (ahead of the MV-1 rename branch -- a vanished
+    directory cannot be an mv source); after healing the normal free-slot
+    flow rebinds. Fail-open: returns True when a claim was released,
+    False otherwise; never raises.
+    """
+    try:
+        with state.session_dirs.lock:
+            claim = state.session_dirs.claims.get(owner)
+            if claim is None or _entry_alive(root, claim):
+                return False
+            state.session_dirs.claims.pop(owner, None)
+            state.session_dirs.claim_meta.pop(owner, None)
+            _persist_locked()
+            return True
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: session_dirs heal error (fail-open): %s", exc
+        )
+        return False
+
+
 # ---------------------------------------------------------------- Pure helpers
 
 def _same_name(a, b):
@@ -514,6 +541,9 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
     - the bound dir itself (Windows casefold): allow (BND-6 / BND-7);
     - free slot + first-segment dir absent (creation signal): BIND and
       allow (BND-1..4);
+    - occupied slot whose claimed dir vanished (SCR-048 R2): the claim is
+      released (pop + persist) and the normal free-slot flow applies --
+      no phantom block, no mv-from-a-deleted-dir;
     - occupied slot + first-segment dir absent: an mv rename OF the
       bound dir (terminal_cp_mv_src over tokens) transfers the claim
       and allows (MV-1); anything else blocks session-dir-limit
@@ -544,6 +574,14 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
             return None
         if exists:
             return None  # existing other session dir: no bind (BND-5)
+        # SCR-048 R2 (spec 5.19): heal a vanished claimed dir ahead of the
+        # occupied determination / MV-1 branch; after healing the normal
+        # free-slot binding flow applies.
+        if _heal_missing_claim(owner, working_dir_root):
+            claim = _claim_of(owner)
+        if claim is None and not _slot_occupied(owner):
+            _bind(owner, first_seg, working_dir_root)
+            return None
         if tokens and target is not None:
             src = terminal_cp_mv_src(tokens, target)
             if src is not None and _same_name(
@@ -568,16 +606,21 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
     verdict._guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
     the heredoc form stays gated).
 
-    is_session_dir_script(tokens) False -> None (no interference). With
-    the slot occupied (claim OR pending marker) -> session-dir-limit
-    block. Otherwise the pending_create marker is armed for the audit
-    post-diff binding observer and the command proceeds (the normal
-    uncertain-tier allow+log still fires downstream, OB-5).
+    is_session_dir_script(tokens) False -> None (no interference). A
+    vanished claimed dir is released first (SCR-048 R2: no phantom
+    block); with the slot still occupied (claim OR pending marker) ->
+    session-dir-limit block. Otherwise the pending_create marker is
+    armed for the audit post-diff binding observer and the command
+    proceeds (the normal uncertain-tier allow+log still fires downstream,
+    OB-5).
     """
     try:
         if not is_session_dir_script(tokens):
             return None
         owner = _owner(session_id)
+        # SCR-048 R2 (spec 5.19): heal before the occupied determination;
+        # a released claim frees the slot, a pending marker still blocks.
+        _heal_missing_claim(owner, working_dir_root)
         if _slot_occupied(owner):
             return _limit_block(
                 working_dir_root, _claim_of(owner), is_subagent, tool_name,
