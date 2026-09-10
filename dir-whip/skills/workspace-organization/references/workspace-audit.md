@@ -55,11 +55,21 @@ checklist defaults below.
 
 ### Step 2: Inventory the Workspace
 
+Top level first:
+
 ```bash
-ls -laR "<WORKSPACE_PATH>/"
+ls -la "<WORKSPACE_PATH>/"
 ```
 
-Capture the full tree - root, session dirs, their contents.
+Then list each Session Directory's contents on demand (large workspaces:
+avoid a bare recursive listing of the whole tree):
+
+```bash
+ls -la "<WORKSPACE_PATH>/<session_dir>/"
+```
+
+Capture the root inventory and the session dirs you need to inspect -
+not one full recursive dump.
 
 ### Step 3: Identify Violations
 

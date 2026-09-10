@@ -30,11 +30,14 @@ from .events import bus_emit, emit
 from .messages import (
     AUDIT_NOTICE_HEADER_LINE,
     AUDIT_NOTICE_TAIL_LINE,
-    BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
     GATE_BLOCK_FIX_LINE,
     GATE_BLOCK_HEADER_LINE,
+    GATE_BLOCK_NEXT_LINE,
+    GATE_BLOCK_REASON_LINE,
     GATE_BLOCK_SETTLE_LINE,
     GATE_BLOCK_SUBAGENT_FIX_LINE,
+    GATE_BLOCK_SUBAGENT_NEXT_LINE,
+    GATE_BLOCK_SUBAGENT_REASON_LINE,
     NUDGE_MESSAGE_TEMPLATE,
     REMEDIATION_INSTRUCTION_TEMPLATE,
     SETTLE_TOOL_DESCRIPTION,
@@ -410,6 +413,8 @@ def _audit_gate_block_message(display_paths, is_subagent):
         lines.append("  - %s" % path)
     if is_subagent:
         lines.append(GATE_BLOCK_SUBAGENT_FIX_LINE)
+        lines.append(GATE_BLOCK_SUBAGENT_REASON_LINE)
+        lines.append(GATE_BLOCK_SUBAGENT_NEXT_LINE)
     else:
         # v2.9 R4 (SCR-041): the config-allowlist option is attributed to
         # the USER with the exact command and the latch-period freeze
@@ -424,7 +429,8 @@ def _audit_gate_block_message(display_paths, is_subagent):
                 '"%s"' % path for path in display_paths
             )
         )
-    lines.append(BLOCK_MESSAGE_TEMPLATE_CUE_LINE)
+        lines.append(GATE_BLOCK_REASON_LINE)
+        lines.append(GATE_BLOCK_NEXT_LINE)
     return "\n".join(lines)
 
 

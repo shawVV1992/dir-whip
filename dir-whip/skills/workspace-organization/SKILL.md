@@ -1,6 +1,6 @@
 ---
 name: workspace-organization
-description: "Use when creating session dirs - create session dirs in a Hermes workspace - Use when creating, saving, writing, moving, or deleting files in a Hermes workspace, organizing deliverables, or auditing workspace compliance."
+description: "Use when creating, saving, writing, moving, or deleting files, organizing deliverables, designing workspace layout, or auditing workspace compliance. Enforces session directory discipline and two-step confirmation for destructive operations."
 author: dir-whip
 license: MIT
 platforms: [linux, macos, windows]
@@ -45,9 +45,9 @@ OTHERWISE
 
 | Scenario | Action |
 |----------|--------|
-| Writing any file | classify → create session dir → write: Classify target → create session dir if needed → `Outputs/` or `.tmp/` |
+| Writing any file | Classify target -> create session dir if needed -> write to `Outputs/` or `.tmp/` |
 | Root write blocked | Create session dir, re-target there |
-| Delete / overwrite / move | Confirmation Protocol (list files → wait for explicit yes) |
+| Delete / overwrite / move | Confirmation Protocol (list files -> wait for explicit yes) |
 | User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged) |
 | Subagent writing | Write to parent-passed dir, never create own session dir |
 
@@ -69,11 +69,11 @@ Triggered by: any file write, create, save, delete, or move.
 - Session dirs are created LAZILY at first file write, not at conversation start - you MUST create session dir before first write
 - Not inside a session dir? You MUST create one before first write:
   `python scripts/create_session_dir.py <task> --workspace <root>`
-  Example: `python scripts/create_session_dir.py <task> --workspace <root>` - replace <task> and <root> with your values (legacy form `python scripts/create_session_dir.py <task_name> --workspace <working_dir>` also works)
+  Example: `python scripts/create_session_dir.py auth-refactor --workspace E:/ws` (replace <task> and <root> with your values)
 - Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
 - Root allows ONLY: `allowlist` `files` entries, session-format dirs (`allowlist` `dirs` subtrees likewise exempt)
 - Project directories inside the workspace can be exempted wholesale via an
-  `allowlist` `dirs` entry (recursive subtree) — add via `/dir-whip allow <path>`
+  `allowlist` `dirs` entry (recursive subtree) - add via `/dir-whip allow <path>`
 - `Outputs/` blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
 
 ### 3. File placement decision (Outputs vs .tmp)
@@ -103,7 +103,7 @@ Subagent File Protocol below.
 Applies to delete / overwrite / move. **Instruction is not confirmation.**
 
 1. Agent lists the exact files and asks "Confirm? (yes/no)"
-2. User replies "yes"/"confirm"/"go ahead" → execute; anything else → abort
+2. User replies "yes"/"confirm"/"go ahead" -> execute; anything else -> abort
 
 ### 5. When blocked
 
@@ -120,14 +120,14 @@ Subagent variant: replace "I will create..." with "I will write to the target di
 
 ### 6. Examples
 
-- **Wrong:** writing `<working_dir>/report.md` directly → blocked by the guard
+- **Wrong:** writing `<working_dir>/report.md` directly -> blocked by the guard
 - **Correct:** `python scripts/create_session_dir.py report --workspace <working_dir>`, then write the deliverable to `Outputs/report.md` (or scratch to `.tmp/`)
 
 ## Subagent File Protocol
 
 - Parent ensures the target directory exists before delegating (lazy creation is the parent's job)
 - Subagents write to the parent's `.tmp/` (default) or an explicit `Outputs/`/per-task subdirectory
-- Subagents never create session directories or promote outputs (`.tmp/` → `Outputs/` is the parent's review step); missing target or blocked write → report back to the parent
+- Subagents never create session directories or promote outputs (`.tmp/` -> `Outputs/` is the parent's review step); missing target or blocked write -> report back to the parent
 - `dir_whip_allow_path` is not available to subagents; exemptions are granted by the user via the main agent -> report back so the parent can ask the user
 
 ## Terminal Write Discipline
@@ -137,14 +137,14 @@ Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touc
 1. Prefer Session Directories for all writes
 2. One session directory per conversation - a second creation attempt is blocked (session-dir limit)
 3. User specifies a path -> call `dir_whip_allow_path(path)` first (two-step: briefing -> user approval -> `confirm=true`) BEFORE writing. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged)
-4. Blocked → create a Session Directory and re-target (never bypass the guard)
+4. Blocked -> create a Session Directory and re-target (never bypass the guard)
 
 ## Governance & Cron
 
 Triggered by "tidy workspace" or cron job:
 
 1. Run: `python scripts/audit_workspace.py --workspace <working_dir>` (add `--json`)
-2. Violations? Classify → propose → execute with confirmation
+2. Violations? Classify -> propose -> execute with confirmation
 3. No violations? Report "OK" (or `[SILENT]` in cron mode)
 
 Cron: `script: scripts/audit_workspace.py --gate` + skill `dir-whip:workspace-organization`. Gate emits `{"wakeAgent": false, "violations": 0}` on compliance, `{"wakeAgent": true, "violations": N}` on violations (exactly two keys); gate failure exits 2 with no wakeAgent (an unresolved Working Directory is a gate failure); interactive resolution failure fails open to CWD. Zero auto-delete: the plugin never deletes; the interactive audit lists expired `.tmp/` entries as a read-only proposal ("Expired .tmp entries (proposal only; cleanup needs your confirmation):"). See `references/workspace-audit.md` for the full checklist.
@@ -165,11 +165,11 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Root write blocked | No session dir created yet | Run create_session_dir.py, re-target |
-| Deliverable in `.tmp/` | Placement not classified | User-requested files → `Outputs/` |
+| Deliverable in `.tmp/` | Placement not classified | User-requested files -> `Outputs/` |
 | Session dir created at conversation start | Misunderstood lazy creation | Create at first file write only |
 | Deleted without confirmation | Instruction treated as confirmation | List files, wait for explicit yes |
 | Existing repos outside workspace | Relocation attempted | Point via rules file, don't relocate |
-| First write without session dir (漏触发) | Skill not triggered before first write | Before first file write, you MUST create session dir: `python scripts/create_session_dir.py <task> --workspace <root>` |
+| First write without session dir (missed trigger) | Skill not triggered before first write | Before first file write, you MUST create session dir: `python scripts/create_session_dir.py <task> --workspace <root>` |
 
 ## Verification
 
@@ -183,4 +183,4 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 
 ## Remember
 
-Classify before write → session dir for all writes → root forbid → when blocked, create a session dir and retry.
+Classify before write -> session dir for all writes -> root forbid -> when blocked, create a session dir and retry.

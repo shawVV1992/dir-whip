@@ -58,8 +58,9 @@ command without hand-editing YAML:
     /dir-whip list                # show current allowlist (Files: ... Dirs: ...)
     /dir-whip remove <number|name> # remove entry
 Non-existent paths need --create (confirm-create protocol); outside-root /
-root-itself inputs are rejected with guidance. See spec 5.7 for the full
-slash surface (config_writer does row-level edits preserving comments).
+root-itself inputs are rejected with guidance. The full slash surface:
+/dir-whip (merged report), /dir-whip allow, /dir-whip list, /dir-whip
+remove (config_writer does row-level edits preserving comments).
 
 **Profiles**: plugin is per-profile opt-in. After install, verify each
 profile's config (default: HERMES_HOME/config.yaml; named:
@@ -72,8 +73,7 @@ profile context. Manual copy of dir-whip/ into plugins/dir-whip/ without
 .install-metadata.json is unsupported (no metadata, no enabled row).
 
 **Install source**: native path is `shawVV1992/dir-whip/dir-whip` (SDIR
-install). The SCR-025 manifest gate is lifted on current Hermes — native
-install is the primary path.
+install); native install is the primary path on current Hermes.
 
 **Verify**: Start a new Hermes session. Try writing a file to the Working
 Directory root — it should be blocked with a helpful message. If the write

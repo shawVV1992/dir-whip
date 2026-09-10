@@ -36,8 +36,11 @@ from .messages import (
     BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
     BLOCK_MESSAGE_FIX_LINE_TEMPLATE,
     BLOCK_MESSAGE_HEADER_LINE,
+    BLOCK_MESSAGE_NEXT_LINE,
+    BLOCK_MESSAGE_REASON_LINE,
     BLOCK_MESSAGE_SUBAGENT_FIX_LINE,
-    BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
+    BLOCK_MESSAGE_SUBAGENT_NEXT_LINE,
+    BLOCK_MESSAGE_SUBAGENT_REASON_LINE,
     BLOCK_MESSAGE_UNIQUENESS_LINE,
     FAIL_OPEN_WARNING_MESSAGE,
     REMINDER_MESSAGE,
@@ -420,6 +423,8 @@ def _block_message(target, working_dir_root, is_subagent=False):
     if is_subagent:
         fix_line = BLOCK_MESSAGE_SUBAGENT_FIX_LINE
         post_lines = ""
+        reason_line = BLOCK_MESSAGE_SUBAGENT_REASON_LINE
+        next_line = BLOCK_MESSAGE_SUBAGENT_NEXT_LINE
     else:
         fix_line = (
             BLOCK_MESSAGE_FIX_LINE_TEMPLATE
@@ -431,13 +436,16 @@ def _block_message(target, working_dir_root, is_subagent=False):
         rename_line = _orphan_rename_line(target, working_dir_root)
         if rename_line:
             post_lines += "\n" + rename_line
+        reason_line = BLOCK_MESSAGE_REASON_LINE
+        next_line = BLOCK_MESSAGE_NEXT_LINE
     return "\n".join(
         (
             BLOCK_MESSAGE_HEADER_LINE,
             "Target: %s" % target_fwd,
             fix_line + post_lines,
             BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
-            BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
+            reason_line,
+            next_line,
         )
     )
 

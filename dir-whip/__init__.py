@@ -56,13 +56,16 @@ from .allow_path import (
 )
 from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
 
-# Spec 3.1: bundled skill description (frontmatter + register_skill).
+# Spec 3.1 (v2.15 DF-13 convergence): bundled skill description
+# (frontmatter + register_skill). E1 (SKILL.md frontmatter) and E2 (this
+# constant) are the SAME converged sentence (equality-locked, DF-t3).
 # Trigger words within the first 57 chars; avoids "organize/clean up
-# sessions" phrasing (F4). Matches SKILL.md frontmatter description.
+# sessions" phrasing (F4).
 SKILL_DESCRIPTION = (
-    "Use when creating, saving, writing, moving, or deleting files in a "
-    "Hermes workspace, organizing deliverables, or auditing workspace "
-    "compliance."
+    "Use when creating, saving, writing, moving, or deleting files, "
+    "organizing deliverables, designing workspace layout, or auditing "
+    "workspace compliance. Enforces session directory discipline and "
+    "two-step confirmation for destructive operations."
 )
 
 

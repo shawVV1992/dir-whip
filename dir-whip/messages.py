@@ -14,8 +14,11 @@ _remediation_instruction, _orphan_notice, _confirmation_payload) stay in
 their owning modules and draw their static text from these constants.
 Original modules keep same-name constants as import aliases; the
 __init__.py re-export surface is unchanged (test import paths intact).
-Message texts are byte-identical to the pre-v0.6.7 sources (the wording
-rewrite is a later phase, 47.C.1).
+Copy compliance (SCR-047 47.C.1): the unified block skeleton carries the
+INLINED [Reason]/[Next] tail (ADR-0014 D3; the pointer cue is retired),
+style rules T1-T9 applied (full terms, ASCII arrows, angle-bracket
+placeholders, no process identifiers), and the structural contracts
+locked by the tests hold (testing-standards 7.17).
 """
 
 # ---------------------------------------------------------------- verdict.py (session injections + block skeleton)
@@ -30,24 +33,29 @@ FAIL_OPEN_WARNING_MESSAGE = (
     "(terminal.cwd) and restart the session."
 )
 
-# Spec 5.4 (v2.8 R9): session-start discipline reminder (top-level
-# sessions only). Placement parenthetical de-ambiguated (R9, realhost
-# incident 20260827_222411_245249: the arrow shorthand was misread as a
-# literal path template); verbatim-locked + len<=280 chars cap
-# (tokenizer-independent; new length 251).
+# Spec 5.4 (v2.15 R3 rewrite): session-start discipline reminder (top-level
+# sessions only). Full "Working Directory"/"Session Directory" terms (T1/T2,
+# the "WD" abbreviation retired), angle-bracket placeholders matching the
+# script argument names (R9 disambiguation), ASCII arrow (T5).
+# Content requirements (CR-1): <=280 chars cap (tokenizer-independent,
+# v2.7 ruling) + the key command substrings below.
 REMINDER_MESSAGE = (
-    "[dir-whip] Active. WD writes need a session dir first: python "
-    "scripts/create_session_dir.py <task> --workspace <root> "
-    "(write the deliverable to Outputs/<filename>, or scratch to "
+    "[dir-whip] Active. Working Directory root writes need a Session "
+    "Directory first: python scripts/create_session_dir.py <task_name> "
+    "--workspace <root> (deliverables to Outputs/<filename>, scratch to "
     ".tmp/<filename>). Root forbidden. "
     "User path -> dir_whip_allow_path first."
 )
 
-# _block_message static skeleton fragments (spec 5.3): the BLOCKED header
-# line, the fix-line templates (top-level + subagent variants), the
-# uniqueness line, the allowlist hint and the [Reason]/[Next] cue. The
-# dynamic assembly (Target line, shared script invocation line, orphan
-# rename line, fragment joining) stays in verdict._block_message.
+# _block_message static skeleton fragments (spec 5.3 + 5.20 unified
+# skeleton): the BLOCKED header line, the fix-line templates (top-level +
+# subagent variants), the uniqueness line, the allowlist hint and the
+# INLINED [Reason]/[Next] template tail (ADR-0014 D3 -- the former
+# "Reply using the [Reason]/[Next] template." pointer cue is retired: the
+# template definition lived only in the opt-in SKILL.md, so models that
+# had not loaded the skill never saw it). The dynamic assembly (Target
+# line, shared script invocation line, orphan rename line, fragment
+# joining) stays in verdict._block_message.
 BLOCK_MESSAGE_HEADER_LINE = (
     "BLOCKED: File writes in the Working Directory require a Session "
     "Directory or an allowed root file."
@@ -55,7 +63,7 @@ BLOCK_MESSAGE_HEADER_LINE = (
 
 # One %s slot: session_dirs.script_invocation_line output.
 BLOCK_MESSAGE_FIX_LINE_TEMPLATE = (
-    "Fix: Create a session directory first:\n"
+    "Fix: Create a Session Directory first:\n"
     "  %s\n"
     "Then write the deliverable to Outputs/<filename> "
     "(or scratch to .tmp/<filename>).\n"
@@ -70,59 +78,90 @@ BLOCK_MESSAGE_SUBAGENT_FIX_LINE = (
 # Uniqueness line (leading \n is part of the fragment: it concatenates
 # directly after the fix line in the builder).
 BLOCK_MESSAGE_UNIQUENESS_LINE = (
-    "\nOne session directory per conversation."
+    "\nOne Session Directory per conversation."
 )
 
+# Allowlist hint (T3 "allowlist dirs entries" term; T8 the config entry is
+# user-authored, so the action is attributed to the user).
 BLOCK_MESSAGE_ALLOWLIST_HINT_LINE = (
-    "If this is a project directory, add it to the allowlist dirs in "
-    "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
-    "Directory root, e.g. projects/foo)"
+    "If this is a project directory, ask the user to add it to the "
+    "allowlist dirs entries in HERMES_HOME/dir-whip/dir-whip-config.yaml "
+    "(relative to the Working Directory root, e.g. projects/foo)"
 )
 
-# Shared [Reason]/[Next] cue line: also the L3 gate message tail
-# (audit._audit_gate_block_message).
-BLOCK_MESSAGE_TEMPLATE_CUE_LINE = (
-    "Reply using the [Reason]/[Next] template."
+# INLINED [Reason]/[Next] template tail (5.20 D-inline): the final two
+# lines of every block message -- one line for what was blocked and why,
+# one line for the fix you will run and where you will write.
+BLOCK_MESSAGE_REASON_LINE = (
+    "[Reason] The Working Directory root requires a Session Directory "
+    "(or an allowlisted root file); this write target is unprotected."
+)
+BLOCK_MESSAGE_NEXT_LINE = (
+    "[Next] Create the Session Directory with the command above, then "
+    "write the deliverable to Outputs/<filename> (or scratch to "
+    ".tmp/<filename>)."
+)
+
+# Subagent variant tail (ADR-0014 D3: the subagent [Next] reads
+# report-to-parent / write-to-parent-target).
+BLOCK_MESSAGE_SUBAGENT_REASON_LINE = (
+    "[Reason] The Working Directory root requires a Session Directory "
+    "(or an allowlisted root file); this write target is unprotected."
+)
+BLOCK_MESSAGE_SUBAGENT_NEXT_LINE = (
+    "[Next] Report the blocked target to the parent agent, or write to "
+    "the target directory the parent passed."
 )
 
 # ---------------------------------------------------------------- session_dirs.py (session-dir limit + orphan notice)
 
-# Spec 5.19 verbatim locks. <root>/<claim> are substituted at build
-# time (forward-slash rendering, same message convention as verdict).
+# Spec 5.19 limit messages (v2.15 rewrite: unified block skeleton with
+# the INLINED [Reason]/[Next] tail, spec 5.20). <root>/<claim> are
+# substituted at build time (forward-slash rendering, same message
+# convention as verdict).
 SESSION_DIR_LIMIT_BLOCK_MESSAGE = (
-    "BLOCKED: One session directory per conversation.\n"
+    "BLOCKED: One Session Directory per conversation.\n"
     "This conversation already uses: %(root)s/%(claim)s\n"
     "Write deliverables to %(claim)s/Outputs/ (scratch: %(claim)s/.tmp/).\n"
-    "User-specified path -> dir_whip_allow_path first."
+    "User-specified path -> dir_whip_allow_path first.\n"
+    "[Reason] This conversation's Session Directory slot is already "
+    "bound; a second Session Directory is blocked.\n"
+    "[Next] Write the deliverable into %(claim)s/Outputs/ (or scratch "
+    "to %(claim)s/.tmp/) instead of creating another Session Directory."
 )
 
 # Subagent variant (verdict subagent block-message convention): the
 # escape lines are replaced by the parent-target guidance -- subagents
-# never create session directories nor hold allow_path sanctions.
+# never create session directories nor hold allow_path sanctions; the
+# inline tail keeps the report-to-parent [Next].
 SESSION_DIR_LIMIT_SUBAGENT_MESSAGE = (
-    "BLOCKED: One session directory per conversation.\n"
+    "BLOCKED: One Session Directory per conversation.\n"
     "This conversation already uses: %(root)s/%(claim)s\n"
     "Write deliverables to %(claim)s/Outputs/ (scratch: %(claim)s/.tmp/).\n"
-    "Fix: write to the target directory passed by the parent agent."
+    "Fix: write to the target directory passed by the parent agent.\n"
+    "[Reason] This conversation's Session Directory slot is already "
+    "bound; subagents never create Session Directories.\n"
+    "[Next] Report the blocked target to the parent agent, or write to "
+    "the target directory the parent passed."
 )
 
-# R7 advisory notice (testing-standards 7.14.7 O-1: header/tail pinned).
+# R7 advisory notice (testing-standards 7.14.7 O-1: NOTICE header shape).
 # ADVISE-ONLY: the notice is plain TEXT -- it never blocks, never
 # deletes, and lands at most once per top-level session start.
 ORPHAN_NOTICE_HEADER = (
-    "NOTICE: Working Directory root has entries outside a session directory:"
+    "NOTICE: Working Directory root has entries outside a Session Directory:"
 )
 ORPHAN_NOTICE_TAIL = (
-    "If a project directory, add it to the allowlist dirs in "
-    "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
-    "Directory root)."
+    "If a project directory, ask the user to add it to the allowlist "
+    "dirs entries in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative "
+    "to the Working Directory root)."
 )
 
 # Orphan-notice mid-section lines (create + relocate guidance; the
 # listed-entry bullet and the shared invocation line stay in
 # session_dirs._orphan_notice).
 ORPHAN_NOTICE_CREATE_RELOCATE_LINE = (
-    "Create a session directory, then relocate them:"
+    "Create a Session Directory, then relocate them:"
 )
 ORPHAN_NOTICE_MV_LINE = (
     '  mv "<root>/<entry>" "<session_dir>/Outputs/"'
@@ -148,14 +187,17 @@ REMEDIATION_INSTRUCTION_TEMPLATE = (
 
 # L1 notice tail line (leading space is part of the fragment: it
 # concatenates directly after the remediation sentence in the builder).
+# v2.15 R3 rewrite: the pipe notation (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/)
+# is plainified into the concrete placement form (CR-3: no pipe notation);
+# em-dashes replaced with plain punctuation (T5).
 AUDIT_NOTICE_TAIL_LINE = (
-    " (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the "
+    " (deliverables to <session_dir>/Outputs/, scratch to "
+    "<session_dir>/.tmp/). To keep the "
     "file(s) at the root, ask the user to add them to the allowlist "
-    "files entries in dir-whip-config.yaml (files: [notes.txt]) — "
-    "give them the exact command to run: /dir-whip allow <path> — "
-    "while the block is active all writes are frozen (config edits "
-    "included). Further writes to the Working Directory are blocked "
-    "until then."
+    "files entries in dir-whip-config.yaml; give them the exact "
+    "command to run: /dir-whip allow <path>. While the block is active "
+    "all writes are frozen (config edits included). Further writes to "
+    "the Working Directory are blocked until then."
 )
 
 # L3 gate message static line fragments (spec 5.18); the dynamic
@@ -169,15 +211,19 @@ GATE_BLOCK_HEADER_LINE = (
 # Subagent variant fix line (report to the parent agent).
 GATE_BLOCK_SUBAGENT_FIX_LINE = (
     "Fix: report the pending path(s) to the parent agent "
-    "for remediation (do not create a session directory)."
+    "for remediation (do not create a Session Directory)."
 )
 
+# v2.15 R3 rewrite: the pipe notation is plainified into the concrete
+# placement form (CR-4); em-dashes replaced with plain punctuation (T5);
+# the user-attributed allowlist option and the latch-period freeze kept.
 GATE_BLOCK_FIX_LINE = (
     "Fix: move the file(s) into a Session Directory "
-    "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or ask the user "
+    "(deliverables to <session_dir>/Outputs/, scratch to "
+    "<session_dir>/.tmp/), or ask the user "
     "to add them to the allowlist files entries in "
-    "dir-whip-config.yaml (files: [notes.txt]) — give them the "
-    "exact command: /dir-whip allow <path> — while the block is "
+    "dir-whip-config.yaml; give them the "
+    "exact command: /dir-whip allow <path>. While the block is "
     "active all writes are frozen (config edits included)."
 )
 
@@ -186,14 +232,35 @@ GATE_BLOCK_SETTLE_LINE = (
     "Remediate now: call dir_whip_settle(paths=[%s])."
 )
 
+# INLINED [Reason]/[Next] template tail (5.20 D-inline) for the L3 gate
+# message: replaces the former pointer cue line.
+GATE_BLOCK_REASON_LINE = (
+    "[Reason] Earlier command(s) wrote unprotected root file(s) that "
+    "still need remediation; the settlement latch is active."
+)
+GATE_BLOCK_NEXT_LINE = (
+    "[Next] Run the dir_whip_settle call above to quarantine the "
+    "file(s), or move them into a Session Directory; the latch opens "
+    "once every pending path is settled."
+)
+GATE_BLOCK_SUBAGENT_REASON_LINE = (
+    "[Reason] Earlier command(s) wrote unprotected root file(s) that "
+    "still need remediation; the settlement latch is inherited from "
+    "the parent session."
+)
+GATE_BLOCK_SUBAGENT_NEXT_LINE = (
+    "[Next] Report the pending path(s) to the parent agent so it can "
+    "settle or relocate them."
+)
+
 # Continuation nudge message template (5.18 v2.8 R1/R2). Three %s slots:
 # the unresolved count, the shared remediation sentence and the
-# keep-at-root command.
+# keep-at-root command. v2.15 R3: em-dash replaced with a semicolon (T5).
 NUDGE_MESSAGE_TEMPLATE = (
     "[dir-whip] %d unresolved root write(s) remain at the "
     "Working Directory root. %s. Present the resolution "
     "choice to the user: move the file(s) (settle), or keep "
-    "them at the root — for the keep-at-root choice, give "
+    "them at the root; for the keep-at-root choice, give "
     "the user the exact command to run: %s. Finish only "
     "after settlement or the user's decision."
 )
@@ -245,7 +312,7 @@ ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE = (
 ALLOW_PATH_ROOT_REJECTED_MESSAGE = (
     "[dir-whip] BLOCKED: the Working Directory root itself cannot be allowlisted.\n"
     "Allow a specific file or subdirectory path instead; workspace-wide\n"
-    "exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user."
+    "exemptions belong in dir-whip-config.yaml (allowlist dirs entries) authored by the user."
 )
 
 # Spec 5.11 v2.9 (SCR-041 R3): two-step confirmation payload ("<path>"
@@ -264,8 +331,9 @@ ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE = (
 
 # Spec 5.11 v2.9 (SCR-041 R3): latch-context conditional line, appended to
 # the payload only when the pending set is non-empty (latch active).
+# v2.15 R4: em-dash replaced with a semicolon (T5).
 ALLOW_PATH_LATCH_CONTEXT_LINE = (
-    "NOTE: a settlement block is currently active \u2014 present the resolution "
+    "NOTE: a settlement block is currently active; present the resolution "
     "choice to the user: move the file(s) (settle), or keep them at the root "
     "(give the user the exact command: /dir-whip allow <path>). Writes stay "
     "frozen until then."

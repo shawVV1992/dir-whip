@@ -313,7 +313,7 @@ def check_root_files(root, allowed, violations):
                 "check": 1,
                 "name": "Root-level files",
                 "path": to_fwd(entry.path),
-                "suggestion": "Only files listed in the dir-whip allowed_root_files whitelist are allowed at the workspace root; move other files into a session dir.",
+                "suggestion": "Only files listed in the dir-whip allowlist files entries are allowed at the workspace root; move other files into a session dir.",
             })
 
 
