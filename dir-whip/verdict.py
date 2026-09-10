@@ -29,6 +29,20 @@ from .config import (
 
 from .events import _verdict_reason, emit
 
+# Message templates: centralized in the core leaf module messages.py
+# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
+# verdict.* call site and test import path unchanged.
+from .messages import (
+    BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
+    BLOCK_MESSAGE_FIX_LINE_TEMPLATE,
+    BLOCK_MESSAGE_HEADER_LINE,
+    BLOCK_MESSAGE_SUBAGENT_FIX_LINE,
+    BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
+    BLOCK_MESSAGE_UNIQUENESS_LINE,
+    FAIL_OPEN_WARNING_MESSAGE,
+    REMINDER_MESSAGE,
+)
+
 from .paths import is_absolute_any, normalize_target, within_working_dir
 
 from . import session_dirs
@@ -50,28 +64,8 @@ logger = logging.getLogger("dir-whip")
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
 
-# Spec 5.12 (term-updated): injected once per session when the guard is
-# disabled because working_dir_root could not be resolved.
-FAIL_OPEN_WARNING_MESSAGE = (
-    "[dir-whip] WARNING: The guard is DISABLED because the Working "
-    "Directory\n"
-    "could not be resolved. File writes are NOT being enforced.\n"
-    "Check dir-whip-config.yaml (working_dir_root) or your profile's config.yaml\n"
-    "(terminal.cwd) and restart the session."
-)
-
-# Spec 5.4 (v2.8 R9): session-start discipline reminder (top-level
-# sessions only). Placement parenthetical de-ambiguated (R9, realhost
-# incident 20260827_222411_245249: the arrow shorthand was misread as a
-# literal path template); verbatim-locked + len<=280 chars cap
-# (tokenizer-independent; new length 251).
-REMINDER_MESSAGE = (
-    "[dir-whip] Active. WD writes need a session dir first: python "
-    "scripts/create_session_dir.py <task> --workspace <root> "
-    "(write the deliverable to Outputs/<filename>, or scratch to "
-    ".tmp/<filename>). Root forbidden. "
-    "User path -> dir_whip_allow_path first."
-)
+# Spec 5.12 / 5.4 message constants live in messages.py (spec 5.20,
+# SCR-047 R1); the same-name imports above are the aliases.
 
 def discipline_applies(cwd, working_dir_root):
     """Conditional-injection predicate (spec 5.4, v2.7 R2).
@@ -424,32 +418,27 @@ def _block_message(target, working_dir_root, is_subagent=False):
     """
     target_fwd = str(target).replace("\\", "/")
     if is_subagent:
-        fix_line = "Fix: write to the target directory passed by the parent agent."
+        fix_line = BLOCK_MESSAGE_SUBAGENT_FIX_LINE
         post_lines = ""
     else:
         fix_line = (
-            "Fix: Create a session directory first:\n"
-            "  %s\n"
-            "Then write the deliverable to Outputs/<filename> "
-            "(or scratch to .tmp/<filename>).\n"
-            "User-specified path -> dir_whip_allow_path first."
+            BLOCK_MESSAGE_FIX_LINE_TEMPLATE
             % session_dirs.script_invocation_line(
                 "<task_name>", working_dir_root
             )
         )
-        post_lines = "\nOne session directory per conversation."
+        post_lines = BLOCK_MESSAGE_UNIQUENESS_LINE
         rename_line = _orphan_rename_line(target, working_dir_root)
         if rename_line:
             post_lines += "\n" + rename_line
-    return (
-        "BLOCKED: File writes in the Working Directory require a Session "
-        "Directory or an allowed root file.\n"
-        "Target: %s\n"
-        "%s%s\n"
-        "If this is a project directory, add it to the allowlist dirs in "
-        "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
-        "Directory root, e.g. projects/foo)\n"
-        "Reply using the [Reason]/[Next] template." % (target_fwd, fix_line, post_lines)
+    return "\n".join(
+        (
+            BLOCK_MESSAGE_HEADER_LINE,
+            "Target: %s" % target_fwd,
+            fix_line + post_lines,
+            BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
+            BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
+        )
     )
 
 

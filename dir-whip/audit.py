@@ -24,6 +24,23 @@ from .stats import record as _stats_record
 
 from .events import bus_emit, emit
 
+# Message templates: centralized in the core leaf module messages.py
+# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
+# audit.* call site and test import path unchanged.
+from .messages import (
+    AUDIT_NOTICE_HEADER_LINE,
+    AUDIT_NOTICE_TAIL_LINE,
+    BLOCK_MESSAGE_TEMPLATE_CUE_LINE,
+    GATE_BLOCK_FIX_LINE,
+    GATE_BLOCK_HEADER_LINE,
+    GATE_BLOCK_SETTLE_LINE,
+    GATE_BLOCK_SUBAGENT_FIX_LINE,
+    NUDGE_MESSAGE_TEMPLATE,
+    REMEDIATION_INSTRUCTION_TEMPLATE,
+    SETTLE_TOOL_DESCRIPTION,
+    SETTLE_TOOL_PATHS_DESCRIPTION,
+)
+
 from .paths import (
     dirwhip_home,
     relativize_target,
@@ -280,9 +297,8 @@ def _remediation_instruction(paths_display):
         str(home).replace("\\", "/") if home else "<home>/dir-whip"
     )
     return (
-        "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
-        "file(s) into quarantine (%s), or move them manually into a "
-        "Session Directory" % (
+        REMEDIATION_INSTRUCTION_TEMPLATE
+        % (
             ", ".join(
                 '"%s"' % str(path).replace("\\", "/")
                 for path in paths_display
@@ -301,21 +317,12 @@ def _audit_notice_message(paths):
     option is attributed to the USER ("ask the user to add") with the
     exact command instruction and the latch-period freeze explicit
     (all writes frozen incl. config edits)."""
-    lines = [
-        "[dir-whip] Write audit: the following file(s) were written to the "
-        "Working Directory root outside any Session Directory:"
-    ]
+    lines = [AUDIT_NOTICE_HEADER_LINE]
     for path in paths:
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
         _remediation_instruction(paths)
-        + " (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the "
-        "file(s) at the root, ask the user to add them to the allowlist "
-        "files entries in dir-whip-config.yaml (files: [notes.txt]) — "
-        "give them the exact command to run: /dir-whip allow <path> — "
-        "while the block is active all writes are frozen (config edits "
-        "included). Further writes to the Working Directory are blocked "
-        "until then."
+        + AUDIT_NOTICE_TAIL_LINE
     )
     return "\n".join(lines)
 
@@ -398,37 +405,26 @@ def _audit_gate_unresolved(session_id, working_dir_root, allowlist):
 def _audit_gate_block_message(display_paths, is_subagent):
     """L3 gate block message (5.18): unresolved paths + remediation, with
     the C6 [Reason]/[Next] cue (subagent variant: report to the parent)."""
-    lines = [
-        "BLOCKED: earlier command(s) wrote file(s) to the Working Directory "
-        "root that still need remediation:"
-    ]
+    lines = [GATE_BLOCK_HEADER_LINE]
     for path in display_paths:
         lines.append("  - %s" % path)
     if is_subagent:
-        lines.append("Fix: report the pending path(s) to the parent agent "
-                     "for remediation (do not create a session directory).")
+        lines.append(GATE_BLOCK_SUBAGENT_FIX_LINE)
     else:
         # v2.9 R4 (SCR-041): the config-allowlist option is attributed to
         # the USER with the exact command and the latch-period freeze
         # explicit. The subagent variant and the settle call line below
         # are unchanged.
-        lines.append(
-            "Fix: move the file(s) into a Session Directory "
-            "(YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/), or ask the user "
-            "to add them to the allowlist files entries in "
-            "dir-whip-config.yaml (files: [notes.txt]) — give them the "
-            "exact command: /dir-whip allow <path> — while the block is "
-            "active all writes are frozen (config edits included)."
-        )
+        lines.append(GATE_BLOCK_FIX_LINE)
         # v2.7 R4 ruling (2026-08-26): the gate blocks remediation mv/rm,
         # so the message must name the tool channel or the loop never
         # closes. Subagent variant stays report-to-parent only.
         lines.append(
-            "Remediate now: call dir_whip_settle(paths=[%s])." % ", ".join(
+            GATE_BLOCK_SETTLE_LINE % ", ".join(
                 '"%s"' % path for path in display_paths
             )
         )
-    lines.append("Reply using the [Reason]/[Next] template.")
+    lines.append(BLOCK_MESSAGE_TEMPLATE_CUE_LINE)
     return "\n".join(lines)
 
 
@@ -551,26 +547,17 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
 # as ALLOW_PATH_TOOL_SCHEMA). Defined HERE (not __init__.py) because the
 # lazy registration fires from transform_tool_result without register()
 # having run (test contract: first notice fire registers the tool).
+# Description texts live in messages.py (spec 5.20, SCR-047 R1).
 SETTLE_TOOL_SCHEMA = {
     "name": "dir_whip_settle",
-    "description": (
-        "Move files that the dir-whip write audit flagged in the Working "
-        "Directory root into the audit quarantine "
-        "(<dir-whip home>/audit-quarantine/), "
-        "settling the write block. Hard-constrained to paths currently "
-        "listed as unresolved by the write-audit notice/gate."
-    ),
+    "description": SETTLE_TOOL_DESCRIPTION,
     "parameters": {
         "type": "object",
         "properties": {
             "paths": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "Paths to settle (absolute, forward slashes, as listed "
-                    "by the write-audit notice; relative to the Working "
-                    "Directory root tolerated)"
-                ),
+                "description": SETTLE_TOOL_PATHS_DESCRIPTION,
             }
         },
         "required": ["paths"],
@@ -809,12 +796,7 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         return {
             "action": "continue",
             "message": (
-                "[dir-whip] %d unresolved root write(s) remain at the "
-                "Working Directory root. %s. Present the resolution "
-                "choice to the user: move the file(s) (settle), or keep "
-                "them at the root — for the keep-at-root choice, give "
-                "the user the exact command to run: %s. Finish only "
-                "after settlement or the user's decision."
+                NUDGE_MESSAGE_TEMPLATE
                 % (len(display), _remediation_instruction(display),
                    keep_command)
             ),

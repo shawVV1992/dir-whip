@@ -19,7 +19,22 @@ import logging
 
 from . import config, sessions, state, verdict
 from .audit import audit_unresolved_paths
-from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
+# Message templates: centralized in the core leaf module messages.py
+# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
+# allow_path.* call site and test import path unchanged. The EXTERNAL
+# rejection message is single-sourced in messages.py -- config.py and
+# this module both import it from there (ADR-0007 direction respected;
+# the former verbatim duplicate pair is gone).
+from .messages import (
+    ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE,
+    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
+    ALLOW_PATH_LATCH_CONTEXT_LINE,
+    ALLOW_PATH_ROOT_REJECTED_MESSAGE,
+    ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,
+    ALLOW_PATH_TOOL_CONFIRM_DESCRIPTION,
+    ALLOW_PATH_TOOL_DESCRIPTION,
+    ALLOW_PATH_TOOL_PATH_DESCRIPTION,
+)
 from .events import bus_emit, emit
 from .paths import (
     normalize_target,
@@ -37,70 +52,26 @@ logger = logging.getLogger("dir-whip")
 # re-call with confirm=true only after explicit user approval).
 ALLOW_PATH_TOOL_SCHEMA = {
     "name": "dir_whip_allow_path",
-    "description": (
-        "Add an absolute path to the dir-whip runtime allowlist so "
-        "file operations under that path are exempt for this session (Tier 0). "
-        "Use when the user explicitly specifies a path to write to. "
-        "Two-step confirmation: call WITHOUT confirm to obtain the "
-        "user-confirmation briefing, relay it to the user, then re-call with "
-        "confirm=true ONLY after the user explicitly approves."
-    ),
+    "description": ALLOW_PATH_TOOL_DESCRIPTION,
     "parameters": {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Absolute path to allow (forward slashes)",
+                "description": ALLOW_PATH_TOOL_PATH_DESCRIPTION,
             },
             "confirm": {
                 "type": "boolean",
-                "description": (
-                    "true ONLY after the user explicitly approved the "
-                    "briefing payload from the first call (default false)"
-                ),
+                "description": ALLOW_PATH_TOOL_CONFIRM_DESCRIPTION,
             },
         },
         "required": ["path"],
     },
 }
 
-# Spec 5.11 v2.9 (SCR-041 R2a): subagent rejection, parent-guidance variant.
-ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE = (
-    "[dir-whip] BLOCKED: dir_whip_allow_path is not available to subagents.\n"
-    "Exemptions are granted by the user via the main agent. Write to the target\n"
-    "directory passed by the parent agent, or report back so the parent can ask\n"
-    "the user."
-)
-
-# Spec 5.11 v2.9 (SCR-041 R2b): Working Directory root rejection.
-ALLOW_PATH_ROOT_REJECTED_MESSAGE = (
-    "[dir-whip] BLOCKED: the Working Directory root itself cannot be allowlisted.\n"
-    "Allow a specific file or subdirectory path instead; workspace-wide\n"
-    "exemptions belong in dir-whip-config.yaml (allowlist dirs) authored by the user."
-)
-
-# Spec 5.11 v2.9 (SCR-041 R3): two-step confirmation payload ("<path>"
-# substituted with the forward-slash form of the requested path).
-ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE = (
-    "[dir-whip] CONFIRMATION REQUIRED: adding \"%s\" to the runtime allowlist\n"
-    "exempts ALL file operations under it from the guard for the rest of this\n"
-    "session. Previously recorded root writes under it are NOT remediated by\n"
-    "this exemption (they stay pending until settled). The entry expires\n"
-    "automatically when the session ends; persistent exemptions belong in\n"
-    "dir-whip-config.yaml\n"
-    "(allowlist files/dirs, removable via /dir-whip remove).\n"
-    "Present this to the user and ask for explicit approval. Re-call\n"
-    "dir_whip_allow_path(path=..., confirm=true) ONLY after the user approves."
-)
-
-# Spec 5.11 v2.9 (SCR-041 R3): latch-context conditional line, appended to
-# the payload only when the pending set is non-empty (latch active).
-ALLOW_PATH_LATCH_CONTEXT_LINE = (
-    "NOTE: a settlement block is currently active \u2014 present the resolution "
-    "choice to the user: move the file(s) (settle), or keep them at the root "
-    "(give the user the exact command: /dir-whip allow <path>). Writes stay "
-    "frozen until then."
-)
+# Spec 5.11 message constants live in messages.py (spec 5.20, SCR-047
+# R1); the same-name imports above are the aliases ("<path>" is
+# substituted at build time by _confirmation_payload).
 
 
 def _briefing_issued(path):

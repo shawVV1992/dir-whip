@@ -36,6 +36,19 @@ except ImportError:
 
 from . import state, stats
 
+# Message templates: centralized in the core leaf module messages.py
+# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
+# config.* call site and test import path unchanged. The EXTERNAL
+# rejection message is single-sourced there -- config.py must not import
+# the assembly layer (ADR-0007 direction), and messages.py being a leaf
+# makes it safely importable here (the former verbatim duplicate in
+# allow_path.py is gone).
+from .messages import (
+    ALLOW_PATH_EMPTY_REJECTED_MESSAGE,
+    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
+    RUNTIME_ALLOWLIST_ADDED_TEMPLATE,
+)
+
 from .paths import (
     _get_hermes_home,
     _paths_equal,
@@ -303,20 +316,12 @@ def is_inside_session_dir(path, working_dir_root):
 
 # ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
 
-# SCR-043 R3 (spec 5.11 v2.11): add-layer rejection messages. The
-# outside-root text mirrors the handler-layer R2c verbatim constant in
-# __init__.py (config.py must not import the assembly layer, ADR-0007
-# dependency direction; the text is duplicated verbatim so both layers
-# answer identically).
-ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE = (
-    "[dir-whip] BLOCKED: the path is outside the Working Directory; no allowlist\n"
-    "entry is needed. Writes there are allowed and logged (external-write).\n"
-    "Retry the write directly at the requested path."
-)
-ALLOW_PATH_EMPTY_REJECTED_MESSAGE = (
-    "[dir-whip] Rejected: empty path. dir_whip_allow_path requires an explicit\n"
-    "path inside the Working Directory."
-)
+# SCR-043 R3 (spec 5.11 v2.11) add-layer rejection messages live in
+# messages.py (spec 5.20, SCR-047 R1); the same-name imports above are
+# the aliases. The outside-root text is single-sourced there so the
+# handler layer (allow_path.py) and this add layer answer identically
+# without a verbatim duplicate (ADR-0007 dependency direction kept:
+# config imports the leaf, never the assembly layer).
 
 
 def _normalize_allowlist_path(path):
@@ -350,7 +355,7 @@ def runtime_allowlist_add(path, working_dir_root=None):
     with _runtime_allowlist_lock:
         _runtime_allowlist.add(normalized)
     logger.debug("dir-whip: runtime allowlist added: %s", normalized)
-    return "[dir-whip] Added to runtime allowlist: %s" % normalized
+    return RUNTIME_ALLOWLIST_ADDED_TEMPLATE % normalized
 
 
 def is_runtime_allowlisted(path):

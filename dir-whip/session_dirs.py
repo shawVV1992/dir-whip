@@ -61,6 +61,18 @@ from .config import is_inside_session_dir
 
 from .events import emit
 
+# Message templates: centralized in the core leaf module messages.py
+# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
+# session_dirs.* call site, __all__ entry and test import path unchanged.
+from .messages import (
+    ORPHAN_NOTICE_CREATE_RELOCATE_LINE,
+    ORPHAN_NOTICE_HEADER,
+    ORPHAN_NOTICE_MV_LINE,
+    ORPHAN_NOTICE_TAIL,
+    SESSION_DIR_LIMIT_BLOCK_MESSAGE,
+    SESSION_DIR_LIMIT_SUBAGENT_MESSAGE,
+)
+
 from .paths import is_absolute_any, paths_equal
 
 from .sessions import owner_session
@@ -70,24 +82,9 @@ from .terminal import is_session_dir_script, terminal_cp_mv_src
 # Spec 5.19: rule_key of the per-session uniqueness block.
 SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"
 
-# Spec 5.19 verbatim locks. <root>/<claim> are substituted at build
-# time (forward-slash rendering, same message convention as verdict).
-SESSION_DIR_LIMIT_BLOCK_MESSAGE = (
-    "BLOCKED: One session directory per conversation.\n"
-    "This conversation already uses: %(root)s/%(claim)s\n"
-    "Write deliverables to %(claim)s/Outputs/ (scratch: %(claim)s/.tmp/).\n"
-    "User-specified path -> dir_whip_allow_path first."
-)
-
-# Subagent variant (verdict subagent block-message convention): the
-# escape lines are replaced by the parent-target guidance -- subagents
-# never create session directories nor hold allow_path sanctions.
-SESSION_DIR_LIMIT_SUBAGENT_MESSAGE = (
-    "BLOCKED: One session directory per conversation.\n"
-    "This conversation already uses: %(root)s/%(claim)s\n"
-    "Write deliverables to %(claim)s/Outputs/ (scratch: %(claim)s/.tmp/).\n"
-    "Fix: write to the target directory passed by the parent agent."
-)
+# Spec 5.19 message templates live in messages.py (spec 5.20, SCR-047
+# R1); the same-name imports above are the aliases (<root>/<claim> are
+# substituted at build time by _limit_block, forward-slash rendering).
 
 
 # ---------------------------------------------------------------- State access
@@ -231,17 +228,10 @@ def script_invocation_line(task, working_dir_root):
 _classify_fn = None
 
 # R7 advisory notice verbatim locks (testing-standards 7.14.7 O-1:
-# header/tail pinned). ADVISE-ONLY: the notice is plain TEXT -- it
-# never blocks, never deletes, and lands at most once per top-level
-# session start (fire-once by construction).
-ORPHAN_NOTICE_HEADER = (
-    "NOTICE: Working Directory root has entries outside a session directory:"
-)
-ORPHAN_NOTICE_TAIL = (
-    "If a project directory, add it to the allowlist dirs in "
-    "HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working "
-    "Directory root)."
-)
+# header/tail pinned) live in messages.py (spec 5.20, SCR-047 R1); the
+# same-name imports above are the aliases. ADVISE-ONLY: the notice is
+# plain TEXT -- it never blocks, never deletes, and lands at most once
+# per top-level session start (fire-once by construction).
 
 
 def set_classifier(fn):
@@ -257,11 +247,11 @@ def _orphan_notice(working_dir_root, names):
     allowlist registration alternative (verbatim tail)."""
     lines = [ORPHAN_NOTICE_HEADER]
     lines.extend("  - %s" % name for name in names)
-    lines.append("Create a session directory, then relocate them:")
+    lines.append(ORPHAN_NOTICE_CREATE_RELOCATE_LINE)
     lines.append(
         "  %s" % script_invocation_line("<task_name>", working_dir_root)
     )
-    lines.append('  mv "<root>/<entry>" "<session_dir>/Outputs/"')
+    lines.append(ORPHAN_NOTICE_MV_LINE)
     lines.append(ORPHAN_NOTICE_TAIL)
     return "\n".join(lines)
 
