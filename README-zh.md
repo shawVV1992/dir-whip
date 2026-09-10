@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.6](https://img.shields.io/badge/version-0.6.6-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.6.7](https://img.shields.io/badge/version-0.6.7-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -181,7 +181,7 @@ hermes plugins disable dir-whip
   （`root-file` / `non-session-dir`）即孤儿候选，T0-T3 目标（根外、运行时
   白名单、config 白名单、合规会话目录）自动豁免。
 - **只劝不拦**：扫描永不阻断、永不删除。孤儿以对话内通告形式报告一次：
-  `NOTICE: Working Directory root has entries outside a session directory:`，
+  `NOTICE: Working Directory root has entries outside a Session Directory:`，
   随后逐条给出指引——先建会话目录（同一条 `create_session_dir.py` 命令行），
   再搬迁条目（`mv "<root>/<entry>" "<session_dir>/Outputs/"`）。
 - **fail-open**：扫描出错一律静默跳过；stats 记 `orphan-notice` 规则键，
@@ -229,16 +229,17 @@ Agent: echo "Standup notes ..." > notes.txt        # 根级写入
 
 BLOCKED: File writes in the Working Directory require a Session Directory or an allowed root file.
 Target: notes.txt
-Fix: Create a session directory first:
+Fix: Create a Session Directory first:
   python <plugin>/skills/workspace-organization/scripts/create_session_dir.py <task_name> --workspace <Working Directory>
 Then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
 User-specified path -> dir_whip_allow_path first.
-One session directory per conversation.
+One Session Directory per conversation.
 mv "<Working Directory>/<first-segment>" "<session_dir>/Outputs/"    # 仅当目标首段路径已是命名不合规的现存目录时才追加
-If this is a project directory, add it to the allowlist dirs in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
-Reply using the [Reason]/[Next] template.
+If this is a project directory, ask the user to add it to the allowlist dirs entries in HERMES_HOME/dir-whip/dir-whip-config.yaml (relative to the Working Directory root, e.g. projects/foo)
+[Reason] The Working Directory root requires a Session Directory (or an allowlisted root file); this write target is unprotected.
+[Next] Create the Session Directory with the command above, then write the deliverable to Outputs/<filename> (or scratch to .tmp/<filename>).
 
-Agent: python .../scripts/create_session_dir.py StandupNotes --workspace <WD>
+Agent: python .../scripts/create_session_dir.py StandupNotes --workspace <Working Directory>
        # 创建 20260827_100000_StandupNotes/
 Agent: .../20260827_100000_StandupNotes/Outputs/notes.txt   # 干净落盘
 ```
@@ -250,7 +251,7 @@ Agent: （一次写入绕过前置层，落在了根目录）
 
 [dir-whip] Write audit: the following file(s) were written to the Working Directory root outside any Session Directory:
   - notes.txt
-Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<profile home>/dir-whip/audit-quarantine/), or move them manually into a Session Directory (YYYYMMDD_HHMMSS_TaskName/Outputs|.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml (files: [notes.txt]) — give them the exact command to run: /dir-whip allow <path> — while the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
+Remediate now: call dir_whip_settle(paths=["notes.txt"]) to move the file(s) into quarantine (<profile home>/dir-whip/audit-quarantine/), or move them manually into a Session Directory (deliverables to <session_dir>/Outputs/, scratch to <session_dir>/.tmp/). To keep the file(s) at the root, ask the user to add them to the allowlist files entries in dir-whip-config.yaml; give them the exact command to run: /dir-whip allow <path>. While the block is active all writes are frozen (config edits included). Further writes to the Working Directory are blocked until then.
 
 Agent: dir_whip_settle(paths=["notes.txt"])
        # 文件移入 <profile home>/dir-whip/audit-quarantine/<timestamp>/，闸门重新打开
@@ -261,7 +262,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.6
+[dir-whip] v0.6.7
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
