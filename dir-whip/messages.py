@@ -33,18 +33,22 @@ FAIL_OPEN_WARNING_MESSAGE = (
     "(terminal.cwd) and restart the session."
 )
 
-# Spec 5.4 (v2.15 R3 rewrite): session-start discipline reminder (top-level
-# sessions only). Full "Working Directory"/"Session Directory" terms (T1/T2,
-# the "WD" abbreviation retired), angle-bracket placeholders matching the
-# script argument names (R9 disambiguation), ASCII arrow (T5).
+# Spec 5.4 (v2.15 R3 rewrite; v2.16 SCR-048 R3 reuse rule): session-start
+# discipline reminder (top-level sessions only). Full "Session Directory"
+# term (T2, the "WD" abbreviation retired), angle-bracket placeholders
+# matching the script argument names (R9 disambiguation), ASCII arrow
+# (T5), and the reuse rule: ONE Session Directory per conversation --
+# write into the existing directory's Outputs/ and .tmp/ rather than
+# creating a second one.
 # Content requirements (CR-1): <=280 chars cap (tokenizer-independent,
-# v2.7 ruling) + the key command substrings below.
+# v2.7 ruling; current text 276) + the key command substrings below +
+# `reuse`; no standalone "WD", no em-dash.
 REMINDER_MESSAGE = (
-    "[dir-whip] Active. Working Directory root writes need a Session "
-    "Directory first: python scripts/create_session_dir.py <task_name> "
-    "--workspace <root> (deliverables to Outputs/<filename>, scratch to "
-    ".tmp/<filename>). Root forbidden. "
-    "User path -> dir_whip_allow_path first."
+    "[dir-whip] Active. Root writes need a Session Directory: "
+    "python scripts/create_session_dir.py <task_name> "
+    "--workspace <root> (deliverables to Outputs/, scratch to "
+    ".tmp/). One Session Directory per conversation: reuse it. "
+    "Root forbidden. User path -> dir_whip_allow_path first."
 )
 
 # _block_message static skeleton fragments (spec 5.3 + 5.20 unified
