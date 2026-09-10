@@ -250,24 +250,52 @@ def _record_orphan_notice(session_id):
     )
 
 
+def _record_reminder_fallback(session_id):
+    """One session-reminder-fallback stats row (SCR-048 R4, 5.17/5.13).
+
+    Fired by the one-shot transform_tool_result fallback note when the
+    session-start reminder outcome was unavailable; top-level only.
+    Stats-only: the allow outcome with target None fans out NO bus
+    event (the 5.14 emit surface stays at 7). Fail-open: events.emit
+    never raises."""
+    events.emit(
+        "allow", "session", "session-reminder-fallback", None,
+        "session-start reminder re-delivered on the first eligible "
+        "tool result",
+        session_id, False,
+    )
+
+
 def _inject_reminder(ctx, session_id):
     """Inject the session-start discipline reminder (5.4 R2/R6).
 
     The injected/unavailable two arms collapsed into one helper
     (SCR-045 R7): inject when the ctx channel exists and accepts the
     message; otherwise record unavailable with the same debug line.
+    v2.16 SCR-048 R4 (5.17): the unavailable arm subdivides the stats
+    reason into ``unavailable:no-ctx`` / ``unavailable:no-method`` /
+    ``unavailable:falsy-return`` (the ``unavailable`` prefix retained for
+    compatibility), arms the one-shot transform_tool_result fallback
+    flag, and the debug line records the method-existence detail.
     """
-    if ctx and hasattr(ctx, "inject_message"):
-        injected = ctx.inject_message(verdict.REMINDER_MESSAGE)
-        if injected:
-            state.session.reminder_status = "injected"
-            _record_session_reminder(session_id, "injected")
-            return
+    has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
+    if has_method and ctx.inject_message(verdict.REMINDER_MESSAGE):
+        state.session.reminder_status = "injected"
+        _record_session_reminder(session_id, "injected")
+        return
+    if not ctx:
+        sub = "no-ctx"
+    elif not has_method:
+        sub = "no-method"
+    else:
+        sub = "falsy-return"
     state.session.reminder_status = "unavailable"
-    _record_session_reminder(session_id, "unavailable")
+    state.session.reminder_pending_fallback = True
+    _record_session_reminder(session_id, "unavailable:" + sub)
     logger.debug(
-        "dir-whip: session-start reminder skipped "
-        "(inject_message unavailable)"
+        "dir-whip: session-start reminder %s "
+        "(inject_message present=%s); fallback armed",
+        "unavailable:" + sub, has_method,
     )
 
 
@@ -286,6 +314,11 @@ def on_start(session_id, model=None, platform=None, **kwargs):
             # too (the report Reminder line is removed in v2.8).
             _record_session_reminder(session_id, "skipped-child")
             return
+        # SCR-048 R4 (5.17): the fallback flag is reset at the START of
+        # every top-level session start (before injection); only the
+        # unavailable arm of _inject_reminder below sets it. Child
+        # sessions return above and never touch the parent's pending flag.
+        state.session.reminder_pending_fallback = False
         # 5.18: top-level session start clears the audit state (pending
         # violations, leftover pre snapshots, cap warning); child sessions
         # skip and inherit the parent's latched state.
@@ -492,13 +525,62 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         return None
 
 
+def _is_error_json_result(result):
+    """Error-result eligibility check (same shape as the audit L1 notice,
+    5.18): a JSON object carrying an "error" key and nothing else of note
+    (<=2 keys) is not decorated."""
+    try:
+        parsed = json.loads(result)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2
+
+
+def _append_reminder_fallback(audited_result, original_result, session_id):
+    """One-shot REMINDER tail note after an unavailable session start (5.17).
+
+    Eligibility: top-level session only, flag armed by the unavailable
+    branch of _inject_reminder, and the result must be a string (error
+    JSON results are NOT decorated). A non-eligible call does NOT consume
+    the flag -- the note waits for the next eligible call. The base text
+    is the audit-adjusted return when there is one (the note lands after
+    it, tail append), else the original result. Fire-once: on firing the
+    flag is cleared and the session-reminder-fallback stats row is
+    recorded. Never raises; on any failure the audited result is returned
+    untouched (fail-open)."""
+    try:
+        if not state.session.reminder_pending_fallback:
+            return audited_result
+        if sessions.is_child(session_id):
+            return audited_result
+        text = (
+            audited_result if isinstance(audited_result, str)
+            else original_result
+        )
+        if not isinstance(text, str):
+            return audited_result
+        if _is_error_json_result(text):
+            return audited_result
+        state.session.reminder_pending_fallback = False
+        _record_reminder_fallback(session_id)
+        return text + "\n\n" + verdict.REMINDER_MESSAGE
+    except Exception as exc:
+        logger.debug("dir-whip: reminder fallback failed (fail-open): %s", exc)
+        return audited_result
+
+
 def on_transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
-    """transform_tool_result hook adapter (5.18 L1 notice): dispatch to audit."""
+    """transform_tool_result hook adapter (5.18 L1 notice + 5.17 fallback).
+
+    Dispatches to audit first; then applies the one-shot REMINDER
+    fallback note to the (possibly audit-adjusted) string result when an
+    unavailable session start armed it."""
     try:
-        return audit.transform_tool_result(
+        adjusted = audit.transform_tool_result(
             tool_name, args, result, session_id, task_id, **kwargs,
         )
+        return _append_reminder_fallback(adjusted, result, session_id)
     except Exception as exc:
         logger.debug("dir-whip: transform_tool_result hook error (fail-open): %s", exc)
         return None
