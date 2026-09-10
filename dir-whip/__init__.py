@@ -224,7 +224,9 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
     try:
         session_id = kwargs.get("session_id")
         if session_id and not state.stats.session.get("session_id"):
-            stats.set_session(session_id=session_id)
+            # Lock-held check-and-set (SCR-048 R6 follow-up): the outer
+            # unlocked read is only a fast path.
+            stats.backfill_session(session_id)
         return verdict.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: guard hook error (fail-open): %s", exc)

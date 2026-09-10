@@ -72,6 +72,22 @@ def stats_set_session(profile=None, session_id=None, is_subagent=None, started_a
             state.stats.session["started_at"] = str(started_at)
 
 
+def stats_backfill_session(session_id):
+    """Set the stats session_id only when it is currently empty (5.13 R6).
+
+    SCR-048 R6 follow-up: the lazy backfill must not race a concurrent
+    first call into an overwrite -- the check-and-set runs entirely under
+    state.stats.lock (stats_set_session cannot be reused here: its own
+    lock acquisition is not reentrant). Only the session_id field is
+    touched; profile / started_at stay unknown when unset.
+    """
+    if not session_id:
+        return
+    with state.stats.lock:
+        if not state.stats.session.get("session_id"):
+            state.stats.session["session_id"] = str(session_id)
+
+
 def stats_snapshot():
     """Return a deep copy of the counters (outcome x tool x rule_key x is_subagent)."""
     with state.stats.lock:
@@ -161,6 +177,7 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
 # Public thin aliases (SCR-035 interface convergence point).
 record = stats_record
 set_session = stats_set_session
+backfill_session = stats_backfill_session
 snapshot = stats_snapshot
 end_session = stats_end_session
 reset = stats_reset
@@ -170,6 +187,7 @@ stats_jsonl_path = _stats_jsonl_path
 __all__ = [
     "record",
     "set_session",
+    "backfill_session",
     "snapshot",
     "end_session",
     "reset",
