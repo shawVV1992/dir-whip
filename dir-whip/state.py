@@ -4,10 +4,11 @@ Session state (registration context, session root/profile, fail-open latch,
 emit switch, injected host callable, child-session set, parent links,
 top-session fallback), audit state (pre-snapshots, pending violations,
 cap flag), session-dir state (SCR-044 R5: per-session unique Session
-Directory claims + in-flight script-creation markers), stats state (lock,
-counters, session fields). Locks travel with their group; cross-group
-invariants share one lock. Anti-degradation rule: containers only - never
-re-export the individual fields as module-level names (ADR-0005).
+Directory claims + in-flight script-creation markers; SCR-048 R1 adds
+the persistence sidecar metadata), stats state (lock, counters, session
+fields). Locks travel with their group; cross-group invariants share one
+lock. Anti-degradation rule: containers only - never re-export the
+individual fields as module-level names (ADR-0005).
 """
 import threading
 
@@ -65,12 +66,15 @@ class _SessionDirState:
 
     claims maps owner_session -> bound dir name (root-relative first
     segment, Windows-casefold compared); pending_create marks a script
-    creation in flight (owner_session -> True). Owner resolution goes
-    through sessions.owner_session (subagent -> parent attribution,
-    mirroring the audit pending propagation). Session-lifetime memory:
-    cleared at every top-level session start (CLR-1) and by reset_all
-    (CLR-2); a restart loses it (accepted, same class as the runtime
-    allowlist).
+    creation in flight (owner_session -> True). claim_meta carries the
+    persistence sidecar per claim (root / dir / profile / ts plus the
+    internal restored-at-register flag, SCR-048 R1) so the write-through
+    store rebuilds correct entries. Owner resolution goes through
+    sessions.owner_session (subagent -> parent attribution, mirroring the
+    audit pending propagation). Cleared at every top-level session start
+    (CLR-1 resume exception: a restored claim whose dir is still on disk
+    is kept) and by reset_all (CLR-2, which also clears the persistent
+    claims file); the store is restored at register().
     """
 
     def __init__(self):
@@ -80,6 +84,7 @@ class _SessionDirState:
     def reset(self):
         self.claims = {}          # owner_session -> dir name (root-relative first segment)
         self.pending_create = {}  # owner_session -> True (script creation in flight)
+        self.claim_meta = {}      # owner_session -> {root, dir, profile, ts, restored}
 
 
 class _StatsState:
@@ -100,8 +105,28 @@ stats = _StatsState()
 
 
 def reset_all():
-    """Single test-cleanup entry point replacing ~10 hand-cleared globals."""
+    """Single test-cleanup entry point replacing ~10 hand-cleared globals.
+
+    CLR-2 revision (spec 5.19, SCR-048 R1): the isolation guarantee
+    extends from the in-memory containers to the persistent claims file,
+    which is cleared here too.
+    """
     session.reset()
     audit.reset()
     session_dirs.reset()
     stats.reset()
+    _clear_persistent_claims()
+
+
+def _clear_persistent_claims():
+    """Delete the persistent claims file (CLR-2; fail-open).
+
+    Function-local import: session_dirs imports state at module load, so
+    a module-level state -> session_dirs edge would be a cycle. The cold
+    path only runs on test reset / re-register.
+    """
+    try:
+        from .session_dirs import clear_claims_store
+        clear_claims_store()
+    except Exception:
+        pass

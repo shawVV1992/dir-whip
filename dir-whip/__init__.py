@@ -136,6 +136,11 @@ def register(ctx):
         # (ADR-0007 inject-don't-import; session_dirs never imports
         # verdict).
         session_dirs.set_classifier(verdict.classify_target)
+        # SCR-048 R1 (spec 5.19): restore the write-through claims store
+        # BEFORE any hook can fire, so a host restart re-arms the
+        # per-session slot (fail-open inside load_claims; validation
+        # drops entries whose root/dir is gone).
+        session_dirs.load_claims()
         # Host API injection slots (ADR-0007): session CWD accessor +
         # agent CWD accessor (R2 conditional injection) filled at register
         # time; absent host API -> None -> on_start always injects.

@@ -45,13 +45,24 @@ chain and the generic dir-whip:blocked bus fanout fires (the key is
 deliberately NOT in events._BUS_SKIP_RULE_KEYS; the 7-emits manifest
 surface stays unchanged).
 
-Session-lifetime memory: cleared at every top-level session start
-(CLR-1) and by state.reset_all (CLR-2); a restart loses it (accepted,
-same class as the runtime allowlist).
+Session-lifetime memory + persistence (v2.16 SCR-048 R1, spec 5.19): the
+in-memory claims are write-through mirrored to `session-claims.json` in
+the profile-independent default dir-whip home (paths.dirwhip_home(None);
+after a host restart on_start has not fired yet, so session_profile is
+None and the per-profile home is not findable). `_bind` / `_rebind` /
+claim release each persist synchronously through an atomic tmp+replace
+write (fail-open: IO errors log DEBUG only, memory stays authoritative);
+register() restores entries whose `root/dir` is still on disk. Every
+persist drops dead entries and the store caps at 64 entries (ts-LRU).
+Cleared at every top-level session start except a RESUME (a restored
+claim whose dir is still on disk is KEPT, CLR-1 revision) and by
+state.reset_all (CLR-2 revision: the file is cleared too).
 """
 
+import json
 import logging
 import os
+import time
 
 logger = logging.getLogger("dir-whip")
 
@@ -73,7 +84,7 @@ from .messages import (
     SESSION_DIR_LIMIT_SUBAGENT_MESSAGE,
 )
 
-from .paths import is_absolute_any, paths_equal
+from .paths import dirwhip_home, is_absolute_any, paths_equal
 
 from .sessions import owner_session
 
@@ -82,9 +93,172 @@ from .terminal import is_session_dir_script, terminal_cp_mv_src
 # Spec 5.19: rule_key of the per-session uniqueness block.
 SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"
 
+# Spec 5.19 (SCR-048 R1): persistent claims store constants.
+CLAIMS_STORE_NAME = "session-claims.json"
+CLAIMS_STORE_VERSION = 1
+CLAIMS_STORE_CAP = 64  # ts-LRU entry cap
+
 # Spec 5.19 message templates live in messages.py (spec 5.20, SCR-047
 # R1); the same-name imports above are the aliases (<root>/<claim> are
 # substituted at build time by _limit_block, forward-slash rendering).
+
+
+# ---------------------------------------------------------------- Claims persistence
+
+def _claims_store_path():
+    """Persistent claims store path (spec 5.19).
+
+    PROFILE-INDEPENDENT by design: dirwhip_home(None), the default home
+    segment -- after a host restart on_session_start has not fired, so
+    state.session.session_profile is None and a per-profile home is not
+    findable. Windows HOME resolution is delegated to paths.py.
+    """
+    return dirwhip_home(None) / CLAIMS_STORE_NAME
+
+
+def _make_meta(name, root):
+    """Persistence sidecar for one claim (spec 5.19 entry fields)."""
+    return {
+        "root": str(root) if root else None,
+        "dir": str(name),
+        "profile": state.session.session_profile,
+        "ts": time.time(),
+        "restored": False,
+    }
+
+
+def _entry_alive(root, name):
+    """True when `root/name` is still a directory on disk."""
+    try:
+        return bool(root) and bool(name) and os.path.isdir(
+            os.path.join(str(root), str(name))
+        )
+    except Exception:
+        return False
+
+
+def _cap_payload(payload, keep_owner=None):
+    """ts-LRU eviction above CLAIMS_STORE_CAP (the active bind wins ties)."""
+    if len(payload) <= CLAIMS_STORE_CAP:
+        return payload
+    items = sorted(
+        payload.items(),
+        key=lambda kv: (kv[0] == keep_owner, kv[1]["ts"]),
+        reverse=True,
+    )
+    return dict(items[:CLAIMS_STORE_CAP])
+
+
+def _build_claims_payload(keep_owner=None):
+    """Serializable claims mapping (caller holds state.session_dirs.lock).
+
+    Dead entries (root/dir no longer a directory) are dropped EXCEPT the
+    owner just bound/re-bound by the current operation -- at guard time
+    the create action has not run yet, so the active entry is pending
+    creation, not dead. Entries without sidecar metadata (a direct
+    container write) are not persisted.
+    """
+    payload = {}
+    for owner, name in state.session_dirs.claims.items():
+        meta = state.session_dirs.claim_meta.get(owner)
+        if not meta or not meta.get("root"):
+            continue
+        if owner != keep_owner and not _entry_alive(meta.get("root"), name):
+            continue
+        ts = meta.get("ts")
+        payload[owner] = {
+            "root": str(meta.get("root")),
+            "dir": str(name),
+            "profile": meta.get("profile"),
+            "ts": ts if isinstance(ts, (int, float)) else 0,
+        }
+    return _cap_payload(payload, keep_owner)
+
+
+def _persist_locked(keep_owner=None):
+    """Write the claims store atomically (caller holds the lock).
+
+    Fail-open: any IO/encoding error is logged at DEBUG only and ignored
+    -- the in-memory container stays authoritative (5.8, the
+    stats._append_stats_event tolerance pattern).
+    """
+    try:
+        payload = _build_claims_payload(keep_owner)
+        path = _claims_store_path()
+        tmp_path = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass  # surfaced by the write below
+        data = json.dumps(
+            {"version": CLAIMS_STORE_VERSION, "claims": payload}
+        )
+        with open(str(tmp_path), "w", encoding="utf-8") as handle:
+            handle.write(data)
+        os.replace(str(tmp_path), str(path))
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: session-claims persist failed (ignored): %s", exc
+        )
+
+
+def load_claims():
+    """Restore the persistent claims at register() (spec 5.19).
+
+    Restores only entries whose `root/dir` is still a directory on disk;
+    every other entry is dropped. Restored entries are marked
+    `restored=True` in the sidecar metadata so on_session_start can tell
+    a resume from a fresh bind. Fail-open: missing file / corrupt JSON /
+    IO errors restore nothing and log DEBUG only (5.8).
+    """
+    try:
+        path = _claims_store_path()
+        if not path.is_file():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = data.get("claims") if isinstance(data, dict) else None
+        if not isinstance(entries, dict):
+            logger.debug(
+                "dir-whip: session-claims load ignored (malformed store)"
+            )
+            return
+        with state.session_dirs.lock:
+            for owner, entry in entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                root = entry.get("root")
+                name = entry.get("dir")
+                if not _entry_alive(root, name):
+                    continue
+                state.session_dirs.claims[str(owner)] = str(name)
+                state.session_dirs.claim_meta[str(owner)] = {
+                    "root": str(root),
+                    "dir": str(name),
+                    "profile": entry.get("profile"),
+                    "ts": entry.get("ts"),
+                    "restored": True,
+                }
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: session-claims load failed (ignored): %s", exc
+        )
+
+
+def clear_claims_store():
+    """Delete the persistent claims store (CLR-2 revision, spec 5.19).
+
+    Called by state.reset_all through a function-local import (a
+    module-level state -> session_dirs edge would be a cycle). Fail-open:
+    never raises (a missing file is the normal case).
+    """
+    try:
+        _claims_store_path().unlink()
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        logger.debug(
+            "dir-whip: session-claims clear failed (ignored): %s", exc
+        )
 
 
 # ---------------------------------------------------------------- State access
@@ -99,16 +273,39 @@ def _claim_of(owner):
         return state.session_dirs.claims.get(owner)
 
 
-def _bind(owner, name):
-    """First bind (idempotent: an existing claim is never overwritten)."""
+def _bind(owner, name, root=None):
+    """First bind (idempotent: an existing claim is never overwritten).
+
+    Write-through (spec 5.19): a new claim persists synchronously; the
+    freshly bound entry is exempt from the dead-directory GC because the
+    create action has not run yet at guard time (pending creation).
+    """
     with state.session_dirs.lock:
-        return state.session_dirs.claims.setdefault(owner, name)
+        existing = state.session_dirs.claims.get(owner)
+        if existing is not None:
+            return existing
+        if root is None:
+            root = state.session.session_root
+        state.session_dirs.claims[owner] = name
+        state.session_dirs.claim_meta[owner] = _make_meta(name, root)
+        _persist_locked(owner)
+        return name
 
 
-def _rebind(owner, name):
-    """Claim transfer (mv rename of the bound dir, MV-1)."""
+def _rebind(owner, name, root=None):
+    """Claim transfer (mv rename of the bound dir, MV-1) + write-through."""
     with state.session_dirs.lock:
         state.session_dirs.claims[owner] = name
+        meta = state.session_dirs.claim_meta.get(owner)
+        if root is None:
+            root = state.session.session_root
+        if meta is None:
+            state.session_dirs.claim_meta[owner] = _make_meta(name, root)
+        else:
+            meta["dir"] = str(name)
+            if root:
+                meta["root"] = str(root)
+        _persist_locked(owner)
 
 
 def _slot_occupied(owner):
@@ -343,7 +540,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
         exists = os.path.isdir(os.path.join(str(working_dir_root), first_seg))
         if claim is None and not _slot_occupied(owner):
             if not exists:
-                _bind(owner, first_seg)  # static creation signal
+                _bind(owner, first_seg, working_dir_root)  # static creation signal
             return None
         if exists:
             return None  # existing other session dir: no bind (BND-5)
@@ -352,7 +549,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
             if src is not None and _same_name(
                 _token_first_segment(src, working_dir_root), claim
             ):
-                _rebind(owner, first_seg)  # mv rename of the bound dir
+                _rebind(owner, first_seg, working_dir_root)  # mv rename
                 return None
         return _limit_block(
             working_dir_root, claim, is_subagent, tool_name, normalized,
@@ -415,7 +612,7 @@ def observe_added(working_dir_root, session_id=None, added=()):
             return None
         for name in added or ():
             if name and _is_compliant(working_dir_root, name):
-                return _bind(owner, name)
+                return _bind(owner, name, working_dir_root)
         return None
     except Exception as exc:
         logger.debug(
@@ -426,12 +623,32 @@ def observe_added(working_dir_root, session_id=None, added=()):
 
 def on_session_start(session_id):
     """Top-level session start: clear the session's claim + pending
-    marker (CLR-1). Called from the assembly layer's on_start AFTER the
-    child-session skip, so child sessions inherit the parent's slot."""
+    marker (CLR-1) with the v2.16 resume exception (spec 5.19).
+
+    Resume (ADR-0015 D2): when a RESTORED claim (loaded at register()
+    into the in-memory sidecar; write-through keeps the store consistent,
+    so no second file read happens here) still holds this session AND
+    `root/dir` is still a directory on disk, the claim is KEPT. Every
+    other case pops the claim + pending marker and persists the deletion.
+    Called from the assembly layer's on_start AFTER the child-session
+    skip, so child sessions inherit the parent's slot (unchanged).
+    """
     try:
         with state.session_dirs.lock:
+            meta = state.session_dirs.claim_meta.get(session_id)
+            claim = state.session_dirs.claims.get(session_id)
+            if (
+                claim is not None
+                and meta is not None
+                and meta.get("restored")
+                and _entry_alive(meta.get("root"), claim)
+            ):
+                state.session_dirs.pending_create.pop(session_id, None)
+                return
             state.session_dirs.claims.pop(session_id, None)
             state.session_dirs.pending_create.pop(session_id, None)
+            state.session_dirs.claim_meta.pop(session_id, None)
+            _persist_locked()
     except Exception as exc:
         logger.debug(
             "dir-whip: session_dirs session start error (fail-open): %s", exc
@@ -452,11 +669,16 @@ __all__ = [
     "SESSION_DIR_LIMIT_SUBAGENT_MESSAGE",
     "ORPHAN_NOTICE_HEADER",
     "ORPHAN_NOTICE_TAIL",
+    "CLAIMS_STORE_NAME",
+    "CLAIMS_STORE_VERSION",
+    "CLAIMS_STORE_CAP",
     "guard_create",
     "guard_script",
     "observe_added",
     "on_session_start",
     "claim_of",
+    "load_claims",
+    "clear_claims_store",
     "scripts_path",
     "script_invocation_line",
     "set_classifier",
