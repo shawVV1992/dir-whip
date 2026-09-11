@@ -71,14 +71,19 @@ PLACEMENT_HINT = (
     "Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>."
 )
 
-# Same-day advisory (spec 4.1 v2.16 SCR-048 R5): ONE stderr note line when
-# the workspace already holds same-day Session Directories. Advisory only:
-# creation is never blocked, exit codes and the two-line stdout contract
-# are unchanged; when the note coexists with the fail-open resolution
-# WARNING the warning comes first (the resolver wrote it earlier).
+# Same-day advisory (spec 4.1 v2.16 SCR-048 R5; v2.17 amend — advisory
+# precision): ONE stderr note line when the workspace already holds same-day
+# Session Directories. Advisory only: creation is never blocked, exit codes
+# and the two-line stdout contract are unchanged; when the note coexists with
+# the fail-open resolution WARNING the warning comes first (the resolver wrote
+# it earlier). v2.17: the wording is deliberately CONDITIONAL (this
+# stdlib-only script cannot know conversation identity — it teaches the
+# one-per-conversation rule instead of asserting reuse); the list is NEWEST
+# first, capped at 3 entries, with the overflow shown as "(+N more)".
 ADVISORY_NOTE_TEMPLATE = (
-    "note: workspace already has Session Directory(s) today: %s; reuse the "
-    "existing one for the same conversation instead of creating another\n"
+    "note: workspace already has Session Directory(s) today (newest first): %s; "
+    "reuse the existing one if this is the same conversation; "
+    "one Session Directory per conversation\n"
 )
 
 
@@ -100,13 +105,13 @@ def is_session_name(name):
 
 
 def same_day_session_dirs(workspace, today):
-    """Sorted names of same-day session-format DIRECTORIES under workspace."""
+    """Newest-first names of same-day session-format DIRECTORIES under workspace."""
     names = []
     try:
         entries = os.listdir(workspace)
     except OSError:
         return names
-    for name in sorted(entries):
+    for name in sorted(entries, reverse=True):
         if name[:8] != today or not is_session_name(name):
             continue
         if os.path.isdir(os.path.join(workspace, name)):
@@ -115,11 +120,18 @@ def same_day_session_dirs(workspace, today):
 
 
 def advisory_note(workspace):
-    """Append ONE same-day reuse note to stderr (advisory only; spec 4.1)."""
+    """Append ONE same-day reuse note to stderr (advisory only; spec 4.1).
+
+    v2.17: names are newest-first, capped at 3 entries; the overflow is
+    shown as "(+N more)".
+    """
     today = datetime.datetime.now().strftime("%Y%m%d")
     names = same_day_session_dirs(workspace, today)
     if names:
-        sys.stderr.write(ADVISORY_NOTE_TEMPLATE % ", ".join(names))
+        shown = list(names[:3])
+        if len(names) > 3:
+            shown.append("(+%d more)" % (len(names) - 3))
+        sys.stderr.write(ADVISORY_NOTE_TEMPLATE % ", ".join(shown))
 
 
 def main(argv=None):
