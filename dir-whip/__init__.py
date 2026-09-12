@@ -63,9 +63,10 @@ from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
 # sessions" phrasing (F4).
 SKILL_DESCRIPTION = (
     "Use when creating, saving, writing, moving, or deleting files, "
-    "organizing deliverables, designing workspace layout, or auditing "
-    "workspace compliance. Enforces session directory discipline and "
-    "two-step confirmation for destructive operations."
+    "organizing deliverables, designing workspace layout, auditing "
+    "workspace compliance, or locating and reusing files from past "
+    "sessions. Enforces session directory discipline and two-step "
+    "confirmation for destructive operations."
 )
 
 
