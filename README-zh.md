@@ -119,6 +119,9 @@ hermes plugins disable dir-whip
 
 - 命名 `YYYYMMDD_HHMMSS_TaskName/`，时间戳必须真实（插件校验）。
 - 懒创建：首次文件写入时才建，不产出文件的对话不建目录。
+- 落位按流水线阶段：引入档（自历史复制、下载或用户提供）先落 `Inputs/`——
+  哪怕马上使用；草稿落 `.tmp/`；交付物落 `Outputs/`。按阶段分类，不按文件类型。
+  不含 `Inputs/` 的会话目录保持有效——首次需要时创建。
 - 根目录只允许三样东西：白名单 `files` 条目、`dirs` 条目的顶层目录、会话格式目录。（审计隔离区已迁至
   dir-whip home：`<profile home>/dir-whip/audit-quarantine/`。）
 
@@ -334,8 +337,10 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 
 ### 跨会话检索
 
-`search_workspace.py` 按元数据定位历史会话目录中的文件。任务名、文件名、
-会话日期可组合过滤，最新会话优先，结果为绝对路径、可直接复用。
+`search_workspace.py` 按元数据定位历史会话目录中的文件。任务名（`--task`）、
+文件名（`--name`）、会话日期（`--since` / `--until`）可组合过滤，`--limit`
+限量、`--json` 输出结构化结果；最新会话优先，结果为绝对路径、可直接复用。
+将定位到的文件复制进本会话 `Inputs/` 再加工——原件留在原会话。
 
 ```bash
 python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task <substr> --name <glob> --workspace <Working Directory>
@@ -350,8 +355,8 @@ python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task
 - `subagent_start` 登记 child→parent 映射：子会话开始提醒记为
   `skipped-child`，审计状态继承父会话（不重置闩锁）。
 - 父代在委托前确保目标目录存在（必要时先创建会话目录）；缺省为父会话
-  `.tmp/`，可显式传 `Outputs/` 路径（正式交付物），或为每个子代理指定独立子目录
-  （如 `.tmp/<task>/`）。
+  `.tmp/`，可显式传 `Outputs/`（正式交付物）或 `Inputs/`（引入物）路径，或为
+  每个子代理指定独立子目录（如 `.tmp/<task>/`）。
 - 子代理写入的判定与父代完全一致；统计按 `is_subagent` 切分。
 - 子代理的审计违规挂到**父 pending 集合**——`dir_whip_allow_path` 与
   `dir_whip_settle` 对子代理拒绝，豁免与清偿都由父代执行。

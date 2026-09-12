@@ -141,6 +141,11 @@ the Working Directory root:
   validates it).
 - Created lazily at the first file write — conversations that produce no
   files create no directory.
+- Placement follows the pipeline intake -> processing -> delivery: introduced
+  files (copied from a past session, downloaded, user-provided) land in
+  `Inputs/` first — even when used immediately; scratch in `.tmp/`;
+  deliverables in `Outputs/`. Classify by stage, never by file type. A Session
+  Directory without `Inputs/` stays valid — it is created when first needed.
 - The root allows exactly three things: allowlist `files` entries, the
   top-level directories behind `dirs` entries, and session-format
   directories. (The audit quarantine lives in the
@@ -409,8 +414,11 @@ python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
 ### Cross-Session Search
 
 `search_workspace.py` locates files in past Session Directories by metadata.
-Task name, filename, and session-date filters combine; newest session first,
-and results are absolute paths ready to reuse.
+Task name (`--task`), filename (`--name`), and session date (`--since` /
+`--until`) filters combine; `--limit` caps the list and `--json` returns
+structured results. Newest session first, and results are absolute paths
+ready to reuse. Copy a located file into your session's `Inputs/` before
+working on it — the original stays in its own session.
 
 ```bash
 python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task <substr> --name <glob> --workspace <Working Directory>
@@ -427,8 +435,8 @@ When a parent agent delegates to subagents, it follows this mechanism:
   is inherited from the parent (the latch is not reset).
 - The parent ensures the target directory exists before delegating (creating
   a Session Directory first when needed); the parent session's `.tmp/` by
-  default, or an explicit `Outputs/` path / per-subagent subdirectory
-  (e.g. `.tmp/<task>/`).
+  default, or an explicit `Outputs/` or `Inputs/` path / per-subagent
+  subdirectory (e.g. `.tmp/<task>/`).
 - Verdicts for subagent writes are identical to the parent's; stats are
   split by `is_subagent`.
 - Subagent violations post to the **parent pending set** —
