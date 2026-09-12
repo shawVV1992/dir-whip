@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """S1: Create a session directory (v0.3.1, spec 4.1 + 4.4).
 
-Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly Outputs/ and .tmp/.
+Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly three subdirectories:
+Outputs/, .tmp/ and Inputs/ (v2.18 SCR-049, spec 4.1).
 Prints the absolute path of the created directory (forward slashes) as
 stdout line 1, followed by a placement hint line (spec 4.1 R9): the hint
 is emitted on success (exit 0) and on the "target already exists" branch
@@ -57,18 +58,22 @@ MAX_TASK_NAME_LEN = 80
 # SCR-048 R5 (spec 4.1): session-name detection is a script-local copy of
 # the audit_workspace.py precedent (SESSION_NAME_RE + strptime) -- scripts
 # stay stdlib-only with no package imports (the dual-implementation
-# boundary is kept).
+# boundary is kept). v2.18 SCR-049: a THIRD script-local copy lives in
+# search_workspace.py (registered in spec 4.6); the script-local-copy
+# discipline is unchanged.
 SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 
 EXIT_OK = 0
 EXIT_PARAM_ERROR = 1
 EXIT_BOUNDARY_ERROR = 2
 
-# Placement hint (spec 4.1 R9 output contract): stdout line 2 on exit 0
-# and on the exit-2 "target already exists" branch. Other failure paths
-# (exit 1; exit-2 boundary mismatch) stay silent on stdout.
+# Placement hint (spec 4.1 R9 output contract; v2.18 SCR-049 three-layer
+# wording): stdout line 2 on exit 0 and on the exit-2 "target already
+# exists" branch. Other failure paths (exit 1; exit-2 boundary mismatch)
+# stay silent on stdout.
 PLACEMENT_HINT = (
-    "Write the deliverable to Outputs/<filename>, scratch to .tmp/<filename>."
+    "Write deliverables to Outputs/<filename>, scratch to .tmp/<filename>, "
+    "imported or reused files to Inputs/<filename>."
 )
 
 # Same-day advisory (spec 4.1 v2.16 SCR-048 R5; v2.17 amend — advisory
@@ -136,7 +141,7 @@ def advisory_note(workspace):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Create a session directory YYYYMMDD_HHMMSS[_TaskName] with Outputs/ and .tmp/ subdirectories."
+        description="Create a session directory YYYYMMDD_HHMMSS[_TaskName] with Outputs/, .tmp/ and Inputs/ subdirectories."
     )
     parser.add_argument(
         "task_name",
@@ -201,8 +206,11 @@ def main(argv=None):
     # unchanged, and stdout stays exactly two lines.
     advisory_note(workspace)
 
+    # v2.18 SCR-049 (spec 4.1): the skeleton is exactly three
+    # subdirectories, created in this order: Outputs/, .tmp/, Inputs/.
     os.makedirs(os.path.join(target, "Outputs"))
     os.makedirs(os.path.join(target, ".tmp"))
+    os.makedirs(os.path.join(target, "Inputs"))
 
     sys.stdout.write(target.replace(os.sep, "/") + "\n")
     sys.stdout.write(PLACEMENT_HINT + "\n")
