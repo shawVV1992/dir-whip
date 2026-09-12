@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.8](https://img.shields.io/badge/version-0.6.8-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.7.0](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -43,9 +43,13 @@ reminder is skipped — in-Working-Directory interception still applies.
    (`{"wakeAgent": bool, "violations": N}`) for cron tasks — zero
    auto-delete anywhere; a silent tick never interrupts, violations wake
    the agent to remediate.
-5. **Subagent discipline.** Children write to parent-designated
+5. **Cross-session reuse search.** `search_workspace.py` finds files in
+   past Session Directories by metadata. Task name, filename, and date
+   filters combine; newest session first, and results are absolute paths
+   ready to reuse. No index, no state.
+6. **Subagent discipline.** Children write to parent-designated
    directories; they never self-create Session Directories.
-6. **Project-mode aware.** When an active Hermes project contains the
+7. **Project-mode aware.** When an active Hermes project contains the
    agent CWD, the session-start reminder is skipped entirely
    (`skipped-project`).
 
@@ -116,7 +120,7 @@ hermes plugins disable dir-whip
 | Layer | Role | Form |
 |-------|------|------|
 | **Config** (`dir-whip-config.yaml`) | Sole configuration source; Skill and Plugin have zero runtime coupling and meet only at this file (teach / enforce split) | `allowlist` files/dirs + `working_dir_root` keys; hand-edited or row-level edited via `/dir-whip` |
-| **Skill (teaches, incl. Scripts tools)** | Discipline reference + CLI helpers | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it); scripts `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py` (create · audit · resolve) |
+| **Skill (teaches, incl. Scripts tools)** | Discipline reference + CLI helpers | Bundled `workspace-organization` skill (opt-in) + one conditional session-start reminder (≤280 chars, injected only when the agent CWD is inside the Working Directory and no active project covers it); scripts `create_session_dir.py` / `audit_workspace.py` / `search_workspace.py` / `workspace_resolver.py` (create · audit · search · resolve) |
 | **Plugin (enforces)** | Intercepts violations before they land and handles the backstop | 9 hooks in three groups (as drawn): **front-layer interception** (`pre_tool_call` pre-landing three-tier verdict), **audit-layer backstop** (snapshot diff + L1 notice + L3 gate), **backstop tools** (`dir_whip_allow_path` / `dir_whip_settle` / `/dir-whip`); plus the `pre_verify` continuation nudge and observe-only hooks |
 | **Observability** | Records and reports | stats.jsonl (5 MB rollover) + 7 `dir-whip:*` events + dir-whip.log + the `/dir-whip` merged report |
 
@@ -128,7 +132,9 @@ the Working Directory root:
 ├── (strict empty allowlist; add via /dir-whip allow)
 └── 20260822_143000_ReportTask/    # Session Directory (lazy-created)
     ├── Outputs/                   # formal deliverables
-    └── .tmp/                      # intermediate files (age-listed, never auto-cleaned)
+    ├── .tmp/                      # intermediate files (age-listed, never auto-cleaned)
+    └── Inputs/                    # introduced files - copied from past sessions,
+                                   #   downloaded, or user-provided; land here first
 ```
 
 - Named `YYYYMMDD_HHMMSS_TaskName/` with a real timestamp (the plugin
@@ -318,7 +324,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.8
+[dir-whip] v0.7.0
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -398,6 +404,16 @@ or an unresolved Working Directory (cron failure visibility).
 ```bash
 # cron job example: audit the Working Directory, wake only on violations
 python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
+```
+
+### Cross-Session Search
+
+`search_workspace.py` locates files in past Session Directories by metadata.
+Task name, filename, and session-date filters combine; newest session first,
+and results are absolute paths ready to reuse.
+
+```bash
+python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task <substr> --name <glob> --workspace <Working Directory>
 ```
 
 ### Subagent Mode

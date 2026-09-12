@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.6.8](https://img.shields.io/badge/version-0.6.8-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.7.0](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -28,8 +28,11 @@
 2. **双层检测+兜底工具：** 在插件中，前置层在落地前拦截白名单与会话目录之外的写入（含根级文件与非会话子目录）并附修正指引；审计层对放行的终端命令做快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
 3. **可观测：** 7 类 `dir-whip:*` 事件发总线；每次判定落一行 stats.jsonl（5 MB 滚动），可观测溯源。
 4. **定时治理：** 针对 cron 任务采用纯审计 + 两态唤醒（`{"wakeAgent": bool, "violations": N}`），全插件零自动删除；静默 tick 不打断执行，有违规才唤醒 agent 清偿。
-5. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
-6. **项目模式感知：** 当活跃 Hermes 项目包含 agent CWD 时，会话开始提醒整体跳过（`skipped-project`）。
+5. **跨会话复用检索：** `search_workspace.py` 按元数据定位历史会话目录中的
+   文件；任务名、文件名、日期可组合过滤，最新会话优先，结果为绝对路径、
+   可直接复用。无索引、无状态。
+6. **子代理纪律：** 子代理写入父代指定目录，绝不自行创建会话目录。
+7. **项目模式感知：** 当活跃 Hermes 项目包含 agent CWD 时，会话开始提醒整体跳过（`skipped-project`）。
 
 ## 安装与快速上手
 
@@ -99,7 +102,7 @@ hermes plugins disable dir-whip
 | 层 | 职责 | 形态 |
 |----|------|------|
 | **Config**（`dir-whip-config.yaml`） | 唯一配置源；教导层与强制层零运行时耦合，仅通过该文件双向衔接（教罚分离） | `allowlist` files/dirs + `working_dir_root` 两个键；可手改或经 `/dir-whip` 命令行级编辑 |
-| **Skill（教导，含 Scripts 工具）** | 纪律参考 + CLI 辅助 | 捆绑的 `workspace-organization` 技能（可选加载）+ 条件化会话开始提醒（≤280 字符，仅当 agent CWD 位于工作目录内且无活跃项目覆盖时注入）；脚本 `create_session_dir.py` / `audit_workspace.py` / `workspace_resolver.py`（建目录 · 审计 · 解析） |
+| **Skill（教导，含 Scripts 工具）** | 纪律参考 + CLI 辅助 | 捆绑的 `workspace-organization` 技能（可选加载）+ 条件化会话开始提醒（≤280 字符，仅当 agent CWD 位于工作目录内且无活跃项目覆盖时注入）；脚本 `create_session_dir.py` / `audit_workspace.py` / `search_workspace.py` / `workspace_resolver.py`（建目录 · 审计 · 检索 · 解析） |
 | **Plugin（强制）** | 拦截违规落地和兜底处理 | 9 个钩子分三组（与图中模块对应）：**前置层拦截**（`pre_tool_call` 落地前三态判定）、**审计层兜底**（快照 diff + L1 通告 + L3 闩锁）、**兜底工具**（`dir_whip_allow_path` / `dir_whip_settle` / `/dir-whip`）；另含 `pre_verify` 续推兜底与纯观察钩子 |
 | **Observability（可观测）** | 记录与报告 | stats.jsonl（5 MB 滚动）+ 7 类 `dir-whip:*` 事件 + dir-whip.log + `/dir-whip` 合并报告 |
 
@@ -110,7 +113,8 @@ hermes plugins disable dir-whip
 ├── (严格空白名单；通过 /dir-whip allow 添加)
 └── 20260822_143000_ReportTask/    # 会话目录（懒创建）
     ├── Outputs/                   # 正式交付物
-    └── .tmp/                      # 中间文件（按龄盘点，永不自动清理）
+    ├── .tmp/                      # 中间文件（按龄盘点，永不自动清理）
+    └── Inputs/                    # 引入物——自历史复制、下载或用户提供；严格先落此层
 ```
 
 - 命名 `YYYYMMDD_HHMMSS_TaskName/`，时间戳必须真实（插件校验）。
@@ -262,7 +266,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.6.8
+[dir-whip] v0.7.0
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -326,6 +330,15 @@ Working Directory 未解析（cron 失败可见性）。
 ```bash
 # cron 任务示例：审计工作目录，仅违规时唤醒
 python <plugin>/skills/workspace-organization/scripts/audit_workspace.py --gate
+```
+
+### 跨会话检索
+
+`search_workspace.py` 按元数据定位历史会话目录中的文件。任务名、文件名、
+会话日期可组合过滤，最新会话优先，结果为绝对路径、可直接复用。
+
+```bash
+python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task <substr> --name <glob> --workspace <Working Directory>
 ```
 
 ### 子代理模式
