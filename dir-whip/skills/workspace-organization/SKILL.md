@@ -1,6 +1,6 @@
 ---
 name: workspace-organization
-description: "Use when creating, saving, writing, moving, or deleting files, organizing deliverables, designing workspace layout, or auditing workspace compliance. Enforces session directory discipline and two-step confirmation for destructive operations."
+description: "Use when creating, saving, writing, moving, or deleting files, organizing deliverables, designing workspace layout, auditing workspace compliance, or locating and reusing files from past sessions. Enforces session directory discipline and two-step confirmation for destructive operations."
 author: dir-whip
 license: MIT
 platforms: [linux, macos, windows]
@@ -12,7 +12,7 @@ metadata:
 
 # Workspace Organization
 
-File placement discipline for Hermes agent workspaces: session directory structure, Outputs/.tmp placement, root-forbid rule, and governance workflows.
+File placement discipline for Hermes agent workspaces: session directory structure, the Inputs/.tmp/Outputs placement pipeline, root-forbid rule, and governance workflows.
 
 ## When to Use
 
@@ -20,6 +20,7 @@ Use when:
 - Before first file write in a Hermes workspace - Session Directory first: reuse the conversation's, or create one when none exists
 - Creating, saving, writing, moving, or deleting files in a Hermes workspace
 - Organizing deliverables or designing workspace layout
+- Locating or reusing files from past sessions (cross-session metadata search)
 - Auditing workspace compliance ("tidy workspace", cron governance)
 
 Do NOT use when:
@@ -36,7 +37,7 @@ IF project_list tool available AND active_id not null AND CWD under project fold
 IF CWD not under the current profile's Working Directory
   -> PROJECT MODE. Stop. This skill does not apply.
 IF a Session Directory exists for this conversation
-  -> DEFAULT MODE. Reuse it: write to its Outputs/ (deliverables) or .tmp/ (scratch), then proceed to Layer 1.
+  -> DEFAULT MODE. Reuse it: write to its Outputs/ (deliverables), .tmp/ (scratch) or Inputs/ (introduced files), then proceed to Layer 1.
 OTHERWISE
   -> DEFAULT MODE. Create a Session Directory first: python scripts/create_session_dir.py <task> --workspace <root>, then proceed to Layer 1.
 ```
@@ -45,7 +46,8 @@ OTHERWISE
 
 | Scenario | Action |
 |----------|--------|
-| Writing any file | Classify target -> reuse the conversation's Session Directory (create only when none exists) -> write to `Outputs/` or `.tmp/` |
+| Writing any file | Classify target -> reuse the conversation's Session Directory (create only when none exists) -> write to `Outputs/`, `.tmp/` or `Inputs/` per the placement decision |
+| Reusing a file from a past session | Run `python scripts/search_workspace.py --task <substr> --name <glob> --workspace <root>`; copy the found file into this session's `Inputs/` |
 | Root write blocked | Reuse the conversation's Session Directory, re-target there (create only when none exists) |
 | Delete / overwrite / move | Confirmation Protocol (list files -> wait for explicit yes) |
 | User specifies a path | Call `dir_whip_allow_path(path)` (no confirm) to get the confirmation briefing, relay it to the user, then re-call with `confirm=true` only after explicit user approval. Value domain: paths INSIDE the Working Directory only - paths outside need NO entry (writes there are allowed and logged) |
@@ -73,30 +75,36 @@ conversation (the guard blocks a second creation attempt).
 1. Am I inside a valid Session Directory? YES -> proceed with the operation.
 2. NO -> does THIS CONVERSATION already have a Session Directory? Judge by
    conversation identity, NOT by the current task or the current location.
-   - YES -> REUSE it: write into its `Outputs/` and `.tmp/`
+   - YES -> REUSE it: write into its `Outputs/`, `.tmp/` and `Inputs/`
    - NO -> create it first (lazy creation at first file write, NOT at
      conversation start):
      `python scripts/create_session_dir.py <task> --workspace <root>`
      Example: `python scripts/create_session_dir.py auth-refactor --workspace E:/ws` (replace <task> and <root> with your values)
-     then write to `Outputs/` or `.tmp/` within it
-3. Every session dir contains `Outputs/` (deliverables) and `.tmp/` (scratch)
+     then write to `Outputs/`, `.tmp/` or `Inputs/` within it
+3. Every session dir contains `Outputs/` (deliverables), `.tmp/` (scratch) and `Inputs/` (introduced files). A legacy session dir without `Inputs/` stays valid - create it on the first introduced file.
 - Root allows ONLY: `allowlist` `files` entries, session-format dirs (`allowlist` `dirs` subtrees likewise exempt)
 - Project directories inside the workspace can be exempted wholesale via an
   `allowlist` `dirs` entry (recursive subtree) - add via `/dir-whip allow <path>`
 - `Outputs/` blacklist: `__pycache__/`, `*.pyc`, `node_modules/`, `.DS_Store`, `Thumbs.db`
 
-### 3. File placement decision (Outputs vs .tmp)
+### 3. File placement decision (Inputs, .tmp, Outputs)
 
-Classify BEFORE writing, by intent. First match wins:
+Classify BEFORE writing, by pipeline stage. First match wins:
 
-1. **User-requested deliverable** -- a file the user asked for and will take
+1. **Introduced file** -- anything entering from OUTSIDE this session:
+   copied from a past session, downloaded, or user-provided. -> `Inputs/`
+   (strict: land here FIRST even when consumed immediately; the original
+   stays put; a processed result is a NEW file in `Outputs/`)
+2. **User-requested deliverable** -- a file the user asked for and will take
    away: report, document, analysis result, chart, export. -> `Outputs/`
-2. **Working artifact** -- anything needed only to produce the deliverable:
+3. **Working artifact** -- anything needed only to produce the deliverable:
    scripts, intermediate data, debug output, drafts still being iterated. -> `.tmp/`
-3. **Unsure?** -> `.tmp/` (default; promotion later is always possible, demotion pollutes the deliverable folder)
+4. **Unsure?** -> `.tmp/` (default; promotion later is always possible, demotion pollutes the deliverable folder)
 
-Anchor: expired `.tmp/` entries (30-day default threshold) appear in the
-audit's read-only inventory proposal - the plugin never auto-cleans.
+Anchor: placement follows the pipeline intake -> processing -> delivery
+(`Inputs/` -> `.tmp/` -> `Outputs/`); classify by stage, never by file type.
+Expired `.tmp/` entries (30-day default threshold) appear in the audit's
+read-only inventory proposal - the plugin never auto-cleans.
 If you would miss this file when the proposal lists it, it belongs in `Outputs/`.
 
 Extension hints (intent wins over extension):
@@ -104,17 +112,30 @@ Extension hints (intent wins over extension):
 - Scratch-like: `.log`, `.pyc`, debug dumps, temp copies, intermediate `.csv`/`.json`
 
 Subagent: no placement decision -- write to the parent-passed directory
-(default `.tmp/`; `Outputs/` only when the parent passes it). See the
-Subagent File Protocol below.
+(default `.tmp/`; `Outputs/` or `Inputs/` only when the parent passes it).
+See the Subagent File Protocol below.
 
-### 4. Confirmation Protocol
+### 4. Reusing past artifacts
+
+Locate -> Take -> Process -> Deliver:
+
+1. **Locate**: `python scripts/search_workspace.py --task <substr> --name <glob> [--since YYYYMMDD] [--until YYYYMMDD] --workspace <root>`
+   - metadata-only search across every session directory, newest first; results are absolute paths, ready to use
+   - extract query terms from the user's words: time -> `--since`/`--until`, task -> `--task`, file feature -> `--name`
+   - no results? widen the range or change keywords - do NOT hand-roll `ls`/`glob`
+2. **Take**: copy the located file into THIS session's `Inputs/` (it is an
+   introduced file now; the original stays in its own session)
+3. **Process**: work in `.tmp/` as needed
+4. **Deliver**: the result is a NEW file in this session's `Outputs/`
+
+### 5. Confirmation Protocol
 
 Applies to delete / overwrite / move. **Instruction is not confirmation.**
 
 1. Agent lists the exact files and asks "Confirm? (yes/no)"
 2. User replies "yes"/"confirm"/"go ahead" -> execute; anything else -> abort
 
-### 5. When blocked
+### 6. When blocked
 
 Reply with the [Reason]/[Next] template:
 
@@ -122,20 +143,20 @@ Reply with the [Reason]/[Next] template:
 [Reason] The target <path> is not allowed: <rule reason>.
 [Next] I will write into the conversation's Session Directory (reuse it if it already exists; create one only when none does):
   python scripts/create_session_dir.py <task_name> --workspace <working_dir>
-  then write to its Outputs/ or .tmp/ subdirectory.
+  then write to its Outputs/, .tmp/ or Inputs/ subdirectory.
 ```
 
 Subagent variant: replace "I will create..." with "I will write to the target directory passed by the parent agent."
 
-### 6. Examples
+### 7. Examples
 
 - **Wrong:** writing `<working_dir>/report.md` directly -> blocked by the guard
-- **Correct:** `python scripts/create_session_dir.py report --workspace <working_dir>`, then write the deliverable to `Outputs/report.md` (or scratch to `.tmp/`)
+- **Correct:** `python scripts/create_session_dir.py report --workspace <working_dir>`, then write the deliverable to `Outputs/report.md` (scratch to `.tmp/`, introduced files to `Inputs/`)
 
 ## Subagent File Protocol
 
 - Parent ensures the target directory exists before delegating (lazy creation is the parent's job)
-- Subagents write to the parent's `.tmp/` (default) or an explicit `Outputs/`/per-task subdirectory
+- Subagents write to the parent's `.tmp/` (default) or an explicit `Outputs/`, `Inputs/`/per-task subdirectory
 - Subagents never create session directories or promote outputs (`.tmp/` -> `Outputs/` is the parent's review step); missing target or blocked write -> report back to the parent
 - `dir_whip_allow_path` is not available to subagents; exemptions are granted by the user via the main agent -> report back so the parent can ask the user
 
@@ -164,8 +185,9 @@ All scripts: Python 3.11, `--help` support, forward-slash output paths.
 
 | Script | Purpose | Key flags |
 |--------|---------|-----------|
-| create_session_dir.py | Create session dir with Outputs/ + .tmp/ | `--workspace` |
+| create_session_dir.py | Create session dir with Outputs/, .tmp/ + Inputs/ | `--workspace` |
 | audit_workspace.py | Compliance audit + wakeAgent gate line (audit-only, zero delete) | `--workspace`, `--json`, `--gate`, `--days` |
+| search_workspace.py | Cross-session metadata search over session dirs (newest first, stateless) | `--task`, `--name`, `--since`, `--until`, `--limit`, `--workspace`, `--json` |
 
 Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resolution failure fails open to CWD with one warning.
 
@@ -182,13 +204,17 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 | Deleted without confirmation | Instruction treated as confirmation | List files, wait for explicit yes |
 | Existing repos outside workspace | Relocation attempted | Point via rules file, don't relocate |
 | First write without session dir (missed trigger) | Skill not triggered before first write | Before first file write, reuse the conversation's Session Directory or create one: `python scripts/create_session_dir.py <task> --workspace <root>` |
+| Hand-rolled ls/glob for past-session files | Search surface missed | Use `search_workspace.py` (metadata search, newest first) |
+| Introduced file mixed into `.tmp/` or `Outputs/` | Placement not classified | Copied/downloaded/user-provided files -> `Inputs/` |
 
 ## Verification
 
 - Classified the target before every write?
 - Reused the conversation's existing Session Directory (no second dir created)?
 - Judged reuse by conversation, not by the current task or location?
-- File inside a session dir, in the correct `Outputs/`/`.tmp/`?
+- File inside a session dir, in the correct `Outputs/`/`.tmp/`/`Inputs/`?
+- Introduced files placed in `Inputs/` (not mixed with scratch or deliverables)?
+- Past-session files located via `search_workspace.py` (not hand-rolled `ls`/`glob`)?
 - No non-whitelist files at the Working Directory root? (root allows only
   `allowlist` `files` entries, session-format dirs, and `allowlist` `dirs`
   subtrees; a leftover `.hermes/` directory is flagged by the audit)
@@ -196,4 +222,4 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 
 ## Remember
 
-Classify before write -> session dir for all writes -> root forbid -> when blocked, reuse the conversation's session dir (create one only when none exists) and retry.
+Classify before write (introduced -> `Inputs/`, scratch -> `.tmp/`, deliverable -> `Outputs/`) -> session dir for all writes -> root forbid -> when blocked, reuse the conversation's session dir (create one only when none exists) and retry.

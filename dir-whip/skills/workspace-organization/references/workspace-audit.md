@@ -32,7 +32,7 @@ Before auditing, confirm the target is a legitimate Working Directory:
 | 1 | **Root-level entries** -- only allowlist `files` entries, allowlist `dirs` subtrees, and session-format dirs (`YYYYMMDD_HHMMSS_TaskName/`) should exist at the workspace root; a leftover `.hermes/` directory is flagged too (the audit quarantine moved to the dir-whip home) | Scripts, images, notes dumped in root |
 | 2 | **Root-level Outputs/** -- deliverables must live inside a session dir's Outputs/ | `Outputs/script.sh` at top level |
 | 3 | **Session dir format** -- must be `YYYYMMDD_HHMMSS_TaskName` | Plain-named folders, missing timestamp |
-| 4 | **Session subdirs** -- each session dir must have both `Outputs/` and `.tmp/` | Missing `.tmp/` or missing `Outputs/` |
+| 4 | **Session subdirs** -- each session dir must have both `Outputs/` and `.tmp/` (the audit's required minimum; `Inputs/` is the optional intake layer for introduced files and is NOT part of the audit minimum) | Missing `.tmp/` or missing `Outputs/` |
 | 5 | **Outputs content** -- only user-facing deliverables, no build artifacts | `__pycache__/`, `.pyc`, node_modules |
 | 6 | **.tmp/ content** -- intermediate/scratch files go here, not in root or Outputs | Debug scripts left in workspace root |
 | 7 | **Destructive commands** -- never use `rm -rf`, `del /S/Q`, bulk rename. This is a behavioral rule, not an automated audit check. | Use `rmdir` for empty dirs, `mv` for files |
@@ -103,7 +103,7 @@ ls -laR "<WORKSPACE_PATH>/" --ignore='.tmp' | head -40
 
 Confirm:
 - No root-level deliverables remain
-- Every session dir has Outputs/ + .tmp/
+- Every session dir has Outputs/ + .tmp/ (required minimum; Inputs/ may exist for introduced files)
 - Outputs/ contains only user-facing files
 - The workspace rules file is untouched
 
