@@ -1,10 +1,13 @@
-"""dir-whip plugin for Hermes.
+"""dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (SCR-035, ADR-0007).
 
-Assembly layer (SCR-035, task 31.13): register(ctx) + the eight thin hook
-adapters + the SINGLE fail-open try/except layer for hook dispatch. The
-plugin's modules (verdict/audit/sessions/events/terminal/paths/config/
-stats/state/report) are pure decision/state layers; the host API is
-touched ONLY here (ADR-0007).
+Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally.
+
+Layer: assembly
+Refs: spec 3.1, spec 5.4, spec 5.7, spec 5.8, spec 5.11, spec 5.13, spec 5.14, spec 5.15, spec 5.17, spec 5.18, spec 5.19, SCR-035, SCR-039, SCR-040, SCR-041, SCR-044, SCR-045, SCR-048, ADR-0007
+Key exports:
+  - register -- register the host hooks, the dir_whip_allow_path tool, the /dir-whip command, the bundled skill and the event bus (single fail-open layer).
+  - _guard_hook, on_start, on_post_tool_call, on_post_approval_response, on_pre_command, on_subagent_start, on_subagent_stop, on_transform_tool_result, on_pre_verify -- the thin host-hook adapters; each fail-open, never raises.
+  - state.session.session_cwd_fn / agent_cwd_fn / project_active_fn -- injected host-API slots (ADR-0007); unimportable host API -> None -> documented fallback.
 """
 
 import datetime

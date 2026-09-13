@@ -1,24 +1,12 @@
-"""Dedicated diagnostic log setup (spec 5.13 v2.8 R5) — dir-whip.log.
+"""Dedicated diagnostic log setup -- dir-whip.log: profile-aware path, DEBUG-full, three-tier handler degradation (spec 5.13, spec v2.8 R5).
 
-Attaches a DEBUG-full rotating file handler to the existing 'dir-whip'
-logger at register() so every logger.debug/info/warning line is captured
-in <HERMES_HOME>/dir-whip/dir-whip.log — including the DEBUG breadcrumbs
-below the host agent.log INFO+ threshold (allow-class verdicts, fail-open
-handling paths). Three-tier fail-open handler chain:
-concurrent_log_handler.ConcurrentRotatingFileHandler (cross-process-safe
-rotation, installed in the host venv; a third-party import does not
-violate the ADR-0007 core zero-host-import red line) -> stdlib
-logging.handlers.RotatingFileHandler -> console only (no file handler).
-Parameters: maxBytes=5 MiB, backupCount=3, delay=True (file created on
-first write), encoding="utf-8". Privacy: absolute paths ARE allowed (a
-local diagnostic file; diagnostic value first; no secret-class content
-in dir-whip messages). Known limitations (spec 5.13): with one desktop
-process serving multiple profiles the log lands in the registering
-profile's directory and lines from other profiles interleave; the stdlib
-fallback path has the known Windows multi-process rotation WinError 32
-risk. No host imports (ADR-0007); the path layout mirrors
-stats.stats_jsonl_path via paths.profile_home (SCR-026/027
-profile-aware recognition).
+Attaches a DEBUG-full rotating file handler to the existing "dir-whip" logger at register(), capturing the breadcrumbs below the host agent.log INFO+ threshold (allow-class verdicts, fail-open handling paths), with the fail-open chain concurrent_log_handler.ConcurrentRotatingFileHandler (cross-process-safe rotation, installed in the host venv; a third-party import does not violate the ADR-0007 core zero-host-import red line) -> stdlib logging.handlers.RotatingFileHandler -> console only. Parameters maxBytes=5 MiB / backupCount=3 / delay=True (file created on first write) / encoding="utf-8"; absolute paths ARE allowed (local diagnostic file, no secret-class content); known limitations: multi-profile interleave under one desktop process and the stdlib-fallback Windows multi-process rotation WinError 32 risk; path layout mirrors stats.stats_jsonl_path via paths.profile_home (SCR-026, SCR-027).
+
+Layer: core
+Refs: spec 5.13, spec v2.8 R5, SCR-026, SCR-027, ADR-0007
+Key exports:
+  - setup -- attach the diagnostic file handler to the "dir-whip" logger; idempotent via state.session.log_handler_installed, three-tier fail-open, never raises.
+  - diagnostic_log_path -- the session profile's dir-whip.log path (single source of truth reused by report.py).
 """
 
 import logging

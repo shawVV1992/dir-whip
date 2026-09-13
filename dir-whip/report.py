@@ -1,12 +1,13 @@
-"""The /dir-whip report command surface (spec 5.7, SCR-037, v2.8 R6).
+"""/dir-whip report rendering + allow|remove|list unified command surface (spec 5.7, spec v2.8 R6, SCR-037).
 
-Renders the merged report (version, State enabled/disabled, Working
-Directory + source, Allowlist block, WARNING, Stats File, Debug Log,
-Health last)
-and registers the slash command. Depends on the config resolution/stats
-surface (report -> config direction, per the plan's dependency graph).
-Extracted from config.py (task 31.8). Allowlist management
-(allow|remove|list) per SCR-037 v2.5, unified single-key B2 via allowlist.
+Renders the merged report in fixed field order -- version, State enabled/disabled, Working Directory + resolution source, Allowlist block, anomaly-only WARNING, Stats File, Debug Log, Health last -- and manages the persistent allowlist (unified single-key model per spec v2.6 B2; command shape per SCR-037, spec v2.5) via row-level edits preserving comments. Depends on the config resolution/stats surface (report -> config direction per the plan dependency graph); extracted from config.py (task 31.8).
+
+Layer: core+registration-helper
+Refs: spec 5.5, spec 5.6, spec 5.7, spec v2.5, spec v2.6 B2, spec v2.7 R9, spec v2.8 R6, SCR-029, SCR-035, SCR-037, SCR-043 R5, SCR-045 R5, SCR-046 R1
+Key exports:
+  - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
+  - render -- render the merged /dir-whip report (thin alias of _dir_whip_report).
+  - register_commands -- thin alias of register_dir_whip_commands (SCR-035 interface convergence).
 """
 
 import logging
