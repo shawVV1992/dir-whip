@@ -1,16 +1,15 @@
 """dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (SCR-035, ADR-0007).
 
-Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally.
+Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally. SCR-050 v3 R6.2 (spec 5.1 v2.19): every hook adapter is a THIN dispatch -- the session-start decision chain lives in lifecycle.py, the guard chain in verdict.py, the observers in sessions/audit/events.
 
 Layer: assembly
-Refs: spec 3.1, spec 5.4, spec 5.7, spec 5.8, spec 5.11, spec 5.13, spec 5.14, spec 5.15, spec 5.17, spec 5.18, spec 5.19, SCR-035, SCR-039, SCR-040, SCR-041, SCR-044, SCR-045, SCR-048, ADR-0007
+Refs: spec 3.1, spec 5.4, spec 5.7, spec 5.8, spec 5.11, spec 5.13, spec 5.14, spec 5.15, spec 5.17, spec 5.18, spec 5.19, SCR-035, SCR-039, SCR-040, SCR-041, SCR-044, SCR-045, SCR-048, SCR-050, ADR-0007
 Key exports:
   - register -- register the host hooks, the dir_whip_allow_path tool, the /dir-whip command, the bundled skill and the event bus (single fail-open layer).
   - _guard_hook, on_start, on_post_tool_call, on_post_approval_response, on_pre_command, on_subagent_start, on_subagent_stop, on_transform_tool_result, on_pre_verify -- the thin host-hook adapters; each fail-open, never raises.
   - state.session.session_cwd_fn / agent_cwd_fn / project_active_fn -- injected host-API slots (ADR-0007); unimportable host API -> None -> documented fallback.
 """
 
-import datetime
 import json
 import logging
 import os
@@ -40,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allow_path, audit, config, events, logsetup, report, sessions, session_dirs, state, stats, verdict
+from . import allow_path, audit, config, events, lifecycle, logsetup, report, sessions, session_dirs, state, stats, verdict
 
 logger = logging.getLogger("dir-whip")
 
@@ -237,188 +236,18 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
         return None
 
 
-def _record_session_reminder(session_id, status):
-    """One session-reminder stats row at a terminal reminder state
-    (SCR-040 R4, 5.13 v2.8): allow/session, reason = the state literal
-    (injected | skipped-outside | skipped-child | skipped-project |
-    unavailable -- all five states observable here; this is the five-state
-    outlet after the v2.8 report Reminder line's removal), target=None.
-    One row per session start; child sessions record their own
-    skipped-child state. Allow outcome -> no bus fanout (the 5.14 emit
-    surface stays at 7). Fail-open: events.emit never raises."""
-    events.emit(
-        "allow", "session", "session-reminder", None,
-        status, session_id, sessions.is_child(session_id),
-    )
-
-
-def _record_orphan_notice(session_id):
-    """One orphan-notice stats row when the R7 advisory notice is
-    delivered at session start (SCR-044 R7: allow/session/orphan-notice
-    via the events/stats setdefault chain, same non-verdict advisory
-    convention as _record_session_reminder; allow outcome -> no bus
-    fanout, the 5.14 emit surface stays at 7). Top-level path only, so
-    is_subagent is False by construction. Fail-open: events.emit never
-    raises."""
-    events.emit(
-        "allow", "session", "orphan-notice", None,
-        "orphan scan notice at session start", session_id, False,
-    )
-
-
-def _record_reminder_fallback(session_id):
-    """One session-reminder-fallback stats row (SCR-048 R4, 5.17/5.13).
-
-    Fired by the one-shot transform_tool_result fallback note when the
-    session-start reminder outcome was unavailable; top-level only.
-    Stats-only: the allow outcome with target None fans out NO bus
-    event (the 5.14 emit surface stays at 7). Fail-open: events.emit
-    never raises."""
-    events.emit(
-        "allow", "session", "session-reminder-fallback", None,
-        "session-start reminder re-delivered on the first eligible "
-        "tool result",
-        session_id, False,
-    )
-
-
-def _inject_reminder(ctx, session_id):
-    """Inject the session-start discipline reminder (5.4 R2/R6).
-
-    The injected/unavailable two arms collapsed into one helper
-    (SCR-045 R7): inject when the ctx channel exists and accepts the
-    message; otherwise record unavailable with the same debug line.
-    v2.16 SCR-048 R4 (5.17): the unavailable arm subdivides the stats
-    reason into ``unavailable:no-ctx`` / ``unavailable:no-method`` /
-    ``unavailable:falsy-return`` (the ``unavailable`` prefix retained for
-    compatibility), arms the one-shot transform_tool_result fallback
-    flag, and the debug line records the method-existence detail.
-    """
-    has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
-    if has_method and ctx.inject_message(verdict.REMINDER_MESSAGE):
-        state.session.reminder_status = "injected"
-        _record_session_reminder(session_id, "injected")
-        return
-    if not ctx:
-        sub = "no-ctx"
-    elif not has_method:
-        sub = "no-method"
-    else:
-        sub = "falsy-return"
-    state.session.reminder_status = "unavailable"
-    state.session.reminder_pending_fallback = True
-    _record_session_reminder(session_id, "unavailable:" + sub)
-    logger.debug(
-        "dir-whip: session-start reminder %s "
-        "(inject_message present=%s); fallback armed",
-        "unavailable:" + sub, has_method,
-    )
-
-
 def on_start(session_id, model=None, platform=None, **kwargs):
-    """on_session_start hook adapter (5.4): top-level sessions only.
+    """on_session_start hook adapter (5.4): thin fail-open dispatch.
 
-    Top-level: clear the runtime allowlist, reset the fail-open warning
-    flag, inject the discipline reminder. Child sessions (session_id in
-    child_session_ids) SKIP all three. Gateway degrade: inject_message
-    unavailable or falsy -> DEBUG log, no crash.
+    SCR-050 v3 R6.2 (spec 5.1 v2.19): the session-start decision chain
+    (child short-circuit, state resets, SCR-027 profile re-resolution,
+    R2 cwd conditional injection, R7 project exemption, reminder
+    lifecycle, advisory orphan scan) lives in the core module
+    lifecycle.py; this adapter only dispatches and swallows failures
+    (5.8 fail-open single layer).
     """
     try:
-        if sessions.is_child(session_id):
-            state.session.reminder_status = "skipped-child"
-            # 5.13 v2.8: the five-state stats outlet covers skipped-child
-            # too (the report Reminder line is removed in v2.8).
-            _record_session_reminder(session_id, "skipped-child")
-            return
-        # SCR-048 R4 (5.17): the fallback flag is reset at the START of
-        # every top-level session start (before injection); only the
-        # unavailable arm of _inject_reminder below sets it. Child
-        # sessions return above and never touch the parent's pending flag.
-        state.session.reminder_pending_fallback = False
-        # 5.18: top-level session start clears the audit state (pending
-        # violations, leftover pre snapshots, cap warning); child sessions
-        # skip and inherit the parent's latched state.
-        audit.session_start(session_id)
-        # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
-        # the session-dir claim + pending marker (child sessions returned
-        # above and inherit the parent's slot).
-        session_dirs.on_session_start(session_id)
-        config.runtime_allowlist_clear()
-        # SCR-041 R3: the confirmation-issued set follows the runtime
-        # allowlist lifecycle -- cleared at every top-level session start.
-        with state.session.lock:
-            state.session.confirmation_issued.clear()
-        verdict.reset_fail_open_flag()
-        ctx = state.session.registered_ctx
-        profile = getattr(ctx, "profile_name", None) if ctx else None
-        # SCR-027: session-scoped resolution — re-resolve working_dir_root
-        # from THIS session's profile (child sessions skip and inherit).
-        config.set_session_profile(profile)
-        config.refresh_resolution(ctx)
-        stats.set_session(
-            profile=profile,
-            session_id=session_id,
-            is_subagent=False,
-            started_at=datetime.datetime.now().isoformat(timespec="seconds"),
-        )
-        # R2 conditional injection three steps: cwd -> predicate -> inject.
-        cwd = None
-        cwd_fn = getattr(state.session, "agent_cwd_fn", None)
-        if callable(cwd_fn):
-            try:
-                cwd = cwd_fn()
-            except Exception as exc:
-                logger.debug("dir-whip: resolve_agent_cwd failed: %s", exc)
-                cwd = None
-        # R7 project-mode exemption: an ACTIVE host project whose folders
-        # contain the agent CWD skips the reminder entirely (project mode
-        # has its own layout). Evaluated HERE at session start (the active
-        # pointer varies across sessions), BEFORE the discipline predicate;
-        # any probe failure fails open to the normal flow.
-        if cwd:
-            project_fn = getattr(state.session, "project_active_fn", None)
-            if callable(project_fn):
-                project_info = None
-                try:
-                    project_info = project_fn()
-                except Exception as exc:
-                    logger.debug(
-                        "dir-whip: project_active_fn failed: %s", exc
-                    )
-                    project_info = None
-                if project_info:
-                    active_id, folders = project_info
-                    if active_id and verdict.project_exemption_applies(
-                        cwd, folders
-                    ):
-                        state.session.reminder_status = "skipped-project"
-                        _record_session_reminder(session_id, "skipped-project")
-                        logger.debug(
-                            "dir-whip: session-start reminder skipped "
-                            "(active project %s contains the agent CWD)",
-                            active_id,
-                        )
-                        return
-        working_dir_root, allowlist = verdict.resolved_config()
-        if not verdict.discipline_applies(cwd, working_dir_root):
-            state.session.reminder_status = "skipped-outside"
-            _record_session_reminder(session_id, "skipped-outside")
-            logger.debug(
-                "dir-whip: session-start reminder skipped "
-                "(agent CWD outside the Working Directory)"
-            )
-            return
-        _inject_reminder(ctx, session_id)
-        # SCR-044 R7 (spec 5.4): advisory orphan scan -- ONE call after
-        # the REMINDER injection (child sessions returned at the top, so
-        # subagents never scan; CWD-outside sessions returned at the
-        # skipped-outside branch). Decision logic lives in session_dirs;
-        # advise-only TEXT, never a block action. Stats row lands via
-        # the events/stats setdefault chain when the notice is delivered.
-        notice = session_dirs.scan_orphans(working_dir_root, allowlist)
-        if notice and ctx is not None and hasattr(ctx, "inject_message"):
-            if ctx.inject_message(notice):
-                _record_orphan_notice(session_id)
+        lifecycle.session_start(session_id, state.session.registered_ctx)
     except Exception as exc:
         logger.debug("dir-whip: session start hook error: %s", exc)
 
@@ -541,62 +370,21 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         return None
 
 
-def _is_error_json_result(result):
-    """Error-result eligibility check (same shape as the audit L1 notice,
-    5.18): a JSON object carrying an "error" key and nothing else of note
-    (<=2 keys) is not decorated."""
-    try:
-        parsed = json.loads(result)
-    except (ValueError, TypeError):
-        return False
-    return isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2
-
-
-def _append_reminder_fallback(audited_result, original_result, session_id):
-    """One-shot REMINDER tail note after an unavailable session start (5.17).
-
-    Eligibility: top-level session only, flag armed by the unavailable
-    branch of _inject_reminder, and the result must be a string (error
-    JSON results are NOT decorated). A non-eligible call does NOT consume
-    the flag -- the note waits for the next eligible call. The base text
-    is the audit-adjusted return when there is one (the note lands after
-    it, tail append), else the original result. Fire-once: on firing the
-    flag is cleared and the session-reminder-fallback stats row is
-    recorded. Never raises; on any failure the audited result is returned
-    untouched (fail-open)."""
-    try:
-        if not state.session.reminder_pending_fallback:
-            return audited_result
-        if sessions.is_child(session_id):
-            return audited_result
-        text = (
-            audited_result if isinstance(audited_result, str)
-            else original_result
-        )
-        if not isinstance(text, str):
-            return audited_result
-        if _is_error_json_result(text):
-            return audited_result
-        state.session.reminder_pending_fallback = False
-        _record_reminder_fallback(session_id)
-        return text + "\n\n" + verdict.REMINDER_MESSAGE
-    except Exception as exc:
-        logger.debug("dir-whip: reminder fallback failed (fail-open): %s", exc)
-        return audited_result
-
-
 def on_transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
     """transform_tool_result hook adapter (5.18 L1 notice + 5.17 fallback).
 
-    Dispatches to audit first; then applies the one-shot REMINDER
-    fallback note to the (possibly audit-adjusted) string result when an
-    unavailable session start armed it."""
+    SCR-050 v3 R6.2: dispatches to audit first; then applies the one-shot
+    REMINDER fallback note (lifecycle.append_reminder_fallback) to the
+    (possibly audit-adjusted) string result when an unavailable session
+    start armed it."""
     try:
         adjusted = audit.transform_tool_result(
             tool_name, args, result, session_id, task_id, **kwargs,
         )
-        return _append_reminder_fallback(adjusted, result, session_id)
+        return lifecycle.append_reminder_fallback(
+            adjusted, result, session_id
+        )
     except Exception as exc:
         logger.debug("dir-whip: transform_tool_result hook error (fail-open): %s", exc)
         return None

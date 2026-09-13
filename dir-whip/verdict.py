@@ -7,8 +7,8 @@ Refs: spec 5.3, spec 5.10, spec 5.12, spec v2.6 B2, SCR-050
 Key exports:
   - guard -- pre-tool-call decision chain; None = allow, a block dict = block.
   - classify_target -- single-target classification: allow / external-write / block.
-  - discipline_applies -- True = inject the session-start reminder; missing cwd/root fails open to True.
-  - project_exemption_applies -- True = CWD under an active host project folder (reminder skipped); fail-open False.
+  - discipline_applies -- delegation alias (canonical home lifecycle.py, SCR-050 v3 R6.2); True = inject the session-start reminder.
+  - project_exemption_applies -- delegation alias (canonical home lifecycle.py, SCR-050 v3 R6.2); True = CWD under an active host project folder.
   - extract_target_paths -- write_file / patch target path(s); empty list when absent.
   - reset_fail_open_flag -- reset the one-time fail-open warning flag.
   - resolved_config -- cached (working_dir_root, allowlist); (None, []) on failure.
@@ -83,39 +83,26 @@ PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
 def discipline_applies(cwd, working_dir_root):
     """Conditional-injection predicate (spec 5.4, v2.7 R2).
 
-    Pure decision: True = inject the session-start reminder. None-safe
-    fail-open (missing cwd OR unresolved root -> True = current
-    behavior); containment reuses paths.within_working_dir (equality
-    counts as inside; Windows casefold rules on any host, SCR-006).
+    SCR-050 v3 R6.2 (spec 5.1 v2.19): the canonical home is
+    lifecycle.py (single-consumer move); this same-name delegation
+    alias keeps verdict.* / test import paths unchanged. Lazy import =
+    the documented cycle-break idiom (state.py precedent): verdict has
+    NO module-level lifecycle edge (lifecycle imports verdict for
+    reset_fail_open_flag / resolved_config).
     """
-    try:
-        if not cwd or not working_dir_root:
-            return True
-        return within_working_dir(cwd, working_dir_root)
-    except Exception:
-        return True
+    from .lifecycle import discipline_applies as _canonical
+    return _canonical(cwd, working_dir_root)
 
 
 def project_exemption_applies(cwd, folders):
     """Project-mode injection exemption predicate (R7, spec 3.2 Layer 0).
 
-    Pure decision: True = the agent CWD falls under an ACTIVE host
-    project folder -> skip the session-start reminder entirely (project
-    mode has its own layout; the Working Directory discipline does not
-    apply). Containment per folder reuses paths.within_working_dir
-    (prefix-inclusive, equality counts as inside; Windows casefold rules
-    on any host, SCR-006). Fail-open: missing cwd / folders / any error
-    -> False (no exemption = current behavior).
+    SCR-050 v3 R6.2 (spec 5.1 v2.19): delegation alias -- canonical home
+    lifecycle.py; same fail-open semantics (missing cwd / folders / any
+    error -> False = no exemption).
     """
-    try:
-        if not cwd or not folders:
-            return False
-        for folder in folders:
-            if folder and within_working_dir(cwd, folder):
-                return True
-        return False
-    except Exception:
-        return False
+    from .lifecycle import project_exemption_applies as _canonical
+    return _canonical(cwd, folders)
 
 # Spec 5.13 D2: host approval choices that count as granted (verified
 # against the local hermes-agent approval.py choice vocabulary).
