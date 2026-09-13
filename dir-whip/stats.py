@@ -1,11 +1,17 @@
-"""Statistics: counters, jsonl persistence and rollover (spec 5.13) — pure
-state module.
+"""Statistics: in-memory counters, session context, stats.jsonl persistence + 5MB rollover (spec 5.13).
 
-In-memory counters (outcome x tool x rule_key x is_subagent), session
-context fields, and one-JSON-line-per-event persistence with 5MB rollover.
-No host imports (SCR-035 core module discipline, ADR-0007); the stats
-state lives in state.stats (task 31.9). Extracted in task 31.7 (previously
-part of the config module).
+Counters keyed outcome x tool x rule_key x is_subagent; the stats state lives in state.stats; no host imports (SCR-035 core discipline, ADR-0007); extracted in task 31.7 (previously part of the config module).
+
+Layer: core
+Refs: spec 5.13, SCR-027, SCR-035, SCR-045 R6, SCR-048 R6, ADR-0007
+Key exports:
+  - record -- bump counters + append one stats.jsonl event line; never raises.
+  - set_session -- attach provided session context fields to persisted events.
+  - backfill_session -- set session_id only when currently empty (race-safe under the stats lock).
+  - snapshot -- deep copy of the counters (outcome x tool x rule_key x is_subagent).
+  - end_session -- close the session context fields (counters kept).
+  - reset -- clear in-memory counters + session context at register/re-register.
+  - stats_jsonl_path -- report-facing stats.jsonl location (session profile home).
 """
 
 import copy

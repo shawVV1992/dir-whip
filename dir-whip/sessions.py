@@ -1,14 +1,15 @@
-"""Child-session tracking and audit parent links (spec 5.4/5.16/5.18).
+"""Child-session (subagent) tracking + audit parent links: child_session_ids / session_parents / top_session topology in state.session (spec 5.4, spec 5.16, spec 5.18).
 
-Tracks subagent (child) sessions so on_session_start skips them and
-verdicts split as subagent, opens/closes the child stats session context,
-and records the audit parent links (child -> parent pending-set
-inheritance, plus the top-level-session fallback). Owns the session
-topology group in state.session (child_session_ids / session_parents /
-top_session, SCR-044 R3) and resolves the pending-set owner via the
-public owner_session (promoted from audit._audit_owner_session). No host
-imports (SCR-035 core module discipline, ADR-0007). Extracted from
-dir_whip.py (task 31.11).
+Tracks subagent sessions so on_session_start skips them and verdicts split as subagent; opens/closes the child stats session context and records child -> parent pending-set inheritance with the top-level-session fallback (owner_session promoted from audit._audit_owner_session, SCR-044 R3). No host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.11).
+
+Layer: core
+Refs: spec 5.4, spec 5.16, spec 5.18, SCR-035, SCR-044 R3, ADR-0007
+Key exports:
+  - is_child -- True when session_id is a live child (subagent) session.
+  - owner_session -- pending-set owner: child -> explicit parent or top_session fallback; None when unknown.
+  - register_child -- record a child's parent link for pending-set inheritance.
+  - subagent_start -- subagent_start observer: track the child + open the child stats context.
+  - subagent_stop -- subagent_stop observer: untrack the child + close the child stats context.
 """
 
 import json

@@ -1,13 +1,17 @@
-"""Root write audit layer (spec 5.18) - detection backbone, pending
-violations, L1 notice, L3 gate, pre/post snapshot pairing.
+"""Root write audit layer: snapshot/diff/classify kernels + pending-violation store + L1 notice + L3 gate + dir_whip_settle settlement (spec 5.18).
 
-Snapshot/diff/classify kernels, the session-scoped pending-violation store
-(the L3 latch input), the fire-once L1 notice, the settlement gate, and
-the pre/post hook pairing. The classification chain is INJECTED via
-set_classifier (assembly layer, ADR-0007 inject-don't-import) to break the
-audit<->verdict cycle. Depends on paths/state/events/config/sessions +
-stdlib only. No host imports (SCR-035 core module discipline, ADR-0007).
-Extracted from dir_whip.py (task 31.12). Spec v2.6 B2 unified allowlist.
+Detection backbone: pre/post snapshot pairing, session-scoped pending violations (the L3 latch input), the fire-once L1 result notice, the settlement gate, and the pre_verify continuation nudge; lazily registers dir_whip_settle through state.session.registered_ctx on first notice fire. The classification chain is INJECTED via set_classifier (assembly layer, ADR-0007 inject-don't-import) to break the audit<->verdict cycle; depends on paths/state/events/config/sessions + stdlib only, no host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.12), unified allowlist per spec v2.6 B2.
+
+Layer: core+registration-helper
+Refs: spec 5.18, spec v2.6 B2, SCR-035, SCR-040 R4, SCR-045 R6, ADR-0007
+Key exports:
+  - set_classifier -- wire the classification chain (assembly-layer injection).
+  - snapshot -- read-only top-level root snapshot; None on OSError (fail-open).
+  - classify_diff -- four-state snapshot diff -> {violations, recorded}; deletions record-only.
+  - pending_snapshot -- read-only copy of a session's pending violations (L3 gate input).
+  - transform_tool_result -- L1 fire-once notice hook; appends the remediation notice.
+  - settle_paths -- dir_whip_settle core: quarantine pending root writes, settling the latch.
+  - pre_verify_nudge -- continuation-nudge decision; None = let the turn finish naturally.
 """
 
 import datetime

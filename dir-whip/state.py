@@ -1,14 +1,15 @@
-"""All mutable plugin runtime state in four cohesive containers (SCR-035).
+"""All mutable plugin runtime state in four cohesive containers: session / audit / session_dirs / stats (SCR-035).
 
-Session state (registration context, session root/profile, fail-open latch,
-emit switch, injected host callable, child-session set, parent links,
-top-session fallback), audit state (pre-snapshots, pending violations,
-cap flag), session-dir state (SCR-044 R5: per-session unique Session
-Directory claims + in-flight script-creation markers; SCR-048 R1 adds
-the persistence sidecar metadata), stats state (lock, counters, session
-fields). Locks travel with their group; cross-group invariants share one
-lock. Anti-degradation rule: containers only - never re-export the
-individual fields as module-level names (ADR-0005).
+Contents: session = registration-context slot, session root/profile, fail-open latch, emit switch, injected host callables, child-session set, parent links, top-session fallback; audit = pre-snapshots, pending violations, cap/nudge counters; session_dirs = per-session unique Session Directory claims, in-flight script-creation markers, persistence sidecar meta (SCR-044 R5, SCR-048 R1); stats = counters + session fields. Lock-per-group discipline: locks travel with their group and cross-group invariants share one lock; container-only access - never re-export the individual fields as module-level names (ADR-0005).
+
+Layer: core
+Refs: spec 5.19, SCR-035, SCR-044 R5, SCR-048 R1, ADR-0005, ADR-0007
+Key exports:
+  - session -- container: registration ctx + session root/profile + switches + injected host callables.
+  - audit -- container: pending violations + pre-snapshots + cap/nudge counters.
+  - session_dirs -- container: per-session claims + pending markers + claim sidecar meta.
+  - stats -- container: outcome counters + session fields.
+  - reset_all -- test-cleanup entry: resets all four containers + the persistent claims file.
 """
 import threading
 
@@ -21,21 +22,21 @@ class _SessionState:
         self.reset()
 
     def reset(self):
-        self.registered_ctx = None       # 单一注册上下文槽（收敛 config._register_ctx 与 dir_whip._registered_ctx）
+        self.registered_ctx = None       # single registration-context slot (converges config._register_ctx and dir_whip._registered_ctx)
         self.register_config_path = None
-        self.session_root = None         # None = 未解析/fail-open（不保留陈旧值）
+        self.session_root = None         # None = unresolved/fail-open (never keeps a stale value)
         self.session_root_initialized = False
         self.session_profile = None
         self.fail_open_warned = False
         self.emit_enabled = False
-        self.session_cwd_fn = None       # 宿主 API 注入槽（ADR-0007；register 时装填）
-        self.agent_cwd_fn = None         # 宿主 API 注入槽（ADR-0007；R2 条件注入 agent CWD）
-        self.project_active_fn = None    # 宿主 API 注入槽（ADR-0007；R7 项目豁免探针，on_start 时调用）
+        self.session_cwd_fn = None       # host API injection slot (ADR-0007; filled at register)
+        self.agent_cwd_fn = None         # host API injection slot (ADR-0007; SCR-039 R2 conditional agent-CWD injection)
+        self.project_active_fn = None    # host API injection slot (ADR-0007; SCR-039 R7 project-exemption probe, called at on_start)
         self.reminder_status = None      # R2/R6: injected|skipped-outside|skipped-child|unavailable
         self.reminder_pending_fallback = False  # SCR-048 R4 (5.17): unavailable reminder -> one-shot transform_tool_result fallback armed
-        self.log_handler_installed = False  # SCR-040 R5: dir-whip.log attach 幂等标志（logsetup.setup）
-        self.confirmation_issued = set()  # SCR-041 R3: allow_path 两步确认已签发集合（会话内存，受 self.lock 保护）
-        self.child_session_ids = set()   # 受 self.lock 保护
+        self.log_handler_installed = False  # SCR-040 R5: dir-whip.log attach idempotence flag (logsetup.setup)
+        self.confirmation_issued = set()  # SCR-041 R3: allow_path two-step confirmation issued set (session memory, guarded by self.lock)
+        self.child_session_ids = set()   # guarded by self.lock
         # SCR-044 R3: session-topology pair, moved in from the audit
         # container (historical misplacement) -- same container and lock
         # discipline as child_session_ids above.
@@ -52,14 +53,14 @@ class _SessionState:
 
 class _AuditState:
     def __init__(self):
-        self.lock = threading.Lock()     # 组锁：pending / pre_snapshots 不变量（跨全局不变量）
+        self.lock = threading.Lock()     # group lock: pending / pre_snapshots invariants (cross-global invariant)
         self.reset()
 
     def reset(self):
         self.pre_snapshots = {}          # key=(session_id, task_id)
         self.pending = {}                # owner-session -> {normpath: {...}}
         self.cap_warned = False
-        self.nudge_counts = {}           # SCR-040 R2: 续推兜底会话累计计数（owner session_id 键控，cap=3）
+        self.nudge_counts = {}           # SCR-040 R2: continuation-nudge session-cumulative counts (keyed by owner session_id, cap=3)
 
 
 class _SessionDirState:

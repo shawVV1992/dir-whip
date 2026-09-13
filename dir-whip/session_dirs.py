@@ -1,62 +1,17 @@
-"""Per-session unique Session Directory lifecycle (SCR-044 R5, spec 5.19)
-+ the R7 on_session_start orphan scan (advisory).
+"""Per-session unique Session Directory lifecycle: claims / pending binding / orphan scan + persistent claims sidecar (SCR-044 R5, SCR-048 R1, spec 5.19).
 
-Pure decision layer: statically imports state / sessions / config /
-paths / events / terminal only -- NEVER audit or verdict (no import
-cycle: audit imports this module for the post-diff binding observer).
-No host imports (ADR-0007 core discipline). The R7 scan consumes the
-classify chain through an injected slot (set_classifier, same
-ADR-0007 pattern as audit) instead of importing verdict.
+Pure decision layer (imports state / sessions / config / paths / events / terminal only, NEVER audit or verdict; no host imports, ADR-0007): one Session Directory per conversation -- claims maps the owner session (sessions.owner_session: subagent -> parent attribution) to the bound root-relative first segment (Windows casefold), pending_create marks a script creation in flight; a session-dir ALLOW whose first segment does not exist binds, a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), a write into an existing dir passes unbound (creation-count semantics, BND-5), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. Claims are write-through mirrored to session-claims.json in the profile-independent default dir-whip home (atomic tmp+replace, fail-open, 64-entry ts-LRU) and restored at register() for CLR-1 resume; every top-level session start clears except a restored live claim, state.reset_all clears the file too (CLR-2).
 
-Slot model: one Session Directory per conversation. state.session_dirs
-claims maps the owner session (sessions.owner_session: subagent ->
-parent attribution, mirroring the audit pending propagation) to the
-bound dir name (root-relative first segment, Windows-casefold
-comparison); pending_create marks a script creation in flight.
-
-Binding semantics (creation-count, user ruling 2026-09-01):
-
-- Unified creation signal = the classify verdict is a session-dir ALLOW
-  and the target's first-segment directory does not exist yet -- the
-  action will CREATE it. Covers mkdir, write_file implicit parent
-  creation, touch, redirect with no per-tool special-casing. Static
-  vectors bind at guard time.
-- Script vector (create_session_dir.py via the R1 predicate):
-  guard_script arms pending_create; the audit post-diff callback
-  observe_added binds the FIRST new compliant dir under the root and
-  ALWAYS consumes the marker (a failed script leaves no ghost slot,
-  OB-2; multiple additions bind the first, OB-3; non-compliant
-  additions never bind, OB-4).
-- A second creation while the slot is occupied blocks with rule_key
-  session-dir-limit (a pending marker counts as the claim, BLK-4).
-  Writing into an EXISTING other session dir passes without binding
-  and consumes no slot (creation-count semantics, BND-5). mv renaming
-  the bound dir to a new compliant name transfers the claim (the
-  terminal_cp_mv_src helper re-derives the mv source, form b: MV-1 vs
-  BLK-5).
-- T1 runtime / T2 config allowlist verdicts never reach the gate (the
-  single enforcement point hangs on the session-dir rule_key only,
-  EX-1 / EX-2).
-
-Messages: SESSION_DIR_LIMIT_BLOCK_MESSAGE (+ subagent variant) are
-verbatim-locked templates; blocks emit through events with the
-session-dir-limit rule_key, so stats accumulate via the setdefault
-chain and the generic dir-whip:blocked bus fanout fires (the key is
-deliberately NOT in events._BUS_SKIP_RULE_KEYS; the 7-emits manifest
-surface stays unchanged).
-
-Session-lifetime memory + persistence (v2.16 SCR-048 R1, spec 5.19): the
-in-memory claims are write-through mirrored to `session-claims.json` in
-the profile-independent default dir-whip home (paths.dirwhip_home(None);
-after a host restart on_start has not fired yet, so session_profile is
-None and the per-profile home is not findable). `_bind` / `_rebind` /
-claim release each persist synchronously through an atomic tmp+replace
-write (fail-open: IO errors log DEBUG only, memory stays authoritative);
-register() restores entries whose `root/dir` is still on disk. Every
-persist drops dead entries and the store caps at 64 entries (ts-LRU).
-Cleared at every top-level session start except a RESUME (a restored
-claim whose dir is still on disk is KEPT, CLR-1 revision) and by
-state.reset_all (CLR-2 revision: the file is cleared too).
+Layer: core
+Refs: spec 5.19, SCR-044 R5, SCR-044 R6, SCR-044 R7, SCR-048 R1, SCR-048 R2, ADR-0006, ADR-0007, ADR-0015
+Key exports:
+  - guard_create -- session-dir creation gate: bind / mv-transfer / session-dir-limit block (single enforcement point).
+  - guard_script -- create_session_dir.py script gate: arm the pending marker or block.
+  - observe_added -- audit post-diff binding observer: bind the first compliant added dir, consume the marker.
+  - on_session_start -- clear claim + marker; keep a restored live claim (CLR-1 resume).
+  - load_claims -- restore persistent claims at register(); live root/dir entries only.
+  - scan_orphans -- advisory top-level orphan notice at session start; None when clean.
+  - set_classifier -- wire the classification chain for the orphan scan (assembly injection).
 """
 
 import json

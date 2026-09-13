@@ -1,11 +1,12 @@
-"""Structured verdict events (spec 5.13 logging part + 5.14 bus fanout) — deep module.
+"""Verdict emission deep module: stats counters + stats.jsonl + leveled log + 5.14 bus fanout in one emit (spec 5.13, spec 5.14).
 
-Records one single-line verdict event per guard decision (stats counters +
-stats.jsonl append + leveled log) and fans out verdict-derived bus events.
-Session context: working_dir_root and profile resolve from state inside
-this module; session_id / is_subagent describe the judged call's session
-and stay explicit emit params (Ruling 4). No host imports (SCR-035 core
-module discipline, ADR-0007). Extracted from dir_whip.py (task 31.10).
+Records one single-line verdict event per guard decision and fans out verdict-derived bus events (blocked / external-write) under a geometric outside-root basis; working_dir_root and profile resolve from state here while session_id / is_subagent stay explicit emit params (Ruling 4). No host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.10).
+
+Layer: core
+Refs: spec 5.13, spec 5.14, SCR-035, SCR-041 R2, SCR-043 R2, SCR-043 R3, SCR-045 R6, ADR-0007
+Key exports:
+  - emit -- emit ONE verdict event (stats + jsonl + leveled log + bus sidecar); never raises.
+  - bus_emit -- bare-name dir-whip bus event emit; silent degradation when the bus is absent.
 """
 
 import datetime
