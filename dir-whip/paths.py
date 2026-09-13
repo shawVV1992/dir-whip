@@ -1,23 +1,20 @@
 """Path normalization / resolution / containment under working_dir_root -- pure functions.
 
-Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance,
-cross-platform Windows-style handling), resolves relative targets, and
-decides containment; unclassifiable Windows paths fail open (warn +
-treat as external, never raise). Pure functions only: no host imports,
-no state (SCR-035 core module discipline, ADR-0007); extracted from
-dir_whip.py and config.py (task 31.6).
+Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance, cross-platform Windows-style handling), resolves relative targets, and decides containment; unclassifiable Windows paths fail open (warn + treat as external, never raise). Pure functions only: no host imports, no state (SCR-035 core module discipline, ADR-0007); extracted from dir_whip.py and config.py (task 31.6). SCR-050 v3 R6.3 (spec 5.9): SESSION_DIR_RE + is_inside_session_dir homed here from config.py (pure pattern containment; config keeps the same-name re-export alias).
 
 Layer: core
-Refs: spec 5.3, spec 5.5, spec 5.13, SCR-006, SCR-026, SCR-027, SCR-035, SCR-042, SCR-044, SCR-045, ADR-0007
+Refs: spec 5.3, spec 5.5, spec 5.9, spec 5.13, SCR-006, SCR-026, SCR-027, SCR-035, SCR-042, SCR-044, SCR-045, SCR-050, ADR-0007
 Key exports:
   - normalize_target -- normalize a target path before classification (chain step 0).
   - within_working_dir -- containment of target under working_dir_root (spec 5.3 step 6).
   - relativize_target -- privacy relativization; external paths -> ``h:<sha256-prefix>``.
   - is_absolute_any -- rooted on the local OS, Windows-drive-rooted, or backslash-rooted.
+  - is_inside_session_dir -- True when the path sits under working_dir_root/<session_dir>/... (spec 5.9; SCR-050 v3 R6.3 homing).
   - dirwhip_home -- profile-aware dir-whip home (stats.jsonl / dir-whip.log / audit-quarantine family).
   - get_hermes_home, profile_home, paths_equal -- thin public aliases: home resolution + path equality.
 """
 
+import datetime
 import hashlib
 import logging
 import ntpath
@@ -33,6 +30,26 @@ _MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
 _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 
 _DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+# Session-directory name pattern (spec 5.9; SCR-050 v3 R6.3: homed from
+# config.py -- session dirs exist only at the Working Directory root).
+SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
+
+
+def is_inside_session_dir(path, working_dir_root):
+    """Check if path is under working_dir_root/<session_dir>/... (spec 5.9)."""
+    try:
+        rel = os.path.relpath(path, working_dir_root)
+    except ValueError:
+        return False
+    parts = rel.replace("\\", "/").split("/")
+    if parts and SESSION_DIR_RE.match(parts[0]):
+        try:
+            datetime.datetime.strptime(parts[0][:15].replace("_", ""), "%Y%m%d%H%M%S")
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 def _get_hermes_home():
@@ -252,6 +269,8 @@ __all__ = [
     "relativize_target",
     "within_working_dir",
     "is_absolute_any",
+    "is_inside_session_dir",
+    "SESSION_DIR_RE",
     "get_hermes_home",
     "profile_home",
     "paths_equal",

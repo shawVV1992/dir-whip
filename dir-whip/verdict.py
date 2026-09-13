@@ -29,7 +29,6 @@ from .audit import (
 
 from .config import (
     get_cached_config,
-    is_inside_session_dir,
     is_runtime_allowlisted,
     load_guard_config,
 )
@@ -53,7 +52,12 @@ from .messages import (
     REMINDER_MESSAGE,
 )
 
-from .paths import is_absolute_any, normalize_target, within_working_dir
+from .paths import (
+    is_absolute_any,
+    is_inside_session_dir,
+    normalize_target,
+    within_working_dir,
+)
 
 from . import session_dirs
 

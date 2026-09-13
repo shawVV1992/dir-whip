@@ -26,8 +26,6 @@ import yaml
 
 logger = logging.getLogger("dir-whip")
 
-SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
-
 # plugins.plugin_utils is a Hermes runtime package; absent in the test venv.
 # Guarded module-level import so config.py never crashes when unavailable
 # (fail-open: get_cached_config degrades to a local lock-guarded cache).
@@ -299,20 +297,10 @@ def set_session_profile(profile):
     state.session.session_profile = profile
 
 
-def is_inside_session_dir(path, working_dir_root):
-    """Check if path is under working_dir_root/<session_dir>/... (spec 5.9)."""
-    try:
-        rel = os.path.relpath(path, working_dir_root)
-    except ValueError:
-        return False
-    parts = rel.replace("\\", "/").split("/")
-    if parts and SESSION_DIR_RE.match(parts[0]):
-        try:
-            datetime.datetime.strptime(parts[0][:15].replace("_", ""), "%Y%m%d%H%M%S")
-            return True
-        except ValueError:
-            return False
-    return False
+# Session-directory detection (spec 5.9) homed in paths.py (SCR-050 v3
+# R6.3: pure pattern containment); same-name re-export keeps config.* /
+# test import paths unchanged.
+from .paths import SESSION_DIR_RE, is_inside_session_dir  # noqa: F401
 
 
 # ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
@@ -537,8 +525,9 @@ profile_terminal_cwd = _profile_terminal_cwd
 profile_config_path = _profile_config_path
 
 # SCR-050 v3 R6.1: declared public surface (AC-9, spec 5.1 v2.19).
-# is_inside_session_dir moves to paths.py at R6.3 (same-name re-export
-# alias stays for config/session_dirs consumers).
+# R6.3: is_inside_session_dir + SESSION_DIR_RE homed in paths.py; the
+# same-name re-export entries below stay (config/session_dirs/verdict
+# consumer + test import paths unchanged).
 __all__ = [
     "get_cached_config",
     "resolve_working_dir_root",

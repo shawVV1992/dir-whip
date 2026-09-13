@@ -23,7 +23,7 @@ logger = logging.getLogger("dir-whip")
 
 from . import state
 
-from .config import is_inside_session_dir
+from .paths import is_inside_session_dir
 
 from .events import emit
 
