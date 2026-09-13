@@ -1,39 +1,27 @@
-"""Single source of truth for structured allowlist parsing (spec v2.7 R9).
+"""Structured allowlist parsing / matching (``{files, dirs}`` mapping, root-relative) -- single source of truth.
 
-Spec references: 5.6 (structured ``allowlist`` mapping, BREAKING clean
-break of the v2.6 flat tagged list), 5.3 (Tier 0 = allowlist dirs subtree
-OR runtime allowlist; root file = allowlist files entry), 5.18 (audit
-reads the same key). Storage is ALWAYS relative to working_dir_root;
-absolute input is input-layer tolerance only (report command layer
-relativizes before storing).
+Storage is ALWAYS relative to working_dir_root (absolute input is
+input-layer tolerance only; the report command layer relativizes before
+storing); a legacy FLAT value (v2.6 tagged list) or any non-dict input
+is ignored fail-closed (empty sets), with legacy shapes surfaced as
+ignored entries on the report/list surfaces, while invalid entries are
+silently filtered (hand-edited configs fail-closed; guard and audit
+agree). Matching: ``files`` = exact basename match
+(case-insensitive on Windows), ``dirs`` = recursive subtree exemption
+under <working_dir_root>/<entry> with the root itself never exempt --
+the Tier 0 exemption source; pure functions only, no host imports, no
+state (ADR-0007), import surface = stdlib + ``paths``.
 
-Structured mapping
-------------------
-- ``files: [basename...]`` -> root-level file basenames allowed at the
-  Working Directory root. Validation: basename only (no "/" or "\\" or
-  "..", non-empty, length <= 255, not "." or "..", no ":").
-- ``dirs: [rel-path...]`` -> paths RELATIVE to working_dir_root with a
-  recursive subtree exemption; multi-level allowed ("proj/sub").
-  Validation: relative only (no drive/absolute forms, no ":"), no ".."
-  or "." segments, non-empty, forward slashes normalized, trailing slash
-  stripped (R7 storage normalization).
-
-Clean break: a legacy FLAT value under ``allowlist`` (the v2.6 list of
-``file:<name>`` / ``prefix:<abs>`` tagged strings) is IGNORED fail-closed
-(parse returns empty sets); the report/list surfaces surface it as
-ignored legacy entries.
-
-Matching
---------
-- File: exact basename match, case-insensitive on Windows via
-  ``os.name == "nt"`` and ``casefold()``.
-- Dir: target equals or is under ``<working_dir_root>/<entry>``
-  (recursive subtree), forward-slash normalized, case-insensitive on
-  Windows (and for drive-rooted pairs on any host, SCR-006). The root
-  itself is never exempt.
-
-Pure functions only: no host imports, no state (core module discipline,
-ADR-0007). Import surface: stdlib + ``paths``.
+Layer: core
+Refs: spec 5.3, spec 5.6, spec 5.18, SCR-006, SCR-039 R7, SCR-039 R9, ADR-0007
+Key exports:
+  - parse_allowlist -- raw ``allowlist`` config value -> validated ``{"files": set, "dirs": set}`` (fail-closed).
+  - format_allowlist -- parsed sets -> canonical sorted ``{"files": [...], "dirs": [...]}`` mapping.
+  - is_allowlist_file -- root-file basename exemption (exact match, casefold on Windows).
+  - is_allowlist_dir -- recursive subtree exemption under <working_dir_root>/<entry>; root never exempt.
+  - validate_file_entry -- public file-basename validation wrapper: (ok, reason).
+  - validate_dir_entry -- public relative-dir validation wrapper: (ok, reason).
+  - normalize_dir_entry -- stored-form dir normalization (fwd slashes, no trailing slash) or None.
 """
 
 import os

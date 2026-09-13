@@ -1,24 +1,30 @@
-"""Central message template store for dir-whip (spec 5.20, SCR-047 R1,
-ADR-0014).
+"""Central static runtime message-template store (session injections / block messages / tool schemas / tool returns).
 
-Core leaf module: the static runtime message constants/templates of the
-A/B/C/D families (session injections, block messages, tool schemas, tool
-returns) live here, moved byte-identical from their original modules
-(verdict / session_dirs / audit / allow_path / config). ZERO intra-package
-imports -- pure string constants, no imports at all -- so every core
-module (config.py included, ADR-0007 dependency direction) can import it
-safely, with no cycle.
+Core leaf module (spec 5.20, SCR-047 R1): the static runtime message
+constants/templates of the A/B/C/D families live here, moved
+byte-identical from their original modules (verdict / session_dirs /
+audit / allow_path / config); ZERO intra-package imports (no imports at
+all), so every core module (config.py included, ADR-0007 dependency
+direction) can import it safely, with no cycle. Dynamic builders
+(script_invocation_line, _block_message, _remediation_instruction,
+_orphan_notice, _confirmation_payload) stay in their owning modules and
+draw their static text from these constants; original modules keep
+same-name constants as import aliases and the __init__.py re-export
+surface is unchanged (test import paths intact); copy compliance
+(SCR-047 47.C.1): unified block skeleton carries the INLINED
+[Reason]/[Next] tail (ADR-0014 D3, pointer cue retired), style rules
+T1-T9 applied, structural contracts locked by testing-standards 7.17.
 
-Dynamic builders (script_invocation_line, _block_message,
-_remediation_instruction, _orphan_notice, _confirmation_payload) stay in
-their owning modules and draw their static text from these constants.
-Original modules keep same-name constants as import aliases; the
-__init__.py re-export surface is unchanged (test import paths intact).
-Copy compliance (SCR-047 47.C.1): the unified block skeleton carries the
-INLINED [Reason]/[Next] tail (ADR-0014 D3; the pointer cue is retired),
-style rules T1-T9 applied (full terms, ASCII arrows, angle-bracket
-placeholders, no process identifiers), and the structural contracts
-locked by the tests hold (testing-standards 7.17).
+Layer: core
+Refs: spec 5.3, spec 5.4, spec 5.11, spec 5.12, spec 5.18, spec 5.19, spec 5.20, SCR-041, SCR-043, SCR-047, SCR-048, ADR-0007, ADR-0014
+Key exports:
+  - FAIL_OPEN_WARNING_MESSAGE, REMINDER_MESSAGE -- guard-disabled warning (spec 5.12) + session-start discipline reminder (spec 5.4).
+  - BLOCK_MESSAGE_* -- unified block skeleton fragments (header / fix lines / uniqueness / allowlist hint / [Reason]+[Next] tail).
+  - SESSION_DIR_LIMIT_* -- one-Session-Directory-per-conversation limit messages (top-level + subagent).
+  - ORPHAN_NOTICE_* -- advisory orphan-notice lines (header / tail / create-relocate); never blocks.
+  - AUDIT_NOTICE_* / GATE_BLOCK_* / NUDGE_MESSAGE_TEMPLATE / REMEDIATION_INSTRUCTION_TEMPLATE -- write-audit L1 notice, L3 gate, continuation nudge, shared remediation sentence.
+  - SETTLE_TOOL_* -- dir_whip_settle tool schema description texts.
+  - ALLOW_PATH_* / RUNTIME_ALLOWLIST_ADDED_TEMPLATE -- dir_whip_allow_path tool schema, entry-gating messages (spec 5.11), add feedback.
 """
 
 # ---------------------------------------------------------------- verdict.py (session injections + block skeleton)

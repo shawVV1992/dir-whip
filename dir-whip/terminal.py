@@ -1,10 +1,19 @@
-"""Terminal lexer and coarse tiering (spec 5.10) — pure functions.
+"""Terminal command lexer + coarse tiering (block / uncertain write targets) -- pure functions.
 
 Tokenizes shell commands and extracts block-tier write targets
 (redirect / touch / cp-mv / mkdir / downloads) and uncertain write-intent
-signals. Pure
-functions only: no host imports, no state (SCR-035 core module
-discipline, ADR-0007). Extracted from dir_whip.py (task 31.5).
+signals (allow + log, never approved or blocked). Pure functions only:
+no host imports, no state (SCR-035 core module discipline, ADR-0007);
+extracted from dir_whip.py (task 31.5).
+
+Layer: core
+Refs: spec 4.1, spec 4.2, spec 4.3, spec 5.10, spec 5.19, SCR-033, SCR-035, SCR-044, ADR-0007
+Key exports:
+  - tokenize_command -- split a shell command into tokens (lenient POSIX-ish lexer; never raises).
+  - terminal_block_targets -- chain-aware block-tier write targets as (target, rule_key) pairs.
+  - terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
+  - is_session_dir_script -- does a chain segment invoke create_session_dir.py under a Python interpreter?
+  - terminal_cp_mv_src -- literal source token of the mv/cp segment whose destination equals ``dst``.
 """
 
 import re
