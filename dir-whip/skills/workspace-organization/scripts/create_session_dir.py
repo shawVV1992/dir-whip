@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
-"""S1: Create a session directory (v0.3.1, spec 4.1 + 4.4).
+"""Create a Session Directory YYYYMMDD_HHMMSS[_TaskName] with the three-subdirectory skeleton Outputs/ + .tmp/ + Inputs/ (v2.18 SCR-049, spec 4.1).
 
-Creates YYYYMMDD_HHMMSS[_TaskName]/ containing exactly three subdirectories:
-Outputs/, .tmp/ and Inputs/ (v2.18 SCR-049, spec 4.1).
-Prints the absolute path of the created directory (forward slashes) as
-stdout line 1, followed by a placement hint line (spec 4.1 R9): the hint
-is emitted on success (exit 0) and on the "target already exists" branch
-of exit 2; all other failure paths stay silent on stdout.
+stdout contract: absolute created path (line 1) + placement hint (line 2, spec 4.1 R9), emitted on success (exit 0) and on the exit-2 target-already-exists branch, silent on all other failure paths; boundary validation (SCR-011, spec 4.4) requires an explicit --workspace to EXACTLY EQUAL the resolved Working Directory (existence first, exit 1; mismatch exit 2), while the omitted form defaults to the CWD + 4.4 containment matching -- a resolution failure is fail-open with exactly ONE resolver stderr WARNING and the script proceeds with the CWD. Same-day advisory (SCR-048 R5; spec 4.1 v2.16/v2.17): ONE stderr note when same-day Session Directories already exist (newest first, capped at 3, "(+N more)" overflow); advisory only, creation is never blocked.
 
-Boundary validation (SCR-011, spec 4.4): the --workspace target must EXACTLY
-EQUAL the resolved Working Directory (dir-whip-config working_dir_root ->
-HERMES_SESSION_PROFILE -> profile enumeration + TERMINAL_CWD candidate root ->
-fail-open). The existence check runs FIRST (parameter error, exit 1); boundary
-validation SECOND (exit 2). When --workspace is omitted, the script defaults
-to the CWD and applies the 4.4 containment matching (equals / contained-in-one
-/ nested longest-match); a resolution failure is fail-open -- the resolver
-emits exactly ONE concise stderr WARNING and the script proceeds with the CWD.
-
-Exit codes:
-  0 = created successfully
-  1 = parameter error (workspace directory does not exist)
-  2 = target already exists OR --workspace does not match the resolved
-      Working Directory
+Layer: skill-subprocess
+Refs: spec 4.1, spec 4.4, SCR-011, SCR-042, SCR-048, SCR-049
+Key exports:
+  - main -- CLI entry: create the three-subdirectory Session Directory under the validated workspace; exit 0 created / 1 parameter error / 2 target exists or boundary mismatch.
 """
 
 import argparse
@@ -140,6 +125,7 @@ def advisory_note(workspace):
 
 
 def main(argv=None):
+    """CLI entry: create the three-subdirectory Session Directory under the validated workspace; exit 0 created / 1 parameter error / 2 target exists or boundary mismatch (spec 4.1, spec 4.4)."""
     parser = argparse.ArgumentParser(
         description="Create a session directory YYYYMMDD_HHMMSS[_TaskName] with Outputs/, .tmp/ and Inputs/ subdirectories."
     )

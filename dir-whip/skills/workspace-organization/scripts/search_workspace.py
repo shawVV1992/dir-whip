@@ -1,43 +1,13 @@
 #!/usr/bin/env python3
-"""S3: Cross-session metadata search over Session Directories (spec 4.6).
+"""Cross-session metadata search over Session Directories -- stateless single-pass os.scandir over every session-format directory and its full tree (spec 4.6).
 
-Locates files inside the workspace's Session Directories without an index:
-one real-time os.scandir pass over every session-format directory under the
-workspace root (SESSION_NAME_RE + strptime double validation) and its FULL
-tree (Outputs/, Inputs/, .tmp/, loose files at the session root, nested
-subdirectories). Metadata only -- content search remains the job of grep.
+Locates files without an index (metadata only: session name / rel_path / size / mtime; content search stays the job of grep); filters --task / --name / --since / --until are AND-combined, ordering is session name DESCENDING then (casefold(rel_path), rel_path) ascending, --limit (default 50) applies after ordering with total counted BEFORE truncation. Domain excludes symlinked/junction session dirs, directory reparse points (never traversed) and allowlist ``dirs`` subtrees (SCR-049); boundary validation mirrors create_session_dir.py (spec 4.4) -- omitted --workspace resolves with exactly ONE resolver stderr WARNING (this script adds none), explicit --workspace checks existence first (exit 1) then mismatch (exit 2), and scan errors are fail-open (exit 0).
 
-Boundary validation is identical to create_session_dir.py (spec 4.4): an
-omitted --workspace resolves via the shared bundled resolver and falls back
-to the CWD on failure (exactly ONE stderr WARNING from the resolver; this
-script adds none); an explicit --workspace is checked for existence FIRST
-(parameter error, exit 1) and validated SECOND (mismatch -> exit 2).
-
-Search domain excludes (SCR-049): symlinked/junction session directories at
-the root (real directories only), directory-level reparse points anywhere in
-the walk (never traversed -- no boundary escape, no cycles; symlinked FILES
-are included with lstat semantics), and subtrees whose first root segment
-matches an ``allowlist`` ``dirs`` entry (casefold; the resolver's allowlist
-loading surface is reused, a load failure does NOT exclude). Orphan /
-non-session directories and loose root files are out of domain.
-
-Filters (optional, AND-combined): --task casefold substring over the
-TaskName segment; --name casefold glob over the file BASENAME only
-(directories never appear in results); --since/--until inclusive range over
-the SESSION DATE (the first 8 directory-name characters -- the session is
-the provenance anchor, not the file mtime); --since > --until is a legal
-empty range (zero results, exit 0). Ordering: session name DESCENDING
-(same-second ties break on the full name descending), then ascending
-(casefold(rel_path), rel_path) within a session. --limit defaults to 50 and
-is applied after ordering; total counts matches BEFORE truncation.
-
-Exit codes:
-  0 = success (zero results is also 0) -- includes fail-open scan errors
-  1 = parameter error (bad --since/--until, non-positive/non-integer
-      --limit, empty --task/--name, --workspace directory does not exist);
-      stdout stays silent
-  2 = --workspace does not match the resolved Working Directory;
-      stdout stays silent
+Layer: skill-subprocess
+Refs: spec 4.4, spec 4.6, SCR-042, SCR-049
+Key exports:
+  - main -- CLI entry: parse args, validate the boundary, scan + filter + order + truncate, emit plain or JSON; exit 0/1/2 (spec 4.6).
+  - scan -- enumerate the search domain: real session-name dirs, per-file lstat records, fail-open {path, error} entries (spec 4.6).
 """
 
 import argparse
@@ -292,6 +262,7 @@ def _positive_int(value):
 
 
 def main(argv=None):
+    """CLI entry: parse args, validate the --workspace boundary, scan + filter Session Directory metadata, emit plain or --json output (spec 4.6)."""
     parser = _SearchArgumentParser(
         description="Search file metadata across Session Directories under the workspace root."
     )

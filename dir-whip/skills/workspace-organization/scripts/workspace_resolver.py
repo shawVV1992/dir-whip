@@ -1,42 +1,18 @@
 #!/usr/bin/env python3
-"""S0: Shared READ-ONLY workspace resolver (v0.4.0, spec 4.4, v2.6 B2).
+"""Shared READ-ONLY Working Directory resolver for the skill CLIs -- the ONLY cross-import exception (SCR-011), parity-locked with dir-whip/config.py (ADR-0006).
 
-Shared Working Directory resolution module imported by the two session
-scripts (create_session_dir.py, audit_workspace.py) -- the ONLY
-cross-import exception (engineering-constraints SCR-011).
+READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only (minimal line-based config parsing, mirroring the plugin's PyYAML-based parser); duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7 R9, SCR-039 R9; legacy v2.6 flat tagged lists ignored fail-closed).
 
-READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no
-rebuild, no hermes_cli import). Resolves the current profile's Working
-Directory with the v0.2.0 layered chain (spec 4.4):
-
-    1. dir-whip-config.yaml working_dir_root (explicit, authoritative)
-    2. HERMES_SESSION_PROFILE -> profile config.yaml terminal.cwd
-    3. profile enumeration + TERMINAL_CWD candidate roots, path matching
-    4. fail-open: None + exactly ONE concise stderr WARNING
-
-Self-contained: stdlib only, no PyYAML dependency -- config parsing is
-minimal line-based, mirroring the plugin's PyYAML-based parser
-(dir-whip/config.py parse_terminal_cwd).
-
-Spec v2.7 R9: structured allowlist mapping ``{files: [...], dirs: [...]}``
-with root-relative entries (the v2.6 flat tagged list is REMOVED clean
-break; legacy values are ignored fail-closed and surfaced as a legacy
-count). This module duplicates allowlist parsing/validation (no import)
-to keep parity with dir-whip/allowlist.py per ADR-0006.
-
-Functions:
-    hermes_home()            -- Hermes home (HERMES_HOME override first;
-                                Windows LOCALAPPDATA/hermes, POSIX ~/.hermes)
-    normalize_path(path)     -- SCR-006 normalization for exact matching
-                                (MSYS mapping, drive inheritance, normpath;
-                                POSIX normpath identity; UNC unaffected)
-    parse_terminal_cwd(path) -- minimal terminal.cwd parser for config.yaml
-    allowlist_state(hh)      -- structured allowlist {files, dirs, legacy}
-                                (strict empty when absent; v2.7 R9 parity)
-    allowed_root_files(hh)   -- allowlist files subset (strict EMPTY when
-                                absent; shared audit, v2.7 R9 parity)
-    resolve_working_dir_root(workspace, hh, env) -- 4-step chain (spec 4.4)
-    validate_workspace(path, hh, env) -- boundary validation (spec 4.4)
+Layer: skill-subprocess
+Refs: spec 4.4, spec v2.6 B2, spec v2.7 R9, SCR-006, SCR-011, SCR-026, SCR-027, SCR-039 R9, SCR-042, ADR-0006
+Key exports:
+  - hermes_home -- Hermes home (HERMES_HOME override first; Windows LOCALAPPDATA/hermes, POSIX ~/.hermes).
+  - normalize_path -- SCR-006 normalization for exact matching (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).
+  - parse_terminal_cwd -- minimal terminal.cwd parser for config.yaml, mirroring config.py parse_terminal_cwd.
+  - allowlist_state -- structured allowlist {files, dirs, legacy}; STRICT empty when absent (spec v2.7 R9 parity).
+  - allowed_root_files -- allowlist files subset; STRICT EMPTY when absent (shared audit, spec v2.7 R9 parity).
+  - resolve_working_dir_root -- 4-step chain (spec 4.4); fail-open None after exactly ONE stderr WARNING.
+  - validate_workspace -- boundary validation of an explicit --workspace (spec 4.4).
 """
 
 import os

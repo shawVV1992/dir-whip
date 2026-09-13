@@ -1,61 +1,13 @@
 #!/usr/bin/env python3
-"""S2: Audit a workspace for structural compliance violations.
+"""Audit the Working Directory for structural compliance violations -- 6 root/session checks + read-only expired .tmp inventory (spec 4.4).
 
-Scans the Working Directory root against 6 compliance checks and reports
-violations. Boundary validation (spec 4.4): an explicit --workspace must
-equal the resolved Working Directory; the default target is the resolved
-Working Directory (dir-whip-config override -> HERMES_SESSION_PROFILE ->
-profile enumeration + TERMINAL_CWD candidate root). When the chain is
-unresolvable, interactive mode falls back to the current directory with
-ONE concise stderr warning (fail-open); cron mode (--gate) REFUSES to
-fall back -- it exits 2 with no wakeAgent line (SCR-042 H1, reframed by
-SCR-043 R6 as cron failure visibility). A missing directory
-or a mismatch is a parameter error.
+Boundary validation: an explicit --workspace must equal the resolved Working Directory; the default target is the resolved Working Directory, with interactive fail-open to the CWD after exactly ONE resolver stderr warning, while --gate REFUSES to fall back (exit 2, no wakeAgent line; SCR-042 H1 reframed by SCR-043 R6 as cron failure visibility); a missing directory or mismatch is a parameter error. Six checks (root files vs the allowlist files entries -- structured mapping spec v2.7 R9, legacy flat values ignored with a stderr hint; no root-level Outputs/; root dirs session-format or allowlist dirs subtree, no .hermes/ whitelist -- SCR-043 R5; session dirs contain Outputs/ and .tmp/; no build artifacts directly in Outputs/; no loose scripts in a session root) plus a READ-ONLY expired .tmp inventory (spec 3.4, spec 8.1; --days default 30, interactive proposal only, zero auto-delete); --gate appends the exactly-two-key {"wakeAgent": bool, "violations": N} line, plain violation blocks or a single OK line, --json a JSON array; exit 0 compliant / 1 violations / 2 parameter, path or unresolved-gate error.
 
-Checks:
-  1. Root level may only contain files on the dir-whip allowlist files
-     whitelist (structured mapping v2.7; legacy flat values ignored with
-     a stderr hint).
-  2. No Outputs/ directory directly at workspace root.
-  3. Root directories must be session dirs (YYYYMMDD_HHMMSS[_TaskName])
-     or a directory covered by an allowlist dirs entry (recursive
-     subtree exemption). SCR-043 R5: the former .hermes/ whitelist is
-     removed -- a leftover .hermes/ directory is flagged like any other
-     non-session directory (the audit quarantine lives in the dir-whip
-     home now).
-  4. Each valid session dir must contain both Outputs/ and .tmp/.
-  5. Outputs/ must not contain build artifacts (__pycache__, *.pyc,
-     node_modules, .DS_Store, Thumbs.db) at its immediate level.
-  6. Script files (.py, .sh, .bat, .ps1) directly inside a session dir
-     belong in .tmp/ instead.
-
-Embedded .tmp inventory (spec 3.4 / 8.1; SCR-043 R6): expired session
-.tmp/ entries (default age threshold 30 days, hidden --days flag) are
-listed as a READ-ONLY proposal in interactive mode; the plugin never
-deletes (zero auto-delete anywhere -- cleanup decisions belong to the
-agent). Cron mode (--gate) outputs no expired list. The inventory
-boundary never follows symlinks: a session-name symlink at the root and
-a symlinked .tmp/ body are both excluded entirely (SCR-042 N1, kept as
-inventory correctness -- never list outside content).
-
-Output:
-  Plain text: one block per violation (check number, name, path,
-  suggestion), or a single "OK" line when compliant.
-  --json: a JSON array of violation objects, or [] when compliant.
-  --gate: regular output first, then a final JSON line
-  {"wakeAgent": bool, "violations": N} -- exactly two keys (SCR-043 R6:
-  the removed/failed cleanup keys are gone with auto-delete). In
-  --gate + --json mode stdout is exactly two lines, each
-  json.loads-able: the violations JSON array and the wakeAgent line.
-  Interactive --json keeps the plain JSON array (no inventory
-  proposal).
-
-Exit codes:
-  0 = compliant (no violations)
-  1 = violations found
-  2 = parameter/path error (missing directory, --workspace mismatch,
-      invalid --days, or --gate with an unresolved Working Directory --
-      cron failure visibility, SCR-042 H1)
+Layer: skill-subprocess
+Refs: spec 3.4, spec 4.4, spec 5.7, spec 8.1, spec v2.7 R9, SCR-037, SCR-039 R9, SCR-042, SCR-043, ADR-0008
+Key exports:
+  - main -- CLI entry: resolve/validate the root, run the checks + inventory, emit plain/JSON/gate output; exit 0/1/2.
+  - cleanup_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes (SCR-043 R6).
 """
 
 import argparse
@@ -490,6 +442,7 @@ def print_json(violations):
 
 
 def main(argv=None):
+    """CLI entry: resolve and validate the audit root, run the structural checks + read-only .tmp inventory, emit plain / --json / --gate output (SCR-042 H1)."""
     parser = argparse.ArgumentParser(
         description="Audit a workspace root against structural compliance checks (with embedded .tmp cleanup)."
     )
