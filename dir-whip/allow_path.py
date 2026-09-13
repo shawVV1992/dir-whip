@@ -1,18 +1,12 @@
-"""dir_whip_allow_path entry-gating chain (spec 5.11 v2.9/v2.11).
+"""dir_whip_allow_path entry-gating chain: subagent rejection -> Working Directory root rejection -> outside-root rejection -> two-step user confirmation (spec 5.11 v2.9/v2.11).
 
-Extracted from the __init__.py assembly layer (SCR-045 R4): the tool
-handler's full gating logic — subagent rejection -> Working Directory
-root rejection -> outside-root rejection -> two-step user confirmation —
-plus its helpers and verbatim message constants. The EXTERNAL rejection
-message stays single-sourced in config.py (the config add layer asserts
-the same value domain and must not import the assembly layer,
-ADR-0007); it is imported here so both layers answer identically.
+Extracted from the __init__.py assembly layer (SCR-045 R4) with its helpers and verbatim message constants; the EXTERNAL rejection message is single-sourced in the core leaf messages.py, and the config add layer (which asserts the same value domain and must not import the assembly layer, ADR-0007) answers identically. Core discipline: no host imports; depends on config / sessions / verdict / events / paths / audit / state, nothing imports this module back (no cycle); the assembly layer keeps the _allow_path_handler thin adapter (fail-open single layer; tests call it directly) and re-exports the five moved names.
 
-Core module discipline: no host imports (ADR-0007). Depends on
-config / sessions / verdict / events / paths / audit / state; nothing
-imports this module back (no cycle). The assembly layer keeps the
-_allow_path_handler thin adapter (fail-open single layer; tests call it
-directly) and re-exports the five moved names.
+Layer: core
+Refs: spec 5.11 v2.9/v2.11, SCR-045 R4, ADR-0007
+Key exports:
+  - handle -- entry-gating chain + confirmed add (two-step user confirmation).
+  - ALLOW_PATH_TOOL_SCHEMA -- OpenAI function-call schema for dir_whip_allow_path (the plugin's only tool).
 """
 
 import logging

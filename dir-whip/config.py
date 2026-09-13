@@ -1,15 +1,17 @@
-"""Configuration loading, working_dir_root resolution and statistics for
-dir-whip (v0.4.0, spec v2.6 B2).
+"""Configuration loading, working_dir_root resolution and runtime allowlist -- the dir-whip config layer (spec 5.5).
 
-Inverted resolution chain (spec 5.5): dir-whip-config.yaml working_dir_root
-override (authoritative) -> current profile's terminal.cwd -> fail-open
-(guard disabled). The v0.1.0 memo chain is removed (spec 1.3/B4); the sole
-surviving tool is dir_whip_allow_path (spec 5.7). hermes_home honors
-the HERMES_HOME env override before the platform default (D5).
+Inverted resolution chain: dir-whip-config.yaml working_dir_root override (authoritative) -> current profile terminal.cwd -> fail-open, guard disabled (v0.1.0 memo chain removed, spec 1.3/B4), with the HERMES_HOME env override ahead of the platform default (D5); the guarded plugins.plugin_utils.lazy_singleton import degrades to a local lock-guarded cache when absent. Single unified ``allowlist:`` key, strict empty fallback, no backward compat for deleted exempt_paths / allowed_root_files (spec v2.6 B2): the structured ``{files, dirs}`` mapping (RAW passthrough of legacy flat lists too) supersedes the v2.6 file:<basename> / prefix:<abs-path> tagged form; sole surviving tool is dir_whip_allow_path (spec 5.7).
 
-Spec v2.6 B2: single unified key allowlist: [] with discriminated
-file:<basename> | prefix:<abs-path> (old keys exempt_paths / allowed_root_files
-deleted, no backward compat, strict empty fallback).
+Layer: core+host-guarded
+Refs: spec 1.3/B4, spec 5.5, spec 5.7, spec v2.6 B2
+Key exports:
+  - get_cached_config -- cached (working_dir_root, allowlist); seeds the session root.
+  - resolve_working_dir_root -- the inverted 3-step chain; None = guard disabled (fail-open).
+  - refresh_resolution -- re-resolve for the session's profile at on_session_start.
+  - load_guard_config -- load dir-whip-config.yaml (working_dir_root + raw allowlist).
+  - runtime_allowlist_add -- add a path to the process-lifetime runtime allowlist.
+  - is_runtime_allowlisted -- segment-boundary runtime allowlist check (case-insensitive).
+  - dir_whip_allow_path -- tool handler: add a path to the runtime allowlist.
 """
 
 import datetime

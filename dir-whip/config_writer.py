@@ -1,23 +1,13 @@
-"""Allowlist config writer (SCR-039 R9, v2.7 structured mapping).
+"""Allowlist config writer: row-level YAML edit preserving comments, strict validation, narrow cache refresh -- structured ``{files, dirs}`` mapping (spec v2.7 R9, SCR-039 R9).
 
-Row-level YAML edit preserving comments, strict allowlist validation,
-and narrow cache refresh. Pure stdlib + pyyaml, no host imports
-(ADR-0007). Follows report.py precedent (line scan + regex).
+Structured mapping (spec v2.7 R9, BREAKING clean break of the v2.6 flat tagged list): ``files`` = root-level file basenames, ``dirs`` = root-relative recursive subtree. Each key stays a single flow-style line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced line-level with comments above the key preserved, and block-style ``- item`` lists are never produced. Pure stdlib + pyyaml, no host imports (ADR-0007), line scan + regex per report.py precedent; path resolution is profile_home-aware (stats.stats_jsonl_path pattern) at HERMES_HOME/dir-whip/dir-whip-config.yaml.
 
-Structured mapping (v2.7 R9, BREAKING clean break of the v2.6 flat
-tagged list)::
-
-    allowlist:
-      files: ["a.txt", "b.txt"]   # root-level file basenames
-      dirs: ["proj", "proj/sub"]  # root-relative, recursive subtree
-
-Storage/edit style (plan ruling): each key stays a SINGLE flow-style
-line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced
-line-level; comments ABOVE the key are preserved; block-style
-``- item`` lists are never produced.
-
-Path resolution: HERMES_HOME/dir-whip/dir-whip-config.yaml with
-profile_home awareness (stats.stats_jsonl_path pattern).
+Layer: core
+Refs: spec v2.7 R9, SCR-039 R9, ADR-0007
+Key exports:
+  - load_allowlist -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
+  - load_allowlist_legacy_count -- count of ignored legacy flat entries (clean-break visibility signal).
+  - write_allowlist -- row-level edit writing the two-key flow block; comments preserved.
 """
 
 import json

@@ -1,11 +1,17 @@
-"""Verdict chain: guard decision, classification, terminal interception
-(spec 5.3/5.10/5.12) -the plugin's core guard logic.
+"""Verdict chain: guard / classify_target / discipline_applies / terminal interception -- the plugin's core guard logic (spec 5.3, spec 5.10, spec 5.12).
 
-Pure decision layer: no host imports, no hook registration (the assembly
-layer in __init__.py owns hooks and fail-open). Depends on the lower
-layers paths/terminal/events/state/config + sessions/audit (sanctioned
-import-back of pre-existing dependencies). Extracted from dir_whip.py
-(task 31.13). Spec v2.6 B2: unified allowlist .
+Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers paths/terminal/events/state/config plus the sanctioned import-back of sessions/audit; extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
+
+Layer: core
+Refs: spec 5.3, spec 5.10, spec 5.12, spec v2.6 B2
+Key exports:
+  - guard -- pre-tool-call decision chain; None = allow, a block dict = block.
+  - classify_target -- single-target classification: allow / external-write / block.
+  - discipline_applies -- True = inject the session-start reminder; missing cwd/root fails open to True.
+  - project_exemption_applies -- True = CWD under an active host project folder (reminder skipped); fail-open False.
+  - extract_target_paths -- write_file / patch target path(s); empty list when absent.
+  - reset_fail_open_flag -- reset the one-time fail-open warning flag.
+  - resolved_config -- cached (working_dir_root, allowlist); (None, []) on failure.
 """
 
 import logging
