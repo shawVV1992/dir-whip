@@ -1,9 +1,9 @@
-﻿![banner](assert/image/banner.png)
+![banner](assert/image/banner.png)
 
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.7.0](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.7.1](https://img.shields.io/badge/version-0.7.1-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -269,7 +269,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.7.0
+[dir-whip] v0.7.1
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
