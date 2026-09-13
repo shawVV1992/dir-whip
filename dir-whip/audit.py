@@ -12,6 +12,7 @@ Key exports:
   - transform_tool_result -- L1 fire-once notice hook; appends the remediation notice.
   - settle_paths -- dir_whip_settle core: quarantine pending root writes, settling the latch.
   - pre_verify_nudge -- continuation-nudge decision; None = let the turn finish naturally.
+  - audit_post_check -- terminal re-scan/diff/violation post-check (SCR-050 v3 R6.1 public; consumer: the assembly post_tool_call observer).
 """
 
 import datetime
@@ -56,8 +57,8 @@ from .paths import (
 
 from .sessions import (
     is_child,
-    _record_top_session,
     owner_session,
+    record_top_session,
 )
 
 # SCR-044 R5 (spec 5.19): the script-vector binding observer lives in
@@ -832,9 +833,9 @@ def _audit_session_start(session_id):
             state.audit.nudge_counts.pop(session_id, None)
             # Lock note (31.13, Controller addition #4): cap_warned stays
             # under the pending lock; SCR-044 R3 moved top_session to
-            # state.session (plain write via _record_top_session, as
+            # state.session (plain write via record_top_session, as
             # before).
-            _record_top_session(session_id)
+            record_top_session(session_id)
             state.audit.cap_warned = False
     except Exception as exc:
         logger.debug("dir-whip: audit session start error: %s", exc)
@@ -855,6 +856,10 @@ gate_block = _audit_gate_block
 gate_unresolved = _audit_gate_unresolved
 pre_snapshot = _audit_pre_snapshot
 session_start = _audit_session_start
+# SCR-050 v3 R6.1: the assembly post_tool_call observer entry point goes
+# public (seam discipline, spec 5.1 v2.19; name matches the frozen spec
+# changelog).
+audit_post_check = _audit_post_check
 
 __all__ = [
     "set_classifier",
@@ -872,4 +877,5 @@ __all__ = [
     "gate_unresolved",
     "pre_snapshot",
     "session_start",
+    "audit_post_check",
 ]

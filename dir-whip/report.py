@@ -8,6 +8,7 @@ Key exports:
   - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
   - render -- render the merged /dir-whip report (thin alias of _dir_whip_report).
   - register_commands -- thin alias of register_dir_whip_commands (SCR-035 interface convergence).
+  - plugin_version -- plugin.yaml version probe (SCR-050 v3 R6.1 public; consumer: assembly register-time precompute).
 """
 
 import logging
@@ -664,5 +665,9 @@ def register_dir_whip_commands(ctx):
 # Public thin aliases (SCR-035 interface convergence point).
 register_commands = register_dir_whip_commands
 render = _dir_whip_report
+# SCR-050 v3 R6.1: register-time version probe goes public (consumer:
+# the assembly layer precomputes state.session.plugin_version; spec 5.1
+# v2.19).
+plugin_version = _plugin_version
 
-__all__ = ["register_commands", "render"]
+__all__ = ["register_commands", "render", "plugin_version"]

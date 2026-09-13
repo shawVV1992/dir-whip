@@ -3,7 +3,7 @@
 Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers paths/terminal/events/state/config plus the sanctioned import-back of sessions/audit; extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
 
 Layer: core
-Refs: spec 5.3, spec 5.10, spec 5.12, spec v2.6 B2
+Refs: spec 5.3, spec 5.10, spec 5.12, spec v2.6 B2, SCR-050
 Key exports:
   - guard -- pre-tool-call decision chain; None = allow, a block dict = block.
   - classify_target -- single-target classification: allow / external-write / block.
@@ -12,6 +12,7 @@ Key exports:
   - extract_target_paths -- write_file / patch target path(s); empty list when absent.
   - reset_fail_open_flag -- reset the one-time fail-open warning flag.
   - resolved_config -- cached (working_dir_root, allowlist); (None, []) on failure.
+  - approval_granted -- host approval choice -> granted/denied (SCR-050 v3 R6.1 public; consumer: the assembly approval observer).
 """
 
 import logging
@@ -33,7 +34,7 @@ from .config import (
     load_guard_config,
 )
 
-from .events import _verdict_reason, emit
+from .events import emit
 
 # Message templates: centralized in the core leaf module messages.py
 # (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
@@ -58,11 +59,14 @@ from . import session_dirs
 
 from .sessions import is_child
 
+# SCR-050 v3 R6.1 (spec 5.1 v2.19 seam discipline): the lexer surface is
+# consumed via its declared public names; the device-path exemption is a
+# predicate (deep module: hide the data, expose the judgment).
 from .terminal import (
-    _DEVICE_PATHS,
-    _terminal_block_targets,
-    _terminal_uncertain,
-    _tokenize_command,
+    is_device_path,
+    terminal_block_targets,
+    terminal_uncertain,
+    tokenize_command,
 )
 
 # Unified allowlist helpers (spec v2.7 R9 structured mapping)
@@ -229,6 +233,17 @@ def _resolved_config():
 def _approval_granted(choice):
     """Map host approval choices to granted/denied (5.13 D2)."""
     return str(choice or "").strip().lower() in _APPROVAL_GRANTED_CHOICES
+
+
+def _outcome_reason(outcome):
+    """Short reason string for a verdict event (5.13).
+
+    SCR-050 v3 R6.1: inlined from events._verdict_reason (single
+    consumer -- dead-surface policy: move, don't proliferate).
+    """
+    if outcome == "external-write":
+        return "target outside working_dir_root"
+    return None
 
 
 # ---------------------------------------------------------------- Target extraction (spec 5.3 step 3)
@@ -510,7 +525,7 @@ def _evaluate_target(target, tool_name, working_dir_root, allowlist,
     if is_terminal:
         # 4.3 device paths are exempt BEFORE normalization: no
         # verdict/stats event, no drive-inherited path fabrication.
-        if target in _DEVICE_PATHS:
+        if is_device_path(target):
             return None
         abs_target = _resolve_terminal_target(target, base)
     else:
@@ -536,7 +551,7 @@ def _evaluate_target(target, tool_name, working_dir_root, allowlist,
         return {"action": "block", "message": verdict["message"]}
     emit(
         verdict["outcome"], tool_name, emit_rule_key, normalized,
-        _verdict_reason(verdict["outcome"]), session_id, is_subagent,
+        _outcome_reason(verdict["outcome"]), session_id, is_subagent,
     )
     return None
 
@@ -563,7 +578,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
         if not isinstance(command, str) or not command:
             return None
 
-        tokens = _tokenize_command(command)
+        tokens = tokenize_command(command)
         if not tokens:
             return None
         base = _terminal_base(args, task_id, working_dir_root)
@@ -587,7 +602,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             )
             return None
 
-        for target, rule_key in _terminal_block_targets(tokens):
+        for target, rule_key in terminal_block_targets(tokens):
             act = _evaluate_target(
                 target, "terminal", working_dir_root, allowlist,
                 is_subagent, session_id, is_terminal=True, base=base,
@@ -596,7 +611,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             if act:
                 return act
 
-        if _terminal_uncertain(tokens):
+        if terminal_uncertain(tokens):
             emit(
                 "allow", "terminal", "terminal-write-uncertain", None,
                 "write intent detected, target uncertain", session_id, is_subagent,
@@ -612,3 +627,22 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
 extract_target_paths = _extract_target_paths
 reset_fail_open_flag = _reset_fail_open_flag
 resolved_config = _resolved_config
+# SCR-050 v3 R6.1: approval vocabulary mapping goes public (assembly
+# consumer on_post_approval_response; spec 5.1 v2.19 seam discipline).
+approval_granted = _approval_granted
+
+# SCR-050 v3 R6.1: declared public surface (AC-9). The discipline_applies
+# / project_exemption_applies predicates move to lifecycle.py at R6.2
+# (same-name aliases stay).
+__all__ = [
+    "guard",
+    "classify_target",
+    "discipline_applies",
+    "project_exemption_applies",
+    "approval_granted",
+    "extract_target_paths",
+    "reset_fail_open_flag",
+    "resolved_config",
+    "REMINDER_MESSAGE",
+    "FAIL_OPEN_WARNING_MESSAGE",
+]

@@ -132,7 +132,7 @@ def register(ctx):
         state.session.skill_md_path = os.path.join(
             plugin_dir, "skills", "workspace-organization", "SKILL.md"
         )
-        state.session.plugin_version = report._plugin_version()
+        state.session.plugin_version = report.plugin_version()
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
         audit.set_classifier(verdict.classify_target)
@@ -349,7 +349,7 @@ def on_start(session_id, model=None, platform=None, **kwargs):
         with state.session.lock:
             state.session.confirmation_issued.clear()
         verdict.reset_fail_open_flag()
-        ctx = verdict._get_ctx()
+        ctx = state.session.registered_ctx
         profile = getattr(ctx, "profile_name", None) if ctx else None
         # SCR-027: session-scoped resolution — re-resolve working_dir_root
         # from THIS session's profile (child sessions skip and inherit).
@@ -442,7 +442,7 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
         # alongside (never instead of) the landed: observation below; a
         # blocked-at-pre call has no pre snapshot and skips here.
         if tool_name == "terminal":
-            audit._audit_post_check(
+            audit.audit_post_check(
                 session_id, task_id, is_subagent=sessions.is_child(session_id),
             )
         events.emit(
@@ -464,7 +464,7 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
     local hermes-agent payloads). Privacy: no command/description text.
     """
     try:
-        granted = verdict._approval_granted(choice)
+        granted = verdict.approval_granted(choice)
         rule_key = "approval:granted" if granted else "approval:denied"
         events.emit(
             "allow" if granted else "block", "approval", rule_key, None,

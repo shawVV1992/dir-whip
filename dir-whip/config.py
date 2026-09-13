@@ -3,7 +3,7 @@
 Inverted resolution chain: dir-whip-config.yaml working_dir_root override (authoritative) -> current profile terminal.cwd -> fail-open, guard disabled (v0.1.0 memo chain removed, spec 1.3/B4), with the HERMES_HOME env override ahead of the platform default (D5); the guarded plugins.plugin_utils.lazy_singleton import degrades to a local lock-guarded cache when absent. Single unified ``allowlist:`` key, strict empty fallback, no backward compat for deleted exempt_paths / allowed_root_files (spec v2.6 B2): the structured ``{files, dirs}`` mapping (RAW passthrough of legacy flat lists too) supersedes the v2.6 file:<basename> / prefix:<abs-path> tagged form; sole surviving tool is dir_whip_allow_path (spec 5.7).
 
 Layer: core+host-guarded
-Refs: spec 1.3/B4, spec 5.5, spec 5.7, spec v2.6 B2
+Refs: spec 1.3/B4, spec 5.5, spec 5.7, spec v2.6 B2, SCR-050
 Key exports:
   - get_cached_config -- cached (working_dir_root, allowlist); seeds the session root.
   - resolve_working_dir_root -- the inverted 3-step chain; None = guard disabled (fail-open).
@@ -11,7 +11,7 @@ Key exports:
   - load_guard_config -- load dir-whip-config.yaml (working_dir_root + raw allowlist).
   - runtime_allowlist_add -- add a path to the process-lifetime runtime allowlist.
   - is_runtime_allowlisted -- segment-boundary runtime allowlist check (case-insensitive).
-  - dir_whip_allow_path -- tool handler: add a path to the runtime allowlist.
+  - ensure_session_root / reset_cache / set_session_profile -- cache+session seeding/lifecycle (SCR-045 R2 / SCR-027).
 """
 
 import datetime
@@ -52,10 +52,9 @@ from .messages import (
 )
 
 from .paths import (
-    _get_hermes_home,
-    _paths_equal,
-    _profile_home,
+    get_hermes_home,
     normalize_target,
+    profile_home,
     relativize_target,
     within_working_dir,
 )
@@ -115,7 +114,7 @@ def _get_guard_config_path():
     per-profile configs land in profiles/<name>/dir-whip/ (SCR-037 D3).
     Falls back to HERMES_HOME/dir-whip/... for default tests.
     """
-    home = _get_hermes_home()
+    home = get_hermes_home()
     profile = None
     try:
         if getattr(state.session, "session_profile", None):
@@ -131,7 +130,7 @@ def _get_guard_config_path():
             pass
     if profile:
         try:
-            home = _profile_home(home, profile)
+            home = profile_home(home, profile)
         except Exception:
             pass
     return Path(home) / "dir-whip" / "dir-whip-config.yaml"
@@ -207,7 +206,7 @@ def resolve_working_dir_root(ctx, config_path=None):
     try:
         profile = getattr(ctx, "profile_name", None)
         if profile:
-            hermes_home = _get_hermes_home()
+            hermes_home = get_hermes_home()
             cfg_path = _profile_config_path(hermes_home, profile)
             cwd = parse_terminal_cwd(cfg_path)
             if cwd:
@@ -284,7 +283,7 @@ def _profile_terminal_cwd(ctx):
         profile = getattr(ctx, "profile_name", None)
         if not profile:
             return None
-        hermes_home = _get_hermes_home()
+        hermes_home = get_hermes_home()
         cfg_path = _profile_config_path(hermes_home, profile)
         return parse_terminal_cwd(cfg_path)
     except Exception:
@@ -536,3 +535,26 @@ def reset_cache():
 effective_root = _effective_root
 profile_terminal_cwd = _profile_terminal_cwd
 profile_config_path = _profile_config_path
+
+# SCR-050 v3 R6.1: declared public surface (AC-9, spec 5.1 v2.19).
+# is_inside_session_dir moves to paths.py at R6.3 (same-name re-export
+# alias stays for config/session_dirs consumers).
+__all__ = [
+    "get_cached_config",
+    "resolve_working_dir_root",
+    "refresh_resolution",
+    "load_guard_config",
+    "parse_terminal_cwd",
+    "runtime_allowlist_add",
+    "runtime_allowlist_clear",
+    "is_runtime_allowlisted",
+    "ensure_session_root",
+    "reset_cache",
+    "set_session_profile",
+    "refresh_allowlist_cache",
+    "effective_root",
+    "profile_terminal_cwd",
+    "profile_config_path",
+    "is_inside_session_dir",
+    "SESSION_DIR_RE",
+]

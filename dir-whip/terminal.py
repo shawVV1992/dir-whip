@@ -14,6 +14,7 @@ Key exports:
   - terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
   - is_session_dir_script -- does a chain segment invoke create_session_dir.py under a Python interpreter?
   - terminal_cp_mv_src -- literal source token of the mv/cp segment whose destination equals ``dst``.
+  - is_device_path -- exempt device-path predicate (4.3; SCR-050 v3 R6.1 public).
 """
 
 import re
@@ -415,10 +416,22 @@ tokenize_command = _tokenize_command
 terminal_block_targets = _terminal_block_targets
 terminal_uncertain = _terminal_uncertain
 
+
+def is_device_path(target):
+    """True when the token is an exempt device path (4.3, SCR-033).
+
+    SCR-050 v3 R6.1: public predicate over the frozen _DEVICE_PATHS set
+    (deep-module preference: hide the data, expose the judgment; the
+    cross-module consumer verdict.py must not reach the private set).
+    """
+    return target in _DEVICE_PATHS
+
+
 __all__ = [
     "tokenize_command",
     "terminal_block_targets",
     "terminal_uncertain",
+    "is_device_path",
     "is_session_dir_script",
     "terminal_cp_mv_src",
 ]

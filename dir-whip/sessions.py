@@ -10,6 +10,7 @@ Key exports:
   - register_child -- record a child's parent link for pending-set inheritance.
   - subagent_start -- subagent_start observer: track the child + open the child stats context.
   - subagent_stop -- subagent_stop observer: untrack the child + close the child stats context.
+  - record_top_session -- record the current top-level session id (child-inheritance fallback; SCR-050 v3 R6.1 public).
 """
 
 import json
@@ -160,5 +161,8 @@ is_child = _is_child_session
 register_child = _audit_register_child
 subagent_start = on_subagent_start
 subagent_stop = on_subagent_stop
+# SCR-050 v3 R6.1: cross-module consumer (audit session_start) uses the
+# declared public name (seam discipline, spec 5.1 v2.19).
+record_top_session = _record_top_session
 
-__all__ = ["is_child", "owner_session", "register_child", "subagent_start", "subagent_stop"]
+__all__ = ["is_child", "owner_session", "register_child", "subagent_start", "subagent_stop", "record_top_session"]
