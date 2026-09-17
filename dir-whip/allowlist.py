@@ -9,7 +9,9 @@ silently filtered (hand-edited configs fail-closed; guard and audit
 agree). Matching: ``files`` = exact basename match
 (case-insensitive on Windows), ``dirs`` = recursive subtree exemption
 under <working_dir_root>/<entry> with the root itself never exempt --
-the Tier 0 exemption source; pure functions only, no host imports, no
+the T2 (config allowlist) exemption source (SCR-052 R1 V1: the former
+"(Tier 0)" prose contradicted the T0-T4 chain; Runtime Allowlist = T1,
+config allowlist = T2); pure functions only, no host imports, no
 state (ADR-0007), import surface = stdlib + ``paths``.
 
 Layer: core

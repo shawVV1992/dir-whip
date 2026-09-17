@@ -58,7 +58,7 @@ class _AuditState:
 
     def reset(self):
         self.pre_snapshots = {}          # key=(session_id, task_id)
-        self.pending = {}                # owner-session -> {normpath: {...}}
+        self.pending_violations = {}     # owner-session -> {normpath: {...}} (SCR-052 G3: renamed from self.pending)
         self.cap_warned = False
         self.nudge_counts = {}           # SCR-040 R2: continuation-nudge session-cumulative counts (keyed by owner session_id, cap=3)
 
@@ -97,7 +97,7 @@ class _StatsState:
     def reset(self):
         self.counters = {}
         self.session = {"profile": None, "session_id": None,
-                        "is_subagent": None, "started_at": None}
+                        "is_subagent": False, "started_at": None}  # SCR-052 T52-11/V2: domain unified to {False, True}
 
 
 session = _SessionState()

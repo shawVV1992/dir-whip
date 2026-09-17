@@ -6,8 +6,7 @@ Layer: core+registration-helper
 Refs: spec 5.5, spec 5.6, spec 5.7, spec v2.5, spec v2.6 B2, spec v2.7 R9, spec v2.8 R6, SCR-029, SCR-035, SCR-037, SCR-043 R5, SCR-045 R5, SCR-046 R1
 Key exports:
   - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
-  - render -- render the merged /dir-whip report (thin alias of _dir_whip_report).
-  - register_commands -- thin alias of register_dir_whip_commands (SCR-035 interface convergence).
+  - render -- render the merged /dir-whip report.
   - plugin_version -- plugin.yaml version probe (SCR-050 v3 R6.1 public; consumer: assembly register-time precompute).
 """
 
@@ -107,7 +106,7 @@ def _stats_writable():
 _SOURCE_LABELS = {"dir-whip-config": "guard-config"}
 
 
-def _plugin_version(path=None):
+def plugin_version(path=None):
     """The plugin version from the sibling plugin.yaml (the single version
     source, SCR-029). Simple text parse, NO PyYAML: the first `version:`
     line. On ANY failure (missing/unreadable file, no match) -> 'unknown';
@@ -129,7 +128,7 @@ def _plugin_version(path=None):
     return "unknown"
 
 
-def _dir_whip_report():
+def render():
     """Render the merged /dir-whip report (spec 5.7 v2.8 R6).
 
     Fixed field order: version, State (enabled/disabled), Working
@@ -146,7 +145,7 @@ def _dir_whip_report():
         lines = []
 
         # Line 1: version (plugin.yaml, unknown fallback).
-        lines.append("[dir-whip] v%s" % _plugin_version())
+        lines.append("[dir-whip] v%s" % plugin_version())
 
         # Line 2: state (v2.8: ACTIVE/FAIL-OPEN -> enabled/disabled).
         lines.append("State: enabled" if root else "State: disabled")
@@ -290,12 +289,9 @@ def _render_current_state():
     return _render_two_sections(state_map["files"], state_map["dirs"])
 
 
-def _case_eq(a, b):
-    """Casefold-aware equality on Windows (SCR-006).
-
-    One-line delegate to paths.paths_equal (SCR-045 R7 single source).
-    """
-    return paths_equal(a, b)
+# SCR-052 R1: the former _case_eq thin delegate of paths.paths_equal
+# (SCR-045 R7 single source) is deleted; all call sites use
+# paths.paths_equal directly (already imported above).
 
 
 def _relativize_input(token, root):
@@ -340,7 +336,7 @@ def _list_candidates():
             for entry in it:
                 try:
                     if entry.is_file():
-                        if any(_case_eq(entry.name, f) for f in listed_files):
+                        if any(paths_equal(entry.name, f) for f in listed_files):
                             continue
                         file_cands.append(entry.name)
                     elif entry.is_dir():
@@ -351,7 +347,7 @@ def _list_candidates():
                         # a leftover root .hermes/ (pre-v0.6.3 quarantine
                         # residue) is enumerated like any other non-session
                         # directory (the SCR-043 R5 four-way consistency).
-                        if any(_case_eq(name, seg) for seg in dir_first_segments):
+                        if any(paths_equal(name, seg) for seg in dir_first_segments):
                             continue
                         dir_cands.append(name)
                 except Exception:
@@ -495,13 +491,13 @@ def _handle_allow(rest):
     new_dirs = list(state_map["dirs"])
     feedback = []
     for f in adds_files:
-        if any(_case_eq(f, x) for x in new_files):
+        if any(paths_equal(f, x) for x in new_files):
             feedback.append("Already in files: %s" % f)
         else:
             new_files.append(f)
             feedback.append("Added to files: %s" % f)
     for d in adds_dirs:
-        if any(_case_eq(d, x) for x in new_dirs):
+        if any(paths_equal(d, x) for x in new_dirs):
             feedback.append("Already in dirs: %s" % d)
         else:
             new_dirs.append(d)
@@ -511,7 +507,7 @@ def _handle_allow(rest):
             config_writer.MAX_ENTRIES,
         )
     if any(line.startswith("Added to") for line in feedback):
-        config_writer.write_allowlist(
+        config_writer.write_config(
             {"files": sorted(new_files), "dirs": sorted(new_dirs)}
         )
     return "\n".join(feedback) + "\n\n" + _render_current_state()
@@ -576,7 +572,7 @@ def _handle_remove(rest):
     def _drop(entries, name, label):
         kept = []
         for x in entries:
-            if _case_eq(x, name):
+            if paths_equal(x, name):
                 removed_lines.append("Removed from %s: %s" % (label, x))
             else:
                 kept.append(x)
@@ -589,7 +585,7 @@ def _handle_remove(rest):
         return "Not in allowlist: %s\n\n%s" % (
             ", ".join(rem_names), _render_current_state(),
         )
-    config_writer.write_allowlist(
+    config_writer.write_config(
         {"files": sorted(new_files), "dirs": sorted(new_dirs)}
     )
     return "\n".join(removed_lines) + "\n\n" + _render_current_state()
@@ -622,7 +618,7 @@ def _dir_whip_cmd(raw_args):
     try:
         arg = (raw_args or "").strip()
         if not arg:
-            return _dir_whip_report()
+            return render()
         parts = arg.split(None, 1)
         sub = parts[0].lower() if parts else ""
         rest = parts[1] if len(parts) > 1 else ""
@@ -662,12 +658,10 @@ def register_dir_whip_commands(ctx):
         logger.warning("dir-whip: register_command failed: %s", exc)
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-register_commands = register_dir_whip_commands
-render = _dir_whip_report
-# SCR-050 v3 R6.1: register-time version probe goes public (consumer:
-# the assembly layer precomputes state.session.plugin_version; spec 5.1
-# v2.19).
-plugin_version = _plugin_version
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail register_commands/render/plugin_version alias lines are
+# gone; the defs above carry the public names. The version probe went
+# public at SCR-050 v3 R6.1, consumer: the assembly layer precomputes
+# state.session.plugin_version; spec 5.1 v2.19).
 
-__all__ = ["register_commands", "render", "plugin_version"]
+__all__ = ["register_dir_whip_commands", "render", "plugin_version"]

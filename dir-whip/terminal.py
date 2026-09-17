@@ -11,7 +11,7 @@ Refs: spec 4.1, spec 4.2, spec 4.3, spec 5.10, spec 5.19, SCR-033, SCR-035, SCR-
 Key exports:
   - tokenize_command -- split a shell command into tokens (lenient POSIX-ish lexer; never raises).
   - terminal_block_targets -- chain-aware block-tier write targets as (target, rule_key) pairs.
-  - terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
+  - is_terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
   - is_session_dir_script -- does a chain segment invoke create_session_dir.py under a Python interpreter?
   - terminal_cp_mv_src -- literal source token of the mv/cp segment whose destination equals ``dst``.
   - is_device_path -- exempt device-path predicate (4.3; SCR-050 v3 R6.1 public).
@@ -19,8 +19,16 @@ Key exports:
 
 import re
 
+from .events import (
+    RULE_KEY_TERMINAL_CP_MV,
+    RULE_KEY_TERMINAL_DOWNLOAD,
+    RULE_KEY_TERMINAL_MKDIR,
+    RULE_KEY_TERMINAL_REDIRECT,
+    RULE_KEY_TERMINAL_TOUCH,
+)
+
 # Terminal coarse tiers (spec 5.10). Redirect operators are emitted by
-# _tokenize_command as standalone tokens; block-tier targets are exact
+# tokenize_command as standalone tokens; block-tier targets are exact
 # membership + next plain token. Everything else with write intent is
 # ALLOW + LOG (terminal-write-uncertain), never approved or blocked.
 _REDIRECT_TOKENS = frozenset((">", ">>", "1>", "2>", "1>>", "2>>", "&>"))
@@ -35,7 +43,7 @@ _NON_LITERAL_RE = re.compile(r"[$`]")
 # enter the classification chain and produce no verdict/stats event (no
 # drive-inherited E:\dev\null fabrication on Windows).
 _DEVICE_PATHS = frozenset(("/dev/null", "/dev/stdout", "/dev/stderr"))
-# 4.1 (SCR-033): chain boundaries emitted by _tokenize_command. `&&` is
+# 4.1 (SCR-033): chain boundaries emitted by tokenize_command. `&&` is
 # two `&` tokens (both boundaries); `&>` stays a single redirect token and
 # is NOT a boundary. Newlines are emitted as "\n" marker tokens.
 _CHAIN_BOUNDARY_TOKENS = frozenset((";", "|", "&", "\n"))
@@ -45,7 +53,7 @@ _SESSION_SCRIPT_INTERPRETERS = frozenset(("python", "python3", "py"))
 _SESSION_SCRIPT_NAME = "create_session_dir.py"
 
 
-def _tokenize_command(command):
+def tokenize_command(command):
     """Split a shell command into tokens (lightweight, POSIX-ish).
 
     Respects single quotes (fully literal), double quotes (backslash only
@@ -255,12 +263,12 @@ def _flag_value(*flags):
 # uncertain tier; _UNCERTAIN_COMMANDS stays untouched (curl / wget keep
 # their blanket uncertain signal for non-extracted forms).
 _WRITE_SPECS = {
-    "touch": (_all_literal_args, "terminal-touch"),
-    "cp": (_last_literal_arg, "terminal-cp-mv"),
-    "mv": (_last_literal_arg, "terminal-cp-mv"),
-    "mkdir": (_all_literal_args, "terminal-mkdir"),
-    "curl": (_flag_value("-o", "--output"), "terminal-download"),
-    "wget": (_flag_value("-O", "--output-document"), "terminal-download"),
+    "touch": (_all_literal_args, RULE_KEY_TERMINAL_TOUCH),
+    "cp": (_last_literal_arg, RULE_KEY_TERMINAL_CP_MV),
+    "mv": (_last_literal_arg, RULE_KEY_TERMINAL_CP_MV),
+    "mkdir": (_all_literal_args, RULE_KEY_TERMINAL_MKDIR),
+    "curl": (_flag_value("-o", "--output"), RULE_KEY_TERMINAL_DOWNLOAD),
+    "wget": (_flag_value("-O", "--output-document"), RULE_KEY_TERMINAL_DOWNLOAD),
 }
 
 
@@ -284,7 +292,7 @@ def _segment_block_targets(seg):
                 and not _NON_LITERAL_RE.search(nxt)
                 and not nxt.startswith("=")
             ):
-                out.append((nxt, "terminal-redirect"))
+                out.append((nxt, RULE_KEY_TERMINAL_REDIRECT))
                 redirect_idx.add(i + 1)
 
     spec = _WRITE_SPECS.get(seg[0])
@@ -296,7 +304,7 @@ def _segment_block_targets(seg):
     return out
 
 
-def _terminal_block_targets(tokens):
+def terminal_block_targets(tokens):
     """Block-tier write targets (spec 5.10), chain-aware (SCR-033).
 
     Tokens are first split into command segments at chain boundaries
@@ -315,7 +323,7 @@ def _terminal_block_targets(tokens):
     return out
 
 
-def _terminal_uncertain(tokens):
+def is_terminal_uncertain(tokens):
     """Uncertain write-intent detection (5.10 allow-and-log tier).
 
     Any chain segment whose first token is python/node/sed/tee/curl/wget/
@@ -411,10 +419,9 @@ def terminal_cp_mv_src(tokens, dst):
     return None
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-tokenize_command = _tokenize_command
-terminal_block_targets = _terminal_block_targets
-terminal_uncertain = _terminal_uncertain
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail tokenize_command/terminal_block_targets/terminal_uncertain
+# alias lines are gone; the defs above carry the public names).
 
 
 def is_device_path(target):
@@ -430,7 +437,7 @@ def is_device_path(target):
 __all__ = [
     "tokenize_command",
     "terminal_block_targets",
-    "terminal_uncertain",
+    "is_terminal_uncertain",
     "is_device_path",
     "is_session_dir_script",
     "terminal_cp_mv_src",

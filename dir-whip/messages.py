@@ -6,7 +6,7 @@ byte-identical from their original modules (verdict / session_dirs /
 audit / allow_path / config); ZERO intra-package imports (no imports at
 all), so every core module (config.py included, ADR-0007 dependency
 direction) can import it safely, with no cycle. Dynamic builders
-(script_invocation_line, _block_message, _remediation_instruction,
+(script_invocation_line, _block_message, _settle_instruction,
 _orphan_notice, _confirmation_payload) stay in their owning modules and
 draw their static text from these constants; original modules keep
 same-name constants as import aliases and the __init__.py re-export
@@ -22,7 +22,7 @@ Key exports:
   - BLOCK_MESSAGE_* -- unified block skeleton fragments (header / fix lines / uniqueness / allowlist hint / [Reason]+[Next] tail).
   - SESSION_DIR_LIMIT_* -- one-Session-Directory-per-conversation limit messages (top-level + subagent).
   - ORPHAN_NOTICE_* -- advisory orphan-notice lines (header / tail / create-relocate); never blocks.
-  - AUDIT_NOTICE_* / GATE_BLOCK_* / NUDGE_MESSAGE_TEMPLATE / REMEDIATION_INSTRUCTION_TEMPLATE -- write-audit L1 notice, L3 gate, continuation nudge, shared remediation sentence.
+  - AUDIT_NOTICE_* / GATE_BLOCK_* / NUDGE_MESSAGE_TEMPLATE / SETTLE_INSTRUCTION_TEMPLATE -- write-audit L1 notice, L3 gate, continuation nudge, shared remediation sentence.
   - SETTLE_TOOL_* -- dir_whip_settle tool schema description texts.
   - ALLOW_PATH_* / RUNTIME_ALLOWLIST_ADDED_TEMPLATE -- dir_whip_allow_path tool schema, entry-gating messages (spec 5.11), add feedback.
 """
@@ -64,7 +64,7 @@ REMINDER_MESSAGE = (
 # "Reply using the [Reason]/[Next] template." pointer cue is retired: the
 # template definition lived only in the opt-in SKILL.md, so models that
 # had not loaded the skill never saw it). The dynamic assembly (Target
-# line, shared script invocation line, orphan rename line, fragment
+# line, shared script invocation line, orphan move line, fragment
 # joining) stays in verdict._block_message.
 BLOCK_MESSAGE_HEADER_LINE = (
     "BLOCKED: File writes in the Working Directory require a Session "
@@ -189,7 +189,7 @@ AUDIT_NOTICE_HEADER_LINE = (
 # used by BOTH the L1 notice and the continuation nudge. Two %s slots:
 # the quoted path list and the quarantine location. The short settle
 # call line below (L3 gate only) is deliberately separate.
-REMEDIATION_INSTRUCTION_TEMPLATE = (
+SETTLE_INSTRUCTION_TEMPLATE = (
     "Remediate now: call dir_whip_settle(paths=[%s]) to move the "
     "file(s) into quarantine (%s), or move them manually into a "
     "Session Directory"

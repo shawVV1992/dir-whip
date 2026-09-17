@@ -17,6 +17,8 @@ import logging
 
 from . import audit, config, events, sessions, session_dirs, state, stats
 
+from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
+
 from .messages import REMINDER_MESSAGE
 
 from .paths import within_working_dir
@@ -39,7 +41,7 @@ def _record_session_reminder(session_id, status):
     skipped-child state. Allow outcome -> no bus fanout (the 5.14 emit
     surface stays at 7). Fail-open: events.emit never raises."""
     events.emit(
-        "allow", "session", "session-reminder", None,
+        "allow", "session", RULE_KEY_SESSION_REMINDER, None,
         status, session_id, sessions.is_child(session_id),
     )
 
@@ -53,7 +55,7 @@ def _record_orphan_notice(session_id):
     is_subagent is False by construction. Fail-open: events.emit never
     raises."""
     events.emit(
-        "allow", "session", "orphan-notice", None,
+        "allow", "session", RULE_KEY_ORPHAN_NOTICE, None,
         "orphan scan notice at session start", session_id, False,
     )
 
@@ -67,7 +69,7 @@ def _record_reminder_fallback(session_id):
     event (the 5.14 emit surface stays at 7). Fail-open: events.emit
     never raises."""
     events.emit(
-        "allow", "session", "session-reminder-fallback", None,
+        "allow", "session", RULE_KEY_SESSION_REMINDER_FALLBACK, None,
         "session-start reminder re-delivered on the first eligible "
         "tool result",
         session_id, False,
@@ -229,7 +231,7 @@ def session_start(session_id, ctx):
     # from THIS session's profile (child sessions skip and inherit).
     config.set_session_profile(profile)
     config.refresh_resolution(ctx)
-    stats.set_session(
+    stats.stats_set_session(
         profile=profile,
         session_id=session_id,
         is_subagent=False,

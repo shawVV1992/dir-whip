@@ -8,8 +8,8 @@ Key exports:
   - set_classifier -- wire the classification chain (assembly-layer injection).
   - snapshot -- read-only top-level root snapshot; None on OSError (fail-open).
   - classify_diff -- four-state snapshot diff -> {violations, recorded}; deletions record-only.
-  - pending_snapshot -- read-only copy of a session's pending violations (L3 gate input).
-  - transform_tool_result -- L1 fire-once notice hook; appends the remediation notice.
+  - pending_violation_snapshot -- read-only copy of a session's pending violations (L3 gate input).
+  - transform_tool_result -- L1 fire-once notice hook; appends the settle instruction notice.
   - settle_paths -- dir_whip_settle core: quarantine pending root writes, settling the latch.
   - pre_verify_nudge -- continuation-nudge decision; None = let the turn finish naturally.
   - audit_post_check -- terminal re-scan/diff/violation post-check (SCR-050 v3 R6.1 public; consumer: the assembly post_tool_call observer).
@@ -25,9 +25,18 @@ from . import state
 
 from .config import get_cached_config
 
-from .stats import record as _stats_record
+from .stats import stats_record
 
-from .events import bus_emit, emit
+from .events import (
+    RULE_KEY_PRE_VERIFY_NUDGE,
+    RULE_KEY_ROOT_FILE,
+    RULE_KEY_WRITE_AUDIT_GATE_BLOCK,
+    RULE_KEY_WRITE_AUDIT_SETTLE,
+    RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED,
+    RULE_KEY_WRITE_AUDIT_VIOLATION,
+    bus_emit,
+    emit,
+)
 
 # Message templates: centralized in the core leaf module messages.py
 # (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
@@ -44,7 +53,7 @@ from .messages import (
     GATE_BLOCK_SUBAGENT_NEXT_LINE,
     GATE_BLOCK_SUBAGENT_REASON_LINE,
     NUDGE_MESSAGE_TEMPLATE,
-    REMEDIATION_INSTRUCTION_TEMPLATE,
+    SETTLE_INSTRUCTION_TEMPLATE,
     SETTLE_TOOL_DESCRIPTION,
     SETTLE_TOOL_PATHS_DESCRIPTION,
 )
@@ -129,7 +138,7 @@ def diff_snapshots(before, after):
     }
 
 
-def audit_classify_diff(diff, before, after, working_dir_root, allowlist,
+def classify_diff(diff, before, after, working_dir_root, allowlist,
                         is_subagent=False):
     """Classify a snapshot diff into violations (spec 5.18, v2.6 B2).
 
@@ -144,8 +153,8 @@ def audit_classify_diff(diff, before, after, working_dir_root, allowlist,
 
     Returns {"violations": [abs paths], "recorded": [deleted abs paths]}.
     """
-    violations = []
-    recorded = []
+    pending_violations = []
+    deleted = []
     for name in list(diff.get("added", [])) + list(diff.get("modified", [])):
         info = (after or {}).get(name)
         if info is None or info[2]:
@@ -156,14 +165,20 @@ def audit_classify_diff(diff, before, after, working_dir_root, allowlist,
         verdict = _classify_fn(
             abs_path, working_dir_root, allowlist, is_subagent
         )
-        if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
-            violations.append(abs_path)
+        if verdict["outcome"] == "block" and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
+            pending_violations.append(abs_path)
     for name in diff.get("deleted", []):
         info = (before or {}).get(name)
         if info is None or info[2]:
             continue
-        recorded.append(os.path.join(working_dir_root, name))
-    return {"violations": sorted(violations), "recorded": sorted(recorded)}
+        deleted.append(os.path.join(working_dir_root, name))
+    # Return keys are the frozen classify_diff contract ("violations" /
+    # "recorded"); the locals carry the SCR-052 G3 semantics
+    # (pending_violations / deleted record-only bookkeeping).
+    return {
+        "violations": sorted(pending_violations),
+        "recorded": sorted(deleted),
+    }
 
 
 def _audit_norm_path(path):
@@ -176,45 +191,38 @@ def _audit_now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _audit_owner_session(session_id):
-    """Thin delegate to sessions.owner_session (SCR-044 R3).
-
-    Owner resolution moved next to the session topology it reads
-    (state.session: session_parents / top_session); this same-name private
-    delegate keeps every pending read/write call site here unchanged.
-    Semantics identical: explicit parent > top_session fallback; None when
-    unknown -- callers fall back to the session id itself.
-    """
-    return owner_session(session_id)
+# SCR-052 R1: the former _audit_owner_session thin delegate (a call-site
+# preservation shim for sessions.owner_session, SCR-044 R3) is inlined --
+# owner resolution is called directly as owner_session(session_id).
 
 
-def audit_pending_snapshot(session_id=None):
-    """Read-only copy of a session's pending violations (Lane 2b gate).
+def pending_violation_snapshot(session_id=None):
+    """Read-only copy of a session's pending violations (L3 gate).
 
     The L3 gate reads this set; keys are absolute normpath'd paths, each
     value is {"first_seen": ISO-8601, "announced": bool}. "announced" is
-    flipped by L1 (audit_mark_announced) so the fire-once notice never
+    flipped by L1 (mark_announced) so the fire-once notice never
     repeats; first_seen is preserved across re-detections. Child sessions
     resolve into the parent's set.
     """
-    owner = _audit_owner_session(session_id) or session_id
+    owner = owner_session(session_id) or session_id
     with state.audit.lock:
         return {
             path: dict(entry)
-            for path, entry in state.audit.pending.get(owner, {}).items()
+            for path, entry in state.audit.pending_violations.get(owner, {}).items()
         }
 
 
-def audit_pending_add(session_id, path, first_seen=None):
+def pending_violation_add(session_id, path, first_seen=None):
     """Add one pending violation (detection fills this structure).
 
     Existing entries are kept untouched on re-detection (first_seen and
     announced survive, so L1 fire-once semantics hold across rounds).
     """
-    owner = _audit_owner_session(session_id) or session_id
+    owner = owner_session(session_id) or session_id
     key = _audit_norm_path(path)
     with state.audit.lock:
-        bucket = state.audit.pending.setdefault(owner, {})
+        bucket = state.audit.pending_violations.setdefault(owner, {})
         if key in bucket:
             return
         bucket[key] = {
@@ -223,24 +231,25 @@ def audit_pending_add(session_id, path, first_seen=None):
         }
 
 
-def audit_pending_clear(session_id):
+def pending_violation_clear(session_id):
     """Clear a session's pending violations (top-level session start)."""
     with state.audit.lock:
-        state.audit.pending.pop(session_id, None)
+        state.audit.pending_violations.pop(session_id, None)
 
 
-def audit_mark_announced(session_id, path):
+def mark_announced(session_id, path):
     """Flip the fire-once announced flag (L1 notice lane calls this)."""
-    owner = _audit_owner_session(session_id) or session_id
+    owner = owner_session(session_id) or session_id
     key = _audit_norm_path(path)
     with state.audit.lock:
-        entry = state.audit.pending.get(owner, {}).get(key)
+        entry = state.audit.pending_violations.get(owner, {}).get(key)
         if entry:
             entry["announced"] = True
 
 
-def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
-    """Settlement judgment for the L3 gate (Lane 2b input): re-scan the
+def pending_violation_paths(session_id, working_dir_root=None, allowlist=None):
+    """Settlement judgment for the L3 gate (the gate's unresolved input):
+    re-scan the
     root and return the pending paths that STILL violate (file present and
     still classifying as an unprotected root-level file). A pending path
     is settled when it is gone, moved outside the root, or legalized
@@ -254,7 +263,7 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
     settle. Shared by the L3 gate and the continuation nudge.
     """
     try:
-        pending = audit_pending_snapshot(session_id)
+        pending = pending_violation_snapshot(session_id)
         if not pending:
             return []
         if working_dir_root is None:
@@ -278,15 +287,15 @@ def audit_unresolved_paths(session_id, working_dir_root=None, allowlist=None):
                 path, working_dir_root, allowlist or [], is_subagent=False,
                 honor_runtime_allowlist=False,
             )
-            if verdict["outcome"] == "block" and verdict["rule_key"] == "root-file":
+            if verdict["outcome"] == "block" and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
                 unresolved.append(path)
         return sorted(unresolved)
     except Exception as exc:
         logger.debug("dir-whip: audit settlement check error (fail-open): %s", exc)
-        return sorted(audit_pending_snapshot(session_id))
+        return sorted(pending_violation_snapshot(session_id))
 
 
-def _remediation_instruction(paths_display):
+def _settle_instruction(paths_display):
     """Shared remediation sentence (5.18 v2.8 R1, single source of truth):
     the exact dir_whip_settle(paths=[...]) call form with absolute
     forward-slash paths and the quarantine location under the dir-whip
@@ -305,7 +314,7 @@ def _remediation_instruction(paths_display):
         str(home).replace("\\", "/") if home else "<home>/dir-whip"
     )
     return (
-        REMEDIATION_INSTRUCTION_TEMPLATE
+        SETTLE_INSTRUCTION_TEMPLATE
         % (
             ", ".join(
                 '"%s"' % str(path).replace("\\", "/")
@@ -318,7 +327,7 @@ def _remediation_instruction(paths_display):
 
 def _audit_notice_message(paths):
     """The single L1 notice text (5.18, v2.9 R4): the paths and the
-    remediation via the shared _remediation_instruction helper (single
+    remediation via the shared _settle_instruction helper (single
     source of truth with the continuation nudge). One notice per result
     listing every unannounced violation; only this notice ever enters
     the conversation (context hygiene). v2.9 R4: the config-allowlist
@@ -329,13 +338,13 @@ def _audit_notice_message(paths):
     for path in paths:
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
-        _remediation_instruction(paths)
+        _settle_instruction(paths)
         + AUDIT_NOTICE_TAIL_LINE
     )
     return "\n".join(lines)
 
 
-def on_transform_tool_result(tool_name=None, args=None, result=None,
+def transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
     """L1 fire-once notice hook (5.18), registered at register().
 
@@ -351,11 +360,11 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
 
     ORDERING FIX (live-verified 2026-08-22): for the terminal tool Hermes
     fires transform_tool_result BEFORE post_tool_call, so the audit re-scan
-    (_audit_post_check) is run HERE first -- it pops the pre snapshot and
+    (audit_post_check) is run HERE first -- it pops the pre snapshot and
     fills the pending set, then the notice below reads it. The
-    post_tool_call _audit_post_check call stays as an order-agnostic no-op
+    post_tool_call audit_post_check call stays as an order-agnostic no-op
     fallback (the snapshot is already popped, so it skips). Because
-    _audit_post_check pops its snapshot, the audit runs exactly once
+    audit_post_check pops its snapshot, the audit runs exactly once
     regardless of which hook fires first.
     """
     try:
@@ -364,7 +373,7 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
         # Ordering fix: run the audit re-scan BEFORE reading the pending set
         # (transform fires before post_tool_call for terminal). Safe even if
         # the command was blocked-at-pre (no snapshot -> early return).
-        _audit_post_check(
+        audit_post_check(
             session_id, task_id, is_subagent=is_child(session_id),
         )
         if not isinstance(result, str):
@@ -378,12 +387,12 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
                 return None
         except (ValueError, TypeError):
             pass
-        pending = audit_pending_snapshot(session_id)
+        pending = pending_violation_snapshot(session_id)
         unannounced = [p for p, entry in pending.items() if not entry["announced"]]
         if not unannounced:
             return None
         for path in unannounced:
-            audit_mark_announced(session_id, path)
+            mark_announced(session_id, path)
         # R4 lazy registration: the settle tool enters the registry on the
         # FIRST notice fire (not at register() -- the eager tool surface is
         # pinned to dir_whip_allow_path alone). Registration failure must
@@ -395,16 +404,16 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
         return None
 
 
-def _audit_gate_unresolved(session_id, working_dir_root, allowlist):
+def gate_unresolved(session_id, working_dir_root, allowlist):
     """Unresolved pending paths for the L3 gate (empty -> gate open).
 
     The write audit is always on (v2.8 R7; no switch). A failed root
-    re-scan is handled inside audit_unresolved_paths (full pending set ->
+    re-scan is handled inside pending_violation_paths (full pending set ->
     latch stays); any other gate-side error fails OPEN (5.8 -- the gate
     never breaks the guard).
     """
     try:
-        return audit_unresolved_paths(session_id, working_dir_root, allowlist)
+        return pending_violation_paths(session_id, working_dir_root, allowlist)
     except Exception as exc:
         logger.debug("dir-whip: audit gate check error (fail-open): %s", exc)
         return []
@@ -439,7 +448,7 @@ def _audit_gate_block_message(display_paths, is_subagent):
     return "\n".join(lines)
 
 
-def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
+def gate_block(tool_name, session_id, is_subagent, working_dir_root,
                       unresolved):
     """Standard block-channel response for the L3 latch (5.18).
 
@@ -450,13 +459,13 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
     """
     rel_paths = [relativize_target(path, working_dir_root) for path in unresolved]
     emit(
-        "block", tool_name, "write-audit-gate-block", None,
+        "block", tool_name, RULE_KEY_WRITE_AUDIT_GATE_BLOCK, None,
         "%d unresolved root write audit violation(s)" % len(unresolved),
         session_id, is_subagent,
     )
     bus_emit("write-audit-gate-block", {
         "outcome": "block",
-        "rule_key": "write-audit-gate-block",
+        "rule_key": RULE_KEY_WRITE_AUDIT_GATE_BLOCK,
         "paths": list(rel_paths),
         "latch": "latched",
     })
@@ -467,7 +476,7 @@ def _audit_gate_block(tool_name, session_id, is_subagent, working_dir_root,
     }
 
 
-def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
+def pre_snapshot(session_id, task_id, working_dir_root, allowlist):
     """Take the pre snapshot for an ALLOWED terminal call (5.18).
 
     allowlist is the PARSED {files, dirs} mapping (SCR-045 R7: the
@@ -498,7 +507,7 @@ def _audit_pre_snapshot(session_id, task_id, working_dir_root, allowlist):
         logger.debug("dir-whip: audit pre-snapshot error (fail-open): %s", exc)
 
 
-def _audit_post_check(session_id, task_id, is_subagent=False):
+def audit_post_check(session_id, task_id, is_subagent=False):
     """Post terminal re-scan: diff the pre snapshot and classify (5.18, v2.6 B2).
 
     Pops the (session_id, task_id) pairing; no pairing (blocked-at-pre,
@@ -528,22 +537,22 @@ def _audit_post_check(session_id, task_id, is_subagent=False):
             session_dirs.observe_added(
                 working_dir_root, session_id, diff.get("added", []),
             )
-        classified = audit_classify_diff(
+        classified = classify_diff(
             diff, before, after, working_dir_root, list(allowlist), is_subagent,
         )
         for path in classified["violations"]:
-            audit_pending_add(session_id, path)
+            pending_violation_add(session_id, path)
             emit(
-                "block", "audit", "write-audit-violation", path,
+                "block", "audit", RULE_KEY_WRITE_AUDIT_VIOLATION, path,
                 "root write audit violation (5.18)", session_id, is_subagent,
             )
             bus_emit("write-audit-violation", {
                 "outcome": "block",
-                "rule_key": "write-audit-violation",
+                "rule_key": RULE_KEY_WRITE_AUDIT_VIOLATION,
                 "path": relativize_target(path, working_dir_root),
                 "is_subagent": bool(is_subagent),
                 "first_seen": (
-                    audit_pending_snapshot(session_id)
+                    pending_violation_snapshot(session_id)
                     .get(_audit_norm_path(path), {})
                     .get("first_seen")
                 ),
@@ -581,7 +590,7 @@ def _settle_tool_handler(args, **kwargs):
     try:
         paths = args.get("paths") if isinstance(args, dict) else args
         return json.dumps(
-            audit_settle_paths(kwargs.get("session_id"), paths)
+            settle_paths(kwargs.get("session_id"), paths)
         )
     except Exception as exc:
         logger.debug("dir-whip: settle handler error (fail-open): %s", exc)
@@ -610,11 +619,11 @@ def _lazy_register_settle_tool():
         logger.debug("dir-whip: lazy settle registration failed: %s", exc)
 
 
-def _audit_pending_remove(session_id, key):
+def _pending_violation_remove(session_id, key):
     """Drop one settled path from the owner's pending set (R4)."""
-    owner = _audit_owner_session(session_id) or session_id
+    owner = owner_session(session_id) or session_id
     with state.audit.lock:
-        state.audit.pending.get(owner, {}).pop(key, None)
+        state.audit.pending_violations.get(owner, {}).pop(key, None)
 
 
 def _record_settle_stats(working_dir_root):
@@ -623,17 +632,17 @@ def _record_settle_stats(working_dir_root):
 
     Two counter shapes are maintained: the standard nested verdict counter
     via stats.record (which also appends the stats.jsonl line, 5.13 D3)
-    AND the flat ("allow", "settle", "write-audit-settle") tuple key that
+    AND the flat ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE) tuple key that
     the v0.5.0 acceptance test reads from stats_snapshot().
     """
     try:
-        _stats_record(
-            "allow", "settle", "write-audit-settle",
+        stats_record(
+            "allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE,
             target=None, reason="same-turn self-heal settlement",
             working_dir_root=working_dir_root,
         )
         with state.stats.lock:
-            flat_key = ("allow", "settle", "write-audit-settle")
+            flat_key = ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE)
             state.stats.counters[flat_key] = (
                 state.stats.counters.get(flat_key, 0) + 1
             )
@@ -653,8 +662,8 @@ def _record_settle_rejected(reason, is_subagent=False):
     directly. Fail-open: never raises.
     """
     try:
-        _stats_record(
-            "block", "settle", "write-audit-settle-rejected",
+        stats_record(
+            "block", "settle", RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED,
             target=None, reason=reason, is_subagent=is_subagent,
         )
         logger.warning("dir-whip: settle rejected (%s)", reason)
@@ -664,7 +673,7 @@ def _record_settle_rejected(reason, is_subagent=False):
         )
 
 
-def audit_settle_paths(session_id, paths):
+def settle_paths(session_id, paths):
     """dir_whip_settle core (5.18 R4): move pending root writes into the
     audit quarantine, settling the L3 latch.
 
@@ -703,7 +712,7 @@ def audit_settle_paths(session_id, paths):
             # a resolved root (same failure class as a failed move).
             _record_settle_rejected("move-failed")
             return {"error": "working_dir_root unresolved; cannot settle"}
-        pending = audit_pending_snapshot(session_id)
+        pending = pending_violation_snapshot(session_id)
         # Validate EVERY path against the pending set BEFORE touching the
         # filesystem (all-or-nothing; zero arbitrary move capability).
         keys = []
@@ -733,7 +742,7 @@ def audit_settle_paths(session_id, paths):
         for key in keys:
             if not os.path.lexists(key):
                 # Idempotent no-op: user already removed/moved it.
-                _audit_pending_remove(session_id, key)
+                _pending_violation_remove(session_id, key)
                 settled.append(relativize_target(key, working_dir_root))
                 continue
             os.makedirs(quarantine_dir, exist_ok=True)
@@ -744,7 +753,7 @@ def audit_settle_paths(session_id, paths):
                 dest = "%s_%d%s" % (stem, suffix, ext)
                 suffix += 1
             shutil.move(key, dest)
-            _audit_pending_remove(session_id, key)
+            _pending_violation_remove(session_id, key)
             settled.append(relativize_target(key, working_dir_root))
         _record_settle_stats(working_dir_root)
         return {"settled": settled}
@@ -760,7 +769,7 @@ def audit_settle_paths(session_id, paths):
 PRE_VERIFY_NUDGE_CAP = 3
 
 
-def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
+def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
     """pre_verify continuation fallback decision (5.18 v2.8 R1/R2).
 
     Nudge ({"action": "continue", ...}) only when the host reports file
@@ -779,7 +788,7 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
             return None
         if session_id and is_child(session_id):
             return None
-        unresolved = audit_unresolved_paths(session_id)
+        unresolved = pending_violation_paths(session_id)
         if not unresolved:
             return None
         with state.audit.lock:
@@ -794,7 +803,7 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         # counter value AFTER increment). Allow outcome -> no bus fanout
         # (the 5.14 emit surface stays at 7).
         emit(
-            "allow", "verify", "pre-verify-nudge", None,
+            "allow", "verify", RULE_KEY_PRE_VERIFY_NUDGE, None,
             "continuation nudge issued (attempt %d)" % (count + 1),
             session_id, False,
         )
@@ -808,7 +817,7 @@ def audit_pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
             "action": "continue",
             "message": (
                 NUDGE_MESSAGE_TEMPLATE
-                % (len(display), _remediation_instruction(display),
+                % (len(display), _settle_instruction(display),
                    keep_command)
             ),
         }
@@ -823,7 +832,7 @@ def _audit_session_start(session_id):
     continuation-nudge cap counter (SCR-040 R2), and record the current
     top-level session (child-inheritance fallback)."""
     try:
-        audit_pending_clear(session_id)
+        pending_violation_clear(session_id)
         with state.audit.lock:
             stale = [k for k in state.audit.pre_snapshots if k[0] == session_id]
             for k in stale:
@@ -841,38 +850,29 @@ def _audit_session_start(session_id):
         logger.debug("dir-whip: audit session start error: %s", exc)
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-classify_diff = audit_classify_diff
-unresolved_paths = audit_unresolved_paths
-transform_tool_result = on_transform_tool_result
-pending_snapshot = audit_pending_snapshot
-pending_add = audit_pending_add
-pending_clear = audit_pending_clear
-mark_announced = audit_mark_announced
-settle_paths = audit_settle_paths
-pre_verify_nudge = audit_pre_verify_nudge
-# SCR-045 R6: the guard-chain-facing gate/snapshot/session entry points.
-gate_block = _audit_gate_block
-gate_unresolved = _audit_gate_unresolved
-pre_snapshot = _audit_pre_snapshot
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail alias block -- classify_diff / unresolved_paths /
+# transform_tool_result / pending_snapshot / pending_add / pending_clear /
+# mark_announced / settle_paths / pre_verify_nudge / gate_block /
+# gate_unresolved / pre_snapshot / audit_post_check -- is gone; the defs
+# above carry the public names directly).
+# R2 EXCEPTION kept verbatim this round: session_start (the alias of
+# _audit_session_start) stays; SCR-052 4.4 renames it to on_session_start
+# in the R2 batch.
 session_start = _audit_session_start
-# SCR-050 v3 R6.1: the assembly post_tool_call observer entry point goes
-# public (seam discipline, spec 5.1 v2.19; name matches the frozen spec
-# changelog).
-audit_post_check = _audit_post_check
 
 __all__ = [
     "set_classifier",
     "snapshot",
     "classify_diff",
-    "unresolved_paths",
-    "transform_tool_result",
-    "pending_snapshot",
-    "pending_add",
-    "pending_clear",
+    "pending_violation_paths",
+    "pending_violation_snapshot",
+    "pending_violation_add",
+    "pending_violation_clear",
     "mark_announced",
     "settle_paths",
     "pre_verify_nudge",
+    "transform_tool_result",
     "gate_block",
     "gate_unresolved",
     "pre_snapshot",

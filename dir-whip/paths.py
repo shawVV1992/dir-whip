@@ -1,9 +1,9 @@
 """Path normalization / resolution / containment under working_dir_root -- pure functions.
 
-Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance, cross-platform Windows-style handling), resolves relative targets, and decides containment; unclassifiable Windows paths fail open (warn + treat as external, never raise). Pure functions only: no host imports, no state (SCR-035 core module discipline, ADR-0007); extracted from dir_whip.py and config.py (task 31.6). SCR-050 v3 R6.3 (spec 5.9): SESSION_DIR_RE + is_inside_session_dir homed here from config.py (pure pattern containment; config keeps the same-name re-export alias).
+Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance, cross-platform Windows-style handling), resolves relative targets, and decides containment; unclassifiable Windows paths fail open (warn + treat as external, never raise). Pure functions plus ONE state-reading helper: config_file_path() (SCR-052 R1 single source) reads state.session for the profile-aware dir-whip-config.yaml location, fail-open guarded (SCR-035 core module discipline, ADR-0007); extracted from dir_whip.py and config.py (task 31.6). SCR-050 v3 R6.3 (spec 5.9): SESSION_DIR_RE + is_inside_session_dir homed here from config.py (pure pattern containment; config keeps the same-name re-export alias).
 
 Layer: core
-Refs: spec 5.3, spec 5.5, spec 5.9, spec 5.13, SCR-006, SCR-026, SCR-027, SCR-035, SCR-042, SCR-044, SCR-045, SCR-050, ADR-0007
+Refs: spec 5.3, spec 5.5, spec 5.9, spec 5.13, SCR-006, SCR-026, SCR-027, SCR-035, SCR-042, SCR-044, SCR-045, SCR-050, SCR-052 R1, ADR-0007
 Key exports:
   - normalize_target -- normalize a target path before classification (chain step 0).
   - within_working_dir -- containment of target under working_dir_root (spec 5.3 step 6).
@@ -11,7 +11,8 @@ Key exports:
   - is_absolute_any -- rooted on the local OS, Windows-drive-rooted, or backslash-rooted.
   - is_inside_session_dir -- True when the path sits under working_dir_root/<session_dir>/... (spec 5.9; SCR-050 v3 R6.3 homing).
   - dirwhip_home -- profile-aware dir-whip home (stats.jsonl / dir-whip.log / audit-quarantine family).
-  - get_hermes_home, profile_home, paths_equal -- thin public aliases: home resolution + path equality.
+  - config_file_path -- profile-aware dir-whip-config.yaml location (SCR-052 R1 single source).
+  - get_hermes_home, profile_home, paths_equal -- public home resolution + path equality helpers.
 """
 
 import datetime
@@ -21,6 +22,8 @@ import ntpath
 import os
 import re
 from pathlib import Path
+
+from . import state
 
 logger = logging.getLogger("dir-whip")
 
@@ -52,7 +55,7 @@ def is_inside_session_dir(path, working_dir_root):
     return False
 
 
-def _get_hermes_home():
+def get_hermes_home():
     """Return the Hermes home directory path (D5).
 
     HERMES_HOME environment override FIRST, then the platform default:
@@ -72,7 +75,7 @@ def _get_hermes_home():
     return Path.home() / ".hermes"
 
 
-def _profile_home(hermes_home, profile):
+def profile_home(hermes_home, profile):
     """The profile's home directory, aware of both layouts (SCR-026/027).
 
     profile default: home-shaped (parent named "profiles", i.e. HERMES_HOME
@@ -233,7 +236,7 @@ def relativize_target(target, working_dir_root):
     return rel.replace("\\", "/")
 
 
-def _paths_equal(a, b):
+def paths_equal(a, b):
     """Forward-slash path equality; case-insensitive on Windows."""
     a = str(a).replace("\\", "/")
     b = str(b).replace("\\", "/")
@@ -252,17 +255,54 @@ def dirwhip_home(profile=None):
     five former hand-rolled get_hermes_home + profile dance sites
     (stats / logsetup / audit x2 / report) all call this now.
     """
-    home = _get_hermes_home()
+    home = get_hermes_home()
     if profile:
-        home = _profile_home(home, profile)
+        home = profile_home(home, profile)
     return Path(home) / "dir-whip"
 
 
-# Public thin aliases (SCR-035 interface convergence point; SCR-045 R6
-# publicized the cross-module home/equality helpers).
-get_hermes_home = _get_hermes_home
-profile_home = _profile_home
-paths_equal = _paths_equal
+def config_file_path():
+    """The profile-aware dir-whip-config.yaml location (SCR-052 R1 single
+    source; merges the former config._get_guard_config_path and
+    config_writer._get_config_path).
+
+    Resolution (superset of the two merged chains; in production the
+    registered ctx and the report command ctx are the same object):
+    state.session.session_profile -> registered_ctx.profile_name ->
+    report command ctx.profile_name (function-local import: the
+    documented cycle-break idiom -- report imports config which imports
+    paths). Falls back to HERMES_HOME/dir-whip/... when no profile is
+    findable (default tests). Built on dirwhip_home() so the config file
+    lands in the same profile-aware dir-whip home family as stats.jsonl /
+    dir-whip.log / audit-quarantine. Fail-open on any state read error.
+    """
+    profile = None
+    try:
+        if getattr(state.session, "session_profile", None):
+            profile = state.session.session_profile
+    except Exception:
+        profile = None
+    if not profile:
+        try:
+            ctx = getattr(state.session, "registered_ctx", None)
+            if ctx is not None and getattr(ctx, "profile_name", None):
+                profile = ctx.profile_name
+        except Exception:
+            pass
+    if not profile:
+        try:
+            from . import report as _report
+            ctx = _report._get_cmd_ctx()
+            if ctx is not None and getattr(ctx, "profile_name", None):
+                profile = ctx.profile_name
+        except Exception:
+            pass
+    return dirwhip_home(profile) / "dir-whip-config.yaml"
+
+
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail get_hermes_home/profile_home/paths_equal alias lines are
+# gone; the defs above carry the public names).
 
 __all__ = [
     "normalize_target",
@@ -275,4 +315,5 @@ __all__ = [
     "profile_home",
     "paths_equal",
     "dirwhip_home",
+    "config_file_path",
 ]

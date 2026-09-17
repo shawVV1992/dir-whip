@@ -50,9 +50,9 @@ from .messages import (
 )
 
 from .paths import (
+    config_file_path,
     get_hermes_home,
     normalize_target,
-    profile_home,
     relativize_target,
     within_working_dir,
 )
@@ -104,36 +104,6 @@ def _parse_allowlist(value):
     return []
 
 
-def _get_guard_config_path():
-    """Profile-aware dir-whip-config.yaml location (stats.stats_jsonl_path pattern).
-
-    HERMES_HOME may be a profile dir (parent == "profiles") -> use it directly;
-    otherwise when a session profile is set, resolve via _profile_home so
-    per-profile configs land in profiles/<name>/dir-whip/ (SCR-037 D3).
-    Falls back to HERMES_HOME/dir-whip/... for default tests.
-    """
-    home = get_hermes_home()
-    profile = None
-    try:
-        if getattr(state.session, "session_profile", None):
-            profile = state.session.session_profile
-    except Exception:
-        pass
-    if not profile:
-        try:
-            ctx = getattr(state.session, "registered_ctx", None)
-            if ctx is not None and getattr(ctx, "profile_name", None):
-                profile = ctx.profile_name
-        except Exception:
-            pass
-    if profile:
-        try:
-            home = profile_home(home, profile)
-        except Exception:
-            pass
-    return Path(home) / "dir-whip" / "dir-whip-config.yaml"
-
-
 def load_guard_config(config_path=None):
     """Load dir-whip-config.yaml exemptions and overrides.
 
@@ -151,7 +121,10 @@ def load_guard_config(config_path=None):
     break, no backward compat).
     """
     if config_path is None:
-        config_path = _get_guard_config_path()
+        # SCR-052 R1: the single config-path source is
+        # paths.config_file_path (the former private
+        # _get_guard_config_path is merged away).
+        config_path = config_file_path()
     config_path = Path(config_path)
 
     result = {
@@ -292,7 +265,7 @@ def set_session_profile(profile):
     """Record the session's profile (SCR-027 stats placement).
 
     stats.jsonl for the session is written into THIS profile's home (via
-    _profile_home), not the register-time active profile's.
+    paths.profile_home), not the register-time active profile's.
     """
     state.session.session_profile = profile
 
@@ -516,7 +489,7 @@ def reset_cache():
     state.session.session_root = None
     state.session.session_root_initialized = False
     state.session.session_profile = None
-    stats.reset()
+    stats.stats_reset()
 
 
 # Public thin aliases (SCR-045 R6): the report-facing resolution surface.

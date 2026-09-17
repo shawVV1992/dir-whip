@@ -22,7 +22,7 @@ from .config import get_cached_config
 
 from .stats import stats_set_session
 
-from .events import emit
+from .events import RULE_KEY_SUBAGENT_START, RULE_KEY_SUBAGENT_STOP, emit
 
 logger = logging.getLogger("dir-whip")
 
@@ -113,7 +113,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         # initialized; the result is unused since the seven-param emit.
         get_cached_config(state.session.registered_ctx)
         emit(
-            "allow", "subagent", "subagent-start", None,
+            "allow", "subagent", RULE_KEY_SUBAGENT_START, None,
             json.dumps(detail), None, True,
         )
     except Exception as exc:
@@ -149,7 +149,7 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         # initialized; the result is unused since the seven-param emit.
         get_cached_config(state.session.registered_ctx)
         emit(
-            "allow", "subagent", "subagent-stop", None,
+            "allow", "subagent", RULE_KEY_SUBAGENT_STOP, None,
             json.dumps(detail), None, True,
         )
     except Exception as exc:

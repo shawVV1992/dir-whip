@@ -5,12 +5,12 @@ Counters keyed outcome x tool x rule_key x is_subagent; the stats state lives in
 Layer: core
 Refs: spec 5.13, SCR-027, SCR-035, SCR-045 R6, SCR-048 R6, ADR-0007
 Key exports:
-  - record -- bump counters + append one stats.jsonl event line; never raises.
-  - set_session -- attach provided session context fields to persisted events.
-  - backfill_session -- set session_id only when currently empty (race-safe under the stats lock).
-  - snapshot -- deep copy of the counters (outcome x tool x rule_key x is_subagent).
-  - end_session -- close the session context fields (counters kept).
-  - reset -- clear in-memory counters + session context at register/re-register.
+  - stats_record -- bump counters + append one stats.jsonl event line; never raises.
+  - stats_set_session -- attach provided session context fields to persisted events.
+  - stats_backfill_session -- set session_id only when currently empty (race-safe under the stats lock).
+  - stats_snapshot -- deep copy of the counters (outcome x tool x rule_key x is_subagent).
+  - stats_end_session -- close the session context fields (counters kept).
+  - stats_reset -- clear in-memory counters + session context at register/re-register.
   - stats_jsonl_path -- report-facing stats.jsonl location (session profile home).
 """
 
@@ -105,7 +105,7 @@ def _now_iso():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
-def _stats_jsonl_path():
+def stats_jsonl_path():
     """stats.jsonl location: the session profile's home dir-whip dir.
 
     SCR-027: the path follows the SESSION profile (set at on_session_start),
@@ -124,7 +124,7 @@ def _append_stats_event(event):
     rollover rename tolerates a missing source (another process already
     rolled). Raises on failure; callers swallow and log (fail-open).
     """
-    path = _stats_jsonl_path()
+    path = stats_jsonl_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -180,22 +180,17 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
             logger.debug("dir-whip: stats write failed (ignored): %s", exc)
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-record = stats_record
-set_session = stats_set_session
-backfill_session = stats_backfill_session
-snapshot = stats_snapshot
-end_session = stats_end_session
-reset = stats_reset
-# SCR-045 R6: the report-facing jsonl location.
-stats_jsonl_path = _stats_jsonl_path
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail record/set_session/backfill_session/snapshot/end_session/reset
+# bare aliases are gone; the descriptive stats_* defs are the public surface;
+# stats_jsonl_path is the def itself now).
 
 __all__ = [
-    "record",
-    "set_session",
-    "backfill_session",
-    "snapshot",
-    "end_session",
-    "reset",
+    "stats_record",
+    "stats_set_session",
+    "stats_backfill_session",
+    "stats_snapshot",
+    "stats_end_session",
+    "stats_reset",
     "stats_jsonl_path",
 ]

@@ -40,6 +40,11 @@ except ImportError:
     _projects_get_active_id = None
 
 from . import allow_path, audit, config, events, lifecycle, logsetup, report, sessions, session_dirs, state, stats, verdict
+from .events import (
+    RULE_KEY_APPROVAL_DENIED,
+    RULE_KEY_APPROVAL_GRANTED,
+    RULE_KEY_APPROVAL_REQUESTED,
+)
 
 logger = logging.getLogger("dir-whip")
 
@@ -194,7 +199,10 @@ def register(ctx):
         # Spec 5.7 command (/dir-whip merged report, SCR-029) lives in
         # report.py (D3).
         report.register_dir_whip_commands(ctx)
-        # Spec 5.17: bundled skill (opt-in, qualified name) + discipline prompt.
+        # Spec 5.17: bundled skill (opt-in, qualified name) + discipline
+        # block (SCR-052 R1: stale "discipline prompt" wording corrected --
+        # the always-on prompt was removed; the once-per-session block
+        # replaced it).
         try:
             skill_md = Path(state.session.skill_md_path)
             if skill_md.is_file() and hasattr(ctx, "register_skill"):
@@ -229,7 +237,7 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
         if session_id and not state.stats.session.get("session_id"):
             # Lock-held check-and-set (SCR-048 R6 follow-up): the outer
             # unlocked read is only a fast path.
-            stats.backfill_session(session_id)
+            stats.stats_backfill_session(session_id)
         return verdict.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
@@ -294,7 +302,10 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
     """
     try:
         granted = verdict.approval_granted(choice)
-        rule_key = "approval:granted" if granted else "approval:denied"
+        rule_key = (
+            RULE_KEY_APPROVAL_GRANTED if granted
+            else RULE_KEY_APPROVAL_DENIED
+        )
         events.emit(
             "allow" if granted else "block", "approval", rule_key, None,
             "host approval %s" % ("granted" if granted else "denied"),
@@ -307,7 +318,7 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
         if "request" in kwargs or "entry" in kwargs:
             events.bus_emit("approval-requested", {
                 "outcome": "requested",
-                "rule_key": "approval-requested",
+                "rule_key": RULE_KEY_APPROVAL_REQUESTED,
             })
     except Exception as exc:
         logger.debug("dir-whip: post_approval_response hook error: %s", exc)
@@ -420,4 +431,17 @@ def _allow_path_handler(args, **kwargs):
         return None
 
 
-__all__ = ["register"]
+# Declared surface (SCR-052 R1 G10.7): __all__ aligned with the module
+# docstring export list -- register plus the thin hook adapters.
+__all__ = [
+    "register",
+    "_guard_hook",
+    "on_start",
+    "on_post_tool_call",
+    "on_post_approval_response",
+    "on_pre_command",
+    "on_subagent_start",
+    "on_subagent_stop",
+    "on_transform_tool_result",
+    "on_pre_verify",
+]

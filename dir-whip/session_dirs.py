@@ -25,7 +25,7 @@ from . import state
 
 from .paths import is_inside_session_dir
 
-from .events import emit
+from .events import RULE_KEY_SESSION_DIR, SESSION_DIR_LIMIT_RULE_KEY, emit
 
 # Message templates: centralized in the core leaf module messages.py
 # (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
@@ -45,8 +45,9 @@ from .sessions import owner_session
 
 from .terminal import is_session_dir_script, terminal_cp_mv_src
 
-# Spec 5.19: rule_key of the per-session uniqueness block.
-SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"
+# Spec 5.19: the per-session uniqueness rule_key is defined in events.py
+# (SCR-052 R1 single definition point) and re-exported here under the
+# retained historical name (consumer/test import paths unchanged).
 
 # Spec 5.19 (SCR-048 R1): persistent claims store constants.
 CLAIMS_STORE_NAME = "session-claims.json"
@@ -82,7 +83,7 @@ def _make_meta(name, root):
     }
 
 
-def _entry_alive(root, name):
+def _is_entry_alive(root, name):
     """True when `root/name` is still a directory on disk."""
     try:
         return bool(root) and bool(name) and os.path.isdir(
@@ -118,7 +119,7 @@ def _build_claims_payload(keep_owner=None):
         meta = state.session_dirs.claim_meta.get(owner)
         if not meta or not meta.get("root"):
             continue
-        if owner != keep_owner and not _entry_alive(meta.get("root"), name):
+        if owner != keep_owner and not _is_entry_alive(meta.get("root"), name):
             continue
         ts = meta.get("ts")
         payload[owner] = {
@@ -183,7 +184,7 @@ def load_claims():
                     continue
                 root = entry.get("root")
                 name = entry.get("dir")
-                if not _entry_alive(root, name):
+                if not _is_entry_alive(root, name):
                     continue
                 state.session_dirs.claims[str(owner)] = str(name)
                 state.session_dirs.claim_meta[str(owner)] = {
@@ -263,7 +264,7 @@ def _rebind(owner, name, root=None):
         _persist_locked(owner)
 
 
-def _slot_occupied(owner):
+def _is_slot_occupied(owner):
     """True when the conversation's slot is taken: a claim OR an
     in-flight script creation (the pending marker counts as the
     claim, BLK-4)."""
@@ -288,7 +289,7 @@ def _heal_missing_claim(owner, root):
     try:
         with state.session_dirs.lock:
             claim = state.session_dirs.claims.get(owner)
-            if claim is None or _entry_alive(root, claim):
+            if claim is None or _is_entry_alive(root, claim):
                 return False
             state.session_dirs.claims.pop(owner, None)
             state.session_dirs.claim_meta.pop(owner, None)
@@ -388,7 +389,7 @@ def script_invocation_line(task, working_dir_root):
     """create_session_dir.py command line (SCR-044 R6, MB-1/MB-2).
 
     The SINGLE source for the invocation shape -- consumed by the
-    verdict fix_line, the conditional orphan rename line (verdict) and
+    verdict fix_line, the conditional orphan move line (verdict) and
     the R7 orphan-notice cleanup hint. `<task>` may stay a placeholder
     (verdict passes "<task_name>").
     """
@@ -512,7 +513,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
         if (
             not isinstance(verdict, dict)
             or verdict.get("outcome") != "allow"
-            or verdict.get("rule_key") != "session-dir"
+            or verdict.get("rule_key") != RULE_KEY_SESSION_DIR
         ):
             return None
         owner = _owner(session_id)
@@ -523,7 +524,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
         if claim is not None and _same_name(claim, first_seg):
             return None  # the bound dir itself (BND-6 / BND-7)
         exists = os.path.isdir(os.path.join(str(working_dir_root), first_seg))
-        if claim is None and not _slot_occupied(owner):
+        if claim is None and not _is_slot_occupied(owner):
             if not exists:
                 _bind(owner, first_seg, working_dir_root)  # static creation signal
             return None
@@ -534,7 +535,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
         # free-slot binding flow applies.
         if _heal_missing_claim(owner, working_dir_root):
             claim = _claim_of(owner)
-        if claim is None and not _slot_occupied(owner):
+        if claim is None and not _is_slot_occupied(owner):
             _bind(owner, first_seg, working_dir_root)
             return None
         if tokens and target is not None:
@@ -576,7 +577,7 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
         # SCR-048 R2 (spec 5.19): heal before the occupied determination;
         # a released claim frees the slot, a pending marker still blocks.
         _heal_missing_claim(owner, working_dir_root)
-        if _slot_occupied(owner):
+        if _is_slot_occupied(owner):
             return _limit_block(
                 working_dir_root, _claim_of(owner), is_subagent, tool_name,
                 None, session_id,
@@ -639,7 +640,7 @@ def on_session_start(session_id):
                 claim is not None
                 and meta is not None
                 and meta.get("restored")
-                and _entry_alive(meta.get("root"), claim)
+                and _is_entry_alive(meta.get("root"), claim)
             ):
                 state.session_dirs.pending_create.pop(session_id, None)
                 return

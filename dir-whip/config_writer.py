@@ -1,24 +1,21 @@
 """Allowlist config writer: row-level YAML edit preserving comments, strict validation, narrow cache refresh -- structured ``{files, dirs}`` mapping (spec v2.7 R9, SCR-039 R9).
 
-Structured mapping (spec v2.7 R9, BREAKING clean break of the v2.6 flat tagged list): ``files`` = root-level file basenames, ``dirs`` = root-relative recursive subtree. Each key stays a single flow-style line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced line-level with comments above the key preserved, and block-style ``- item`` lists are never produced. Pure stdlib + pyyaml, no host imports (ADR-0007), line scan + regex per report.py precedent; path resolution is profile_home-aware (stats.stats_jsonl_path pattern) at HERMES_HOME/dir-whip/dir-whip-config.yaml.
+Structured mapping (spec v2.7 R9, BREAKING clean break of the v2.6 flat tagged list): ``files`` = root-level file basenames, ``dirs`` = root-relative recursive subtree. Each key stays a single flow-style line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced line-level with comments above the key preserved, and block-style ``- item`` lists are never produced. Pure stdlib + pyyaml, no host imports (ADR-0007), line scan + regex per report.py precedent; path resolution is single-sourced in paths.config_file_path (SCR-052 R1) at HERMES_HOME/dir-whip/dir-whip-config.yaml.
 
 Layer: core
-Refs: spec v2.7 R9, SCR-039 R9, ADR-0007
+Refs: spec v2.7 R9, SCR-039 R9, SCR-052 R1, ADR-0007
 Key exports:
-  - load_allowlist -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
+  - load_config -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
   - load_allowlist_legacy_count -- count of ignored legacy flat entries (clean-break visibility signal).
-  - write_allowlist -- row-level edit writing the two-key flow block; comments preserved.
+  - write_config -- row-level edit writing the two-key flow block; comments preserved.
 """
 
 import json
 import re
-from pathlib import Path
 
 import yaml
 
-from .paths import get_hermes_home, profile_home
-
-from . import state
+from .paths import config_file_path
 
 from .allowlist import parse_allowlist as _allowlist_parse
 from .allowlist import format_allowlist as _allowlist_format
@@ -64,48 +61,14 @@ def _format_mapping(parsed):
 
 # ---------------------------------------------------------------- Path resolution
 
-def _get_config_path():
-    """Locate dir-whip-config.yaml, profile-aware.
-
-    Mirrors stats.stats_jsonl_path pattern: HERMES_HOME is layout-aware.
-    When state.session.session_profile is set, resolve via profile_home;
-    otherwise fallback to report's captured ctx profile or registered_ctx.
-    For tests (HERMES_HOME=tmp/hermes, profile default) this returns
-    tmp/hermes/dir-whip/dir-whip-config.yaml.
-    """
-    home = get_hermes_home()
-    profile = None
-    try:
-        if getattr(state.session, "session_profile", None):
-            profile = state.session.session_profile
-    except Exception:
-        pass
-    if not profile:
-        try:
-            from . import report as _report
-            ctx = _report._get_cmd_ctx()
-            if ctx is not None and getattr(ctx, "profile_name", None):
-                profile = ctx.profile_name  # type: ignore
-        except Exception:
-            pass
-    if not profile:
-        try:
-            ctx2 = getattr(state.session, "registered_ctx", None)
-            if ctx2 is not None and getattr(ctx2, "profile_name", None):
-                profile = ctx2.profile_name  # type: ignore
-        except Exception:
-            pass
-    if profile:
-        try:
-            home = profile_home(home, profile)
-        except Exception:
-            pass
-    return Path(home) / "dir-whip" / "dir-whip-config.yaml"
+# SCR-052 R1: the config-path source is paths.config_file_path() (the
+# former private _get_config_path is merged away; profile-aware chain
+# identical, single source with config.py).
 
 
 # ---------------------------------------------------------------- Load
 
-def load_allowlist():
+def load_config():
     """Read the current allowlist as the structured mapping.
 
     Returns {"files": [sorted...], "dirs": [sorted...]} — validated,
@@ -114,7 +77,7 @@ def load_allowlist():
     break: legacy flat values are IGNORED, surfaced as legacy hints by
     the command layer).
     """
-    path = _get_config_path()
+    path = config_file_path()
     if not path.is_file():
         return {"files": [], "dirs": []}
     try:
@@ -133,7 +96,7 @@ def load_allowlist_legacy_count():
     Non-zero only when the raw value is a LIST (v2.6 flat format) with
     string entries — the clean-break visibility signal for /dir-whip list.
     """
-    path = _get_config_path()
+    path = config_file_path()
     if not path.is_file():
         return 0
     try:
@@ -167,7 +130,7 @@ _PAT_ALLOW = re.compile(r"^\s*allowlist\s*:")
 _PAT_LEGACY = re.compile(r"^\s*(?:exempt_paths|allowed_root_files)\s*:")
 
 
-def write_allowlist(mapping):
+def write_config(mapping):
     """Row-level edit writing the two-key flow block, preserving comments.
 
     - If an ``allowlist`` key exists, replace it AND every following
@@ -178,7 +141,7 @@ def write_allowlist(mapping):
     - Creates parent dir if missing, utf-8. Refreshes the config cache
       narrowly so the next classify sees the new allowlist.
     """
-    path = _get_config_path()
+    path = config_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     mapping = _format_mapping(mapping if isinstance(mapping, dict) else {})
 
@@ -245,8 +208,3 @@ def _refresh_cache():
             _cfg.refresh_allowlist_cache()
     except Exception:
         pass
-
-
-# Backwards-compat aliases
-load = load_allowlist
-write = write_allowlist

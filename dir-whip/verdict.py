@@ -33,7 +33,18 @@ from .config import (
     load_guard_config,
 )
 
-from .events import emit
+from .events import (
+    RULE_KEY_ALLOWED_FILE,
+    RULE_KEY_EXTERNAL_WRITE,
+    RULE_KEY_FAIL_OPEN,
+    RULE_KEY_NON_SESSION_DIR,
+    RULE_KEY_ROOT_FILE,
+    RULE_KEY_RUNTIME_ALLOWLIST,
+    RULE_KEY_SESSION_DIR,
+    RULE_KEY_TIER0_ALLOWLIST,
+    RULE_KEY_TERMINAL_WRITE_UNCERTAIN,
+    emit,
+)
 
 # Message templates: centralized in the core leaf module messages.py
 # (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
@@ -68,8 +79,8 @@ from .sessions import is_child
 # predicate (deep module: hide the data, expose the judgment).
 from .terminal import (
     is_device_path,
+    is_terminal_uncertain,
     terminal_block_targets,
-    terminal_uncertain,
     tokenize_command,
 )
 
@@ -164,7 +175,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
             )
         return result
 
-    target_paths = _extract_target_paths(tool_name, args)
+    target_paths = extract_target_paths(tool_name, args)
     if not target_paths:
         return None
 
@@ -189,7 +200,7 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
     """Inject the one-time fail-open warning + record a fail-open verdict.
 
     Fires at most once per session (module flag; reset by
-    _reset_fail_open_flag). Gateway degrade: inject_message unavailable or
+    reset_fail_open_flag). Gateway degrade: inject_message unavailable or
     falsy -> the WARNING log line is the delivery. Never raises.
     """
     if not state.session.fail_open_warned:
@@ -200,12 +211,12 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
         except Exception:
             pass
     emit(
-        "fail-open", tool_name, "fail-open", None,
+        "fail-open", tool_name, RULE_KEY_FAIL_OPEN, None,
         "working_dir_root unresolved", session_id, is_subagent,
     )
 
 
-def _reset_fail_open_flag():
+def reset_fail_open_flag():
     """Reset the one-time fail-open warning flag (26.7's on_session_start
     calls this; tests use it too)."""
     state.session.fail_open_warned = False
@@ -213,7 +224,7 @@ def _reset_fail_open_flag():
 
 # ---------------------------------------------------------------- Observation helpers
 
-def _resolved_config():
+def resolved_config():
     """Cached (working_dir_root, allowlist); (None, []) on failure."""
     try:
         return get_cached_config(_get_ctx())
@@ -221,7 +232,7 @@ def _resolved_config():
         return (None, [])
 
 
-def _approval_granted(choice):
+def approval_granted(choice):
     """Map host approval choices to granted/denied (5.13 D2)."""
     return str(choice or "").strip().lower() in _APPROVAL_GRANTED_CHOICES
 
@@ -239,7 +250,7 @@ def _outcome_reason(outcome):
 
 # ---------------------------------------------------------------- Target extraction (spec 5.3 step 3)
 
-def _extract_target_paths(tool_name, args):
+def extract_target_paths(tool_name, args):
     """Extract target file path(s) from tool arguments (V4A patch format)."""
     if not isinstance(args, dict):
         return []
@@ -332,7 +343,7 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
 
     Returns a verdict dict:
       {"outcome": "allow", "rule_key": ...}                      -> allow
-      {"outcome": "external-write", "rule_key": "external-write"} -> allow + log
+      {"outcome": "external-write", "rule_key": RULE_KEY_EXTERNAL_WRITE} -> allow + log
       {"outcome": "block", "rule_key": ..., "message": ...}      -> block
 
     Order (SCR-043 R1, spec 5.3 v2.11): scope first -- T0 outside
@@ -348,7 +359,7 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
     runtime-allowlist check is skipped entirely (config-only judgment --
     allowlist files/dirs + session-dir containment). Default True
     preserves the guard/diff behavior exactly; the settlement re-scan
-    (audit_unresolved_paths) passes False so a runtime exemption never
+    (pending_violation_paths) passes False so a runtime exemption never
     settles a recorded violation (prospective-only semantics).
     """
     # Resolve parsed allowlist: prefer passed allowlist, else fresh load.
@@ -356,35 +367,35 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
 
     # T0: scope first (SCR-043 R1) -- outside-root is ALWAYS external-write
     if not within_working_dir(target, working_dir_root):
-        return {"outcome": "external-write", "rule_key": "external-write"}
+        return {"outcome": "external-write", "rule_key": RULE_KEY_EXTERNAL_WRITE}
 
     # T1: runtime allowlist (value domain = strict subtree of root, R3 gating)
     if honor_runtime_allowlist and is_runtime_allowlisted(target):
-        return {"outcome": "allow", "rule_key": "runtime-allowlist"}
+        return {"outcome": "allow", "rule_key": RULE_KEY_RUNTIME_ALLOWLIST}
 
     # T2: config allowlist -- dirs subtree (dual rule_keys kept)
     if is_allowlist_dir(target, working_dir_root, parsed):
-        return {"outcome": "allow", "rule_key": "tier0-allowlist"}
+        return {"outcome": "allow", "rule_key": RULE_KEY_TIER0_ALLOWLIST}
 
     try:
         rel = os.path.relpath(target, working_dir_root)
     except ValueError:
         # Mixed drive/UNC pair on Windows: cannot relate -> external.
-        return {"outcome": "external-write", "rule_key": "external-write"}
+        return {"outcome": "external-write", "rule_key": RULE_KEY_EXTERNAL_WRITE}
     rel_fwd = rel.replace("\\", "/")
     # T2 root-level file (rel == "." never reaches the file check: the
     # root itself falls through to T4, SCR-043 R1/C3).
     if rel != "." and "/" not in rel_fwd:
         base = os.path.basename(target)
         if is_allowlist_file(base, parsed):
-            return {"outcome": "allow", "rule_key": "allowed-file"}
+            return {"outcome": "allow", "rule_key": RULE_KEY_ALLOWED_FILE}
 
     # T3: session dir
     if is_inside_session_dir(target, working_dir_root):
-        return {"outcome": "allow", "rule_key": "session-dir"}
+        return {"outcome": "allow", "rule_key": RULE_KEY_SESSION_DIR}
 
     # T4: block (incl. root itself: rel == "." -> root-file)
-    rule_key = "root-file" if "/" not in rel_fwd else "non-session-dir"
+    rule_key = RULE_KEY_ROOT_FILE if "/" not in rel_fwd else RULE_KEY_NON_SESSION_DIR
     return {
         "outcome": "block",
         "rule_key": rule_key,
@@ -392,7 +403,7 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
     }
 
 
-def _orphan_rename_line(target, working_dir_root):
+def _orphan_move_line(target, working_dir_root):
     """Conditional orphan repair line (spec 5.3 v2.12 R6, MSG-4/5).
 
     When the target's FIRST segment under the working root exists on
@@ -424,12 +435,12 @@ def _block_message(target, working_dir_root, is_subagent=False):
     """Exact block message (spec 5.3; C6-aligned, v2.6 B2; v2.12 R6:
     the command line is built by the shared session_dirs builder (MB-2),
     the uniqueness line is appended to both top-level variants (MSG-3),
-    and a conditional orphan rename line follows when the target's
+    and a conditional orphan move line follows when the target's
     top-level directory already exists non-compliant (MSG-4/5)).
 
     Subagent variant: the fix line is replaced by the parent-target
     guidance -- subagents never create session directories; no
-    uniqueness / rename lines (MSG-6).
+    uniqueness / move lines (MSG-6).
     """
     target_fwd = str(target).replace("\\", "/")
     if is_subagent:
@@ -445,7 +456,7 @@ def _block_message(target, working_dir_root, is_subagent=False):
             )
         )
         post_lines = BLOCK_MESSAGE_UNIQUENESS_LINE
-        rename_line = _orphan_rename_line(target, working_dir_root)
+        rename_line = _orphan_move_line(target, working_dir_root)
         if rename_line:
             post_lines += "\n" + rename_line
         reason_line = BLOCK_MESSAGE_REASON_LINE
@@ -602,7 +613,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
             if act:
                 return act
 
-        if terminal_uncertain(tokens):
+        if is_terminal_uncertain(tokens):
             emit(
                 "allow", "terminal", "terminal-write-uncertain", None,
                 "write intent detected, target uncertain", session_id, is_subagent,
@@ -614,13 +625,11 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
         return None
 
 
-# Public thin aliases (SCR-045 R6): the assembly-layer-facing surface.
-extract_target_paths = _extract_target_paths
-reset_fail_open_flag = _reset_fail_open_flag
-resolved_config = _resolved_config
-# SCR-050 v3 R6.1: approval vocabulary mapping goes public (assembly
+# Single authoritative names (SCR-052 R1 alias convergence: the former
+# module-tail extract_target_paths/reset_fail_open_flag/resolved_config/
+# approval_granted alias lines are gone; the defs above carry the public
+# names. Approval vocabulary went public at SCR-050 v3 R6.1, assembly
 # consumer on_post_approval_response; spec 5.1 v2.19 seam discipline).
-approval_granted = _approval_granted
 
 # SCR-050 v3 R6.1: declared public surface (AC-9). The discipline_applies
 # / project_exemption_applies predicates move to lifecycle.py at R6.2
