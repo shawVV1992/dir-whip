@@ -103,13 +103,13 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
     external-write, 5.14) use the same geometric basis and are emitted
     unless the rule_key is in _BUS_SKIP_RULE_KEYS (callers that handle
     their own events, e.g. approval). working_dir_root and profile
-    resolve from state (state.session.session_root /
+    resolve from state (state.session.working_dir_root /
     state.session.session_profile); session_id / is_subagent describe
     the judged call's session and are explicit params. Never raises
     (fail-open, 5.8).
     """
     try:
-        working_dir_root = state.session.session_root
+        working_dir_root = state.session.working_dir_root
         stats_record(
             outcome, tool, rule_key, target=target, reason=reason,
             is_subagent=bool(is_subagent), working_dir_root=working_dir_root,

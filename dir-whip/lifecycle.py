@@ -19,7 +19,7 @@ from . import audit, config, events, sessions, session_dirs, state, stats
 
 from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
-from .messages import REMINDER_MESSAGE
+from .messages import DISCIPLINE_BLOCK_MESSAGE
 
 from .paths import within_working_dir
 
@@ -42,7 +42,7 @@ def _record_session_reminder(session_id, status):
     surface stays at 7). Fail-open: events.emit never raises."""
     events.emit(
         "allow", "session", RULE_KEY_SESSION_REMINDER, None,
-        status, session_id, sessions.is_child(session_id),
+        status, session_id, sessions._is_subagent_session(session_id),
     )
 
 
@@ -89,7 +89,7 @@ def _inject_reminder(ctx, session_id):
     flag, and the debug line records the method-existence detail.
     """
     has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
-    if has_method and ctx.inject_message(REMINDER_MESSAGE):
+    if has_method and ctx.inject_message(DISCIPLINE_BLOCK_MESSAGE):
         state.session.reminder_status = "injected"
         _record_session_reminder(session_id, "injected")
         return
@@ -135,7 +135,7 @@ def _append_reminder_fallback(audited_result, original_result, session_id):
     try:
         if not state.session.reminder_pending_fallback:
             return audited_result
-        if sessions.is_child(session_id):
+        if sessions._is_subagent_session(session_id):
             return audited_result
         text = (
             audited_result if isinstance(audited_result, str)
@@ -147,7 +147,7 @@ def _append_reminder_fallback(audited_result, original_result, session_id):
             return audited_result
         state.session.reminder_pending_fallback = False
         _record_reminder_fallback(session_id)
-        return text + "\n\n" + REMINDER_MESSAGE
+        return text + "\n\n" + DISCIPLINE_BLOCK_MESSAGE
     except Exception as exc:
         logger.debug("dir-whip: reminder fallback failed (fail-open): %s", exc)
         return audited_result
@@ -201,7 +201,7 @@ def session_start(session_id, ctx):
     degrade: inject_message unavailable or falsy -> DEBUG log, no crash.
     Fail-open: the assembly adapter catches any top-level error (5.8).
     """
-    if sessions.is_child(session_id):
+    if sessions._is_subagent_session(session_id):
         state.session.reminder_status = "skipped-child"
         # 5.13 v2.8: the five-state stats outlet covers skipped-child
         # too (the report Reminder line is removed in v2.8).
@@ -215,7 +215,7 @@ def session_start(session_id, ctx):
     # 5.18: top-level session start clears the audit state (pending
     # violations, leftover pre snapshots, cap warning); child sessions
     # skip and inherit the parent's latched state.
-    audit.session_start(session_id)
+    audit.on_session_start(session_id)
     # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
     # the session-dir claim + pending marker (child sessions returned
     # above and inherit the parent's slot).

@@ -72,10 +72,10 @@ def _claims_store_path():
     return dirwhip_home(None) / CLAIMS_STORE_NAME
 
 
-def _make_meta(name, root):
+def _make_meta(name, working_dir_root):
     """Persistence sidecar for one claim (spec 5.19 entry fields)."""
     return {
-        "root": str(root) if root else None,
+        "root": str(working_dir_root) if working_dir_root else None,
         "dir": str(name),
         "profile": state.session.session_profile,
         "ts": time.time(),
@@ -83,11 +83,11 @@ def _make_meta(name, root):
     }
 
 
-def _is_entry_alive(root, name):
-    """True when `root/name` is still a directory on disk."""
+def _is_entry_alive(working_dir_root, name):
+    """True when `working_dir_root/name` is still a directory on disk."""
     try:
-        return bool(root) and bool(name) and os.path.isdir(
-            os.path.join(str(root), str(name))
+        return bool(working_dir_root) and bool(name) and os.path.isdir(
+            os.path.join(str(working_dir_root), str(name))
         )
     except Exception:
         return False
@@ -182,13 +182,13 @@ def load_claims():
             for owner, entry in entries.items():
                 if not isinstance(entry, dict):
                     continue
-                root = entry.get("root")
+                working_dir_root = entry.get("root")
                 name = entry.get("dir")
-                if not _is_entry_alive(root, name):
+                if not _is_entry_alive(working_dir_root, name):
                     continue
                 state.session_dirs.claims[str(owner)] = str(name)
                 state.session_dirs.claim_meta[str(owner)] = {
-                    "root": str(root),
+                    "root": str(working_dir_root),
                     "dir": str(name),
                     "profile": entry.get("profile"),
                     "ts": entry.get("ts"),
@@ -229,7 +229,7 @@ def _claim_of(owner):
         return state.session_dirs.claims.get(owner)
 
 
-def _bind(owner, name, root=None):
+def _bind(owner, name, working_dir_root=None):
     """First bind (idempotent: an existing claim is never overwritten).
 
     Write-through (spec 5.19): a new claim persists synchronously; the
@@ -240,27 +240,27 @@ def _bind(owner, name, root=None):
         existing = state.session_dirs.claims.get(owner)
         if existing is not None:
             return existing
-        if root is None:
-            root = state.session.session_root
+        if working_dir_root is None:
+            working_dir_root = state.session.working_dir_root
         state.session_dirs.claims[owner] = name
-        state.session_dirs.claim_meta[owner] = _make_meta(name, root)
+        state.session_dirs.claim_meta[owner] = _make_meta(name, working_dir_root)
         _persist_locked(owner)
         return name
 
 
-def _rebind(owner, name, root=None):
+def _rebind(owner, name, working_dir_root=None):
     """Claim transfer (mv rename of the bound dir, MV-1) + write-through."""
     with state.session_dirs.lock:
         state.session_dirs.claims[owner] = name
         meta = state.session_dirs.claim_meta.get(owner)
-        if root is None:
-            root = state.session.session_root
+        if working_dir_root is None:
+            working_dir_root = state.session.working_dir_root
         if meta is None:
-            state.session_dirs.claim_meta[owner] = _make_meta(name, root)
+            state.session_dirs.claim_meta[owner] = _make_meta(name, working_dir_root)
         else:
             meta["dir"] = str(name)
-            if root:
-                meta["root"] = str(root)
+            if working_dir_root:
+                meta["root"] = str(working_dir_root)
         _persist_locked(owner)
 
 
@@ -275,11 +275,11 @@ def _is_slot_occupied(owner):
         )
 
 
-def _heal_missing_claim(owner, root):
+def _heal_missing_claim(owner, working_dir_root):
     """Release a claim whose bound directory vanished (spec 5.19, SCR-048 R2).
 
-    A claim exists but `root/<claim>` is no longer a directory on disk ->
-    pop the claim + its sidecar metadata and persist (write-through
+    A claim exists but `working_dir_root/<claim>` is no longer a directory
+    on disk -> pop the claim + its sidecar metadata and persist (write-through
     deletion). Called ahead of the occupied determination in guard_create
     and guard_script (ahead of the MV-1 rename branch -- a vanished
     directory cannot be an mv source); after healing the normal free-slot
@@ -289,7 +289,7 @@ def _heal_missing_claim(owner, root):
     try:
         with state.session_dirs.lock:
             claim = state.session_dirs.claims.get(owner)
-            if claim is None or _is_entry_alive(root, claim):
+            if claim is None or _is_entry_alive(working_dir_root, claim):
                 return False
             state.session_dirs.claims.pop(owner, None)
             state.session_dirs.claim_meta.pop(owner, None)
@@ -342,6 +342,44 @@ def _is_compliant(working_dir_root, name):
     return is_inside_session_dir(
         os.path.join(str(working_dir_root), name), working_dir_root
     )
+
+
+def is_creation_signal(target, working_dir_root, verdict=None):
+    """Unified creation-signal predicate (v2.12 concept, SCR-052 4.5
+    naming): TRUE when this action WILL CREATE a Session Directory --
+    the target classifies T3 session-dir ALLOW and its first-segment
+    directory does not yet exist on disk (mkdir, implicit write_file
+    parent creation and terminal touch/redirect alike).
+
+    verdict is the caller-held classify-chain result for the target (the
+    shared-chain dict guard_create receives from verdict._evaluate_target);
+    the T3 ALLOW half reads it -- re-running the chain here would need the
+    allowlist guard_create does not carry and could diverge from the real
+    verdict. verdict=None falls back to the config-kernel compliant-name
+    check (_is_compliant, ADR-0006) -- the same T3-shape half the
+    post-diff observer applies to script-created dirs, whose existence
+    half rides the armed pending_create marker instead of a disk probe.
+
+    Fail-open: any error -> False (never raises).
+    """
+    try:
+        first_seg = _first_segment(target, working_dir_root)
+        if not first_seg or first_seg == ".":
+            return False
+        if verdict is not None:
+            if (
+                not isinstance(verdict, dict)
+                or verdict.get("outcome") != "allow"
+                or verdict.get("rule_key") != RULE_KEY_SESSION_DIR
+            ):
+                return False
+        elif not _is_compliant(working_dir_root, first_seg):
+            return False
+        return not os.path.isdir(
+            os.path.join(str(working_dir_root), first_seg)
+        )
+    except Exception:
+        return False
 
 
 def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
@@ -525,8 +563,10 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
             return None  # the bound dir itself (BND-6 / BND-7)
         exists = os.path.isdir(os.path.join(str(working_dir_root), first_seg))
         if claim is None and not _is_slot_occupied(owner):
-            if not exists:
-                _bind(owner, first_seg, working_dir_root)  # static creation signal
+            # SCR-052 4.5: the named creation-signal predicate (T3 ALLOW
+            # via the caller-held chain verdict + first-segment absent).
+            if is_creation_signal(normalized, working_dir_root, verdict=verdict):
+                _bind(owner, first_seg, working_dir_root)
             return None
         if exists:
             return None  # existing other session dir: no bind (BND-5)
@@ -536,7 +576,8 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
         if _heal_missing_claim(owner, working_dir_root):
             claim = _claim_of(owner)
         if claim is None and not _is_slot_occupied(owner):
-            _bind(owner, first_seg, working_dir_root)
+            if is_creation_signal(normalized, working_dir_root, verdict=verdict):
+                _bind(owner, first_seg, working_dir_root)
             return None
         if tokens and target is not None:
             src = terminal_cp_mv_src(tokens, target)
@@ -682,4 +723,5 @@ __all__ = [
     "script_invocation_line",
     "set_classifier",
     "scan_orphans",
+    "is_creation_signal",
 ]

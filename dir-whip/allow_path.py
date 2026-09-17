@@ -145,7 +145,7 @@ def handle(args, session_id=None, **kwargs):
     confirm = bool(args.get("confirm")) if isinstance(args, dict) else False
     # R2a: subagents are rejected before any other check (the sanction
     # flows top-down only; parent-guidance variant, 5.11 v2.9).
-    if sessions.is_child(session_id):
+    if sessions._is_subagent_session(session_id):
         emit(
             "block", "allow-path", RULE_KEY_ALLOW_PATH_SUBAGENT_REJECTED, None,
             "subagent-rejected", session_id, True,
@@ -214,6 +214,6 @@ def handle(args, session_id=None, **kwargs):
         emit(
             "allow", "allow-path", RULE_KEY_RUNTIME_ALLOWLIST_ADD, path,
             "runtime allowlist entry added", session_id,
-            sessions.is_child(session_id),
+            sessions._is_subagent_session(session_id),
         )
     return result

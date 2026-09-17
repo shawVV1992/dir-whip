@@ -1,11 +1,11 @@
 """All mutable plugin runtime state in four cohesive containers: session / audit / session_dirs / stats (SCR-035).
 
-Contents: session = registration-context slot, session root/profile, fail-open latch, emit switch, injected host callables, child-session set, parent links, top-session fallback; audit = pre-snapshots, pending violations, cap/nudge counters; session_dirs = per-session unique Session Directory claims, in-flight script-creation markers, persistence sidecar meta (SCR-044 R5, SCR-048 R1); stats = counters + session fields. Lock-per-group discipline: locks travel with their group and cross-group invariants share one lock; container-only access - never re-export the individual fields as module-level names (ADR-0005).
+Contents: session = registration-context slot, working_dir_root/profile, fail-open latch, emit switch, injected host callables, child-session set, parent links, top-session fallback; audit = pre-snapshots, pending violations, cap/nudge counters; session_dirs = per-session unique Session Directory claims, in-flight script-creation markers, persistence sidecar meta (SCR-044 R5, SCR-048 R1); stats = counters + session fields. Lock-per-group discipline: locks travel with their group and cross-group invariants share one lock; container-only access - never re-export the individual fields as module-level names (ADR-0005).
 
 Layer: core
 Refs: spec 5.19, SCR-035, SCR-044 R5, SCR-048 R1, ADR-0005, ADR-0007
 Key exports:
-  - session -- container: registration ctx + session root/profile + switches + injected host callables.
+  - session -- container: registration ctx + working_dir_root/profile + switches + injected host callables.
   - audit -- container: pending violations + pre-snapshots + cap/nudge counters.
   - session_dirs -- container: per-session claims + pending markers + claim sidecar meta.
   - stats -- container: outcome counters + session fields.
@@ -24,8 +24,8 @@ class _SessionState:
     def reset(self):
         self.registered_ctx = None       # single registration-context slot (converges config._register_ctx and dir_whip._registered_ctx)
         self.register_config_path = None
-        self.session_root = None         # None = unresolved/fail-open (never keeps a stale value)
-        self.session_root_initialized = False
+        self.working_dir_root = None     # None = unresolved/fail-open (never keeps a stale value; SCR-052 G2: renamed from session_root)
+        self.working_dir_root_initialized = False
         self.session_profile = None
         self.fail_open_warned = False
         self.emit_enabled = False

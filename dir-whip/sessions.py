@@ -5,7 +5,7 @@ Tracks subagent sessions so on_session_start skips them and verdicts split as su
 Layer: core
 Refs: spec 5.4, spec 5.16, spec 5.18, SCR-035, SCR-044 R3, ADR-0007
 Key exports:
-  - is_child -- True when session_id is a live child (subagent) session.
+  - _is_subagent_session -- True when session_id is a live child (subagent) session (SCR-052 G6: the former is_child public alias is deleted; single authoritative name).
   - owner_session -- pending-set owner: child -> explicit parent or top_session fallback; None when unknown.
   - register_child -- record a child's parent link for pending-set inheritance.
   - subagent_start -- subagent_start observer: track the child + open the child stats context.
@@ -27,7 +27,7 @@ from .events import RULE_KEY_SUBAGENT_START, RULE_KEY_SUBAGENT_STOP, emit
 logger = logging.getLogger("dir-whip")
 
 
-def _is_child_session(session_id):
+def _is_subagent_session(session_id):
     """True when session_id is a live child (subagent) session (5.4)."""
     with state.session.lock:
         return session_id in state.session.child_session_ids
@@ -69,7 +69,7 @@ def owner_session(session_id):
     audit._audit_owner_session -- owner resolution reads the session
     topology, so it lives with it.
     """
-    if session_id and _is_child_session(session_id):
+    if session_id and _is_subagent_session(session_id):
         with state.session.lock:
             return (
                 state.session.session_parents.get(session_id)
@@ -157,12 +157,16 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
 
 
 # Public thin aliases (SCR-035 interface convergence point).
-is_child = _is_child_session
+# SCR-052 G6: the former is_child = _is_child_session alias is deleted --
+# _is_subagent_session is the single authoritative name (the cross-module
+# consumers read it as a sessions-module attribute; SCR-050 v3 R6.1 TS-1
+# bans module-level private imports, attribute access is the sanctioned
+# form).
 register_child = _audit_register_child
 subagent_start = on_subagent_start
 subagent_stop = on_subagent_stop
-# SCR-050 v3 R6.1: cross-module consumer (audit session_start) uses the
+# SCR-050 v3 R6.1: cross-module consumer (audit on_session_start) uses the
 # declared public name (seam discipline, spec 5.1 v2.19).
 record_top_session = _record_top_session
 
-__all__ = ["is_child", "owner_session", "register_child", "subagent_start", "subagent_stop", "record_top_session"]
+__all__ = ["_is_subagent_session", "owner_session", "register_child", "subagent_start", "subagent_stop", "record_top_session"]

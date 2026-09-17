@@ -60,7 +60,6 @@ from .messages import (
     BLOCK_MESSAGE_SUBAGENT_REASON_LINE,
     BLOCK_MESSAGE_UNIQUENESS_LINE,
     FAIL_OPEN_WARNING_MESSAGE,
-    REMINDER_MESSAGE,
 )
 
 from .paths import (
@@ -71,8 +70,7 @@ from .paths import (
 )
 
 from . import session_dirs
-
-from .sessions import is_child
+from . import sessions
 
 # SCR-050 v3 R6.1 (spec 5.1 v2.19 seam discipline): the lexer surface is
 # consumed via its declared public names; the device-path exemption is a
@@ -139,7 +137,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
     session_id = kwargs.get("session_id")
     # 5.13: verdicts split by is_subagent -child membership in the
     # child_session_ids set (5.4) implies a subagent write.
-    if not is_subagent and session_id and is_child(session_id):
+    if not is_subagent and session_id and sessions._is_subagent_session(session_id):
         is_subagent = True
     ctx = _get_ctx()
     working_dir_root, allowlist = get_cached_config(ctx)
@@ -294,14 +292,13 @@ def _resolve_target(target, task_id, working_dir_root):
     if is_absolute_any(target):
         return target
 
-    base = _session_cwd(task_id)
-    if not base:
+    session_cwd = _session_cwd(task_id)
+    if not session_cwd:
         logger.debug(
             "dir-whip: session CWD unrecorded for task %r, resolving "
             "relative target against working_dir_root", task_id
         )
-        base = working_dir_root
-    return os.path.join(base, target)
+    return os.path.join(session_cwd or working_dir_root, target)
 
 
 def _parsed_allowlist_raw(raw):
@@ -477,26 +474,28 @@ def _terminal_base(args, task_id, working_dir_root):
     """Resolve the terminal relative-target base (spec 5.3 step 4).
 
     Chain: args["workdir"] -> get_session_cwd(task_id) -> working_dir_root.
-    Never os.getcwd().
+    Never os.getcwd(). SCR-052 G2: the resolved base carries the
+    working_dir_root name (the effective root for THIS terminal call).
     """
-    base = args.get("workdir") if isinstance(args, dict) else None
-    if not base:
-        base = _session_cwd(task_id)
-    if not base:
-        base = working_dir_root
-    return base
+    working_dir_root = (
+        (args.get("workdir") if isinstance(args, dict) else None)
+        or _session_cwd(task_id)
+        or working_dir_root
+    )
+    return working_dir_root
 
 
-def _resolve_terminal_target(target, base):
+def _resolve_terminal_target(target, working_dir_root):
     """Resolve a terminal write target against the relative-target base."""
     if is_absolute_any(target):
         return target
-    return os.path.join(base, target)
+    return os.path.join(working_dir_root, target)
 
 
 def _evaluate_target(target, tool_name, working_dir_root, allowlist,
                      is_subagent, session_id, is_terminal,
-                     task_id=None, base=None, rule_key=None, tokens=None):
+                     task_id=None, terminal_working_dir_root=None,
+                     rule_key=None, tokens=None):
     """Evaluate one write target through the shared chain (spec 5.3
     step 4-6; SCR-044 R2 convergence).
 
@@ -507,8 +506,12 @@ def _evaluate_target(target, tool_name, working_dir_root, allowlist,
     - is_terminal=True (terminal): device paths are exempt BEFORE
       normalization (4.3) and emit uses the EXTRACTED rule_key
       (terminal-touch / terminal-redirect / terminal-cp-mv, passed via
-      rule_key); resolution goes through the terminal base; the raw
-      command tokens ride along for the session-dir mv-source lookup.
+      rule_key); resolution goes through the terminal working_dir_root
+      (the effective base for this call: workdir arg -> session CWD ->
+      working_dir_root; SCR-052 G2 family name -- a distinguishable name
+      is required because the chain's working_dir_root param is the
+      config root); the raw command tokens ride along for the
+      session-dir mv-source lookup.
     - is_terminal=False (write_file / patch): emit uses the classify
       rule_key (root-file / non-session-dir / session-dir /
       runtime-allowlist / external-write); resolution goes through the
@@ -529,7 +532,9 @@ def _evaluate_target(target, tool_name, working_dir_root, allowlist,
         # verdict/stats event, no drive-inherited path fabrication.
         if is_device_path(target):
             return None
-        abs_target = _resolve_terminal_target(target, base)
+        abs_target = _resolve_terminal_target(
+            target, terminal_working_dir_root
+        )
     else:
         abs_target = _resolve_target(target, task_id, working_dir_root)
     normalized = normalize_target(abs_target, working_dir_root)
@@ -583,7 +588,9 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
         tokens = tokenize_command(command)
         if not tokens:
             return None
-        base = _terminal_base(args, task_id, working_dir_root)
+        terminal_working_dir_root = _terminal_base(
+            args, task_id, working_dir_root
+        )
 
         # SCR-044 R5 (spec 5.19): session-dir script gate BEFORE the
         # heredoc blanket demotion -- a second create_session_dir.py
@@ -599,7 +606,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
         # 4.4 heredoc blanket demotion: never parse the body, never block.
         if "<<" in command:
             emit(
-                "allow", "terminal", "terminal-write-uncertain", None,
+                "allow", "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
                 "heredoc detected, blanket demotion", session_id, is_subagent,
             )
             return None
@@ -607,7 +614,8 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
         for target, rule_key in terminal_block_targets(tokens):
             act = _evaluate_target(
                 target, "terminal", working_dir_root, allowlist,
-                is_subagent, session_id, is_terminal=True, base=base,
+                is_subagent, session_id, is_terminal=True,
+                terminal_working_dir_root=terminal_working_dir_root,
                 rule_key=rule_key, tokens=tokens,
             )
             if act:
@@ -615,7 +623,7 @@ def _guard_terminal(args, task_id, working_dir_root, allowlist,
 
         if is_terminal_uncertain(tokens):
             emit(
-                "allow", "terminal", "terminal-write-uncertain", None,
+                "allow", "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
                 "write intent detected, target uncertain", session_id, is_subagent,
             )
             return None
@@ -643,6 +651,5 @@ __all__ = [
     "extract_target_paths",
     "reset_fail_open_flag",
     "resolved_config",
-    "REMINDER_MESSAGE",
     "FAIL_OPEN_WARNING_MESSAGE",
 ]

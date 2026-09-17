@@ -164,12 +164,13 @@ def resolve_working_dir_root(ctx, config_path=None):
     # 1. dir-whip-config.yaml explicit value (authoritative when set)
     try:
         cfg = load_guard_config(config_path)
-        root = cfg.get("working_dir_root")
-        if root:
+        working_dir_root = cfg.get("working_dir_root")
+        if working_dir_root:
             logger.info(
-                "dir-whip: working_dir_root resolved from dir-whip-config: %s", root
+                "dir-whip: working_dir_root resolved from dir-whip-config: %s",
+                working_dir_root,
             )
-            return root
+            return working_dir_root
     except Exception:
         pass
 
@@ -200,30 +201,34 @@ def refresh_resolution(ctx):
     Called at every top-level on_session_start: the same 3-step chain runs
     against the session's ctx.profile_name, so a desktop multi-profile
     process never keeps the register-time (other-profile) root. On success
-    state.session.session_root = <root> (same INFO source log as the
-    chain); on fail-open session_root = None + WARNING — a stale value
-    from a previous session is NEVER kept. Returns the session root.
+    state.session.working_dir_root = <root> (same INFO source log as the
+    chain); on fail-open working_dir_root = None + WARNING — a stale value
+    from a previous session is NEVER kept. Returns the session's
+    working_dir_root.
     """
-    state.session.session_root = resolve_working_dir_root(ctx)
-    state.session.session_root_initialized = True
-    return state.session.session_root
+    state.session.working_dir_root = resolve_working_dir_root(ctx)
+    state.session.working_dir_root_initialized = True
+    return state.session.working_dir_root
 
 
-def get_session_root():
+def get_working_dir_root():
     """The session-scoped working_dir_root (None = guard disabled)."""
-    return state.session.session_root
+    return state.session.working_dir_root
 
 
-def _effective_root(ctx):
-    """The session root, resolving lazily before any on_session_start ran.
+def effective_working_dir_root(ctx):
+    """The session working_dir_root, resolving lazily before any
+    on_session_start ran (SCR-052 G2: renamed from effective_root -- the
+    lazy-resolution variant keeps a distinguishable working_dir_root
+    family name; the plain accessor is get_working_dir_root).
 
     Consumers (the /dir-whip report) read the session value; before the
     first on_start the register-time resolution is the initial value, so a
     lazy refresh here keeps them correct in tests and pre-session contexts.
     """
-    if not state.session.session_root_initialized:
+    if not state.session.working_dir_root_initialized:
         refresh_resolution(ctx)
-    return state.session.session_root
+    return state.session.working_dir_root
 
 
 def _profile_config_path(hermes_home, profile):
@@ -423,11 +428,12 @@ def get_cached_config(ctx, config_path=None):
                     _cached_result = _resolve_config(ctx, config_path)
                     _cache_initialized = True
         result = _cached_result
-    if not state.session.session_root_initialized:
-        # Initial value of the session root = the register-time resolution.
-        state.session.session_root = result[0]
-        state.session.session_root_initialized = True
-    return (get_session_root(), result[1])
+    if not state.session.working_dir_root_initialized:
+        # Initial value of the session working_dir_root = the register-time
+        # resolution.
+        state.session.working_dir_root = result[0]
+        state.session.working_dir_root_initialized = True
+    return (get_working_dir_root(), result[1])
 
 
 def ensure_session_root():
@@ -486,14 +492,15 @@ def reset_cache():
         state.session.confirmation_issued.clear()
     # Session-scoped state: re-seeded at register (get_cached_config) and at
     # the next top-level on_session_start.
-    state.session.session_root = None
-    state.session.session_root_initialized = False
+    state.session.working_dir_root = None
+    state.session.working_dir_root_initialized = False
     state.session.session_profile = None
     stats.stats_reset()
 
 
-# Public thin aliases (SCR-045 R6): the report-facing resolution surface.
-effective_root = _effective_root
+# SCR-052 G2: the report-facing lazy-resolution surface carries the
+# distinguishable working_dir_root family name (former effective_root
+# alias); the profile probe helpers keep their SCR-045 R6 names.
 profile_terminal_cwd = _profile_terminal_cwd
 profile_config_path = _profile_config_path
 
@@ -503,6 +510,7 @@ profile_config_path = _profile_config_path
 # consumer + test import paths unchanged).
 __all__ = [
     "get_cached_config",
+    "get_working_dir_root",
     "resolve_working_dir_root",
     "refresh_resolution",
     "load_guard_config",
@@ -514,7 +522,7 @@ __all__ = [
     "reset_cache",
     "set_session_profile",
     "refresh_allowlist_cache",
-    "effective_root",
+    "effective_working_dir_root",
     "profile_terminal_cwd",
     "profile_config_path",
     "is_inside_session_dir",

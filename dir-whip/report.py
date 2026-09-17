@@ -19,7 +19,7 @@ from . import state
 
 from .config import (
     SESSION_DIR_RE,
-    effective_root,
+    effective_working_dir_root,
     load_guard_config,
     parse_terminal_cwd,
     profile_config_path,
@@ -141,20 +141,20 @@ def render():
     try:
         ctx = _get_cmd_ctx()
         cfg = load_guard_config()
-        root = effective_root(ctx)
+        working_dir_root = effective_working_dir_root(ctx)
         lines = []
 
         # Line 1: version (plugin.yaml, unknown fallback).
         lines.append("[dir-whip] v%s" % plugin_version())
 
         # Line 2: state (v2.8: ACTIVE/FAIL-OPEN -> enabled/disabled).
-        lines.append("State: enabled" if root else "State: disabled")
+        lines.append("State: enabled" if working_dir_root else "State: disabled")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
-        if root:
+        if working_dir_root:
             source = _resolution_source(ctx)
             source = _SOURCE_LABELS.get(source, source)
-            lines.append("Working Directory: %s  (source: %s)" % (root, source))
+            lines.append("Working Directory: %s  (source: %s)" % (working_dir_root, source))
         else:
             lines.append("Working Directory: (unresolved)")
 
@@ -211,7 +211,7 @@ def render():
         # Health (v2.8, LAST): single Good when clean; with problems a
         # brief issue list (one indented line per problem).
         problems = []
-        if not root:
+        if not working_dir_root:
             problems.append("resolution: FAIL-OPEN")
         writable, error = _stats_writable()
         if not writable:
@@ -294,7 +294,7 @@ def _render_current_state():
 # paths.paths_equal directly (already imported above).
 
 
-def _relativize_input(token, root):
+def _relativize_input(token, working_dir_root):
     """Relativize an input token against working_dir_root (5.6 input layer).
 
     Returns (rel_or_None, reason_clause). rel keeps forward slashes and a
@@ -302,7 +302,7 @@ def _relativize_input(token, root):
     rejection (root itself / ancestor / outside root).
     """
     t = str(token).replace("\\", "/").strip()
-    r = str(root).replace("\\", "/").rstrip("/")
+    r = str(working_dir_root).replace("\\", "/").rstrip("/")
     cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
     t_cmp = t.casefold() if cf else t
     r_cmp = r.casefold() if cf else r
@@ -323,8 +323,8 @@ def _list_candidates():
     other non-session dir, SCR-046 R1). Sorted for determinism.
     """
     ctx = _get_cmd_ctx()
-    root = effective_root(ctx)
-    if not root:
+    working_dir_root = effective_working_dir_root(ctx)
+    if not working_dir_root:
         return None, "[dir-whip] Working Directory unresolved: cannot list candidates"
     state_map, _legacy = _load_allowlist_state()
     listed_files = state_map["files"]
@@ -332,7 +332,7 @@ def _list_candidates():
     file_cands = []
     dir_cands = []
     try:
-        with os.scandir(root) as it:
+        with os.scandir(working_dir_root) as it:
             for entry in it:
                 try:
                     if entry.is_file():
@@ -385,10 +385,10 @@ def _handle_allow(rest):
         create = True
         rest = (rest[:m.start()] + " " + rest[m.end():]).strip()
     ctx = _get_cmd_ctx()
-    root = effective_root(ctx)
-    root_fwd = str(root).replace("\\", "/") if root else ""
+    working_dir_root = effective_working_dir_root(ctx)
+    working_dir_root_fwd = str(working_dir_root).replace("\\", "/") if working_dir_root else ""
     if not rest:
-        if not root:
+        if not working_dir_root:
             return "[dir-whip] Working Directory unresolved: cannot list candidates"
         cands, err = _list_candidates()
         if err:
@@ -396,10 +396,10 @@ def _handle_allow(rest):
         fc, dc = cands
         return _render_two_sections(
             fc, dc,
-            header="Candidates in %s:" % root_fwd,
+            header="Candidates in %s:" % working_dir_root_fwd,
             tail="Add: /dir-whip allow <number|name>",
         )
-    if not root:
+    if not working_dir_root:
         return "[dir-whip] Working Directory unresolved: cannot allow"
     tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
@@ -439,9 +439,9 @@ def _handle_allow(rest):
         # (input tolerance); a relative token is taken as-is.
         tok_fwd = tok.replace("\\", "/")
         if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
-            rel_raw, reason = _relativize_input(tok, root)
+            rel_raw, reason = _relativize_input(tok, working_dir_root)
             if rel_raw is None:
-                return "%s\n%s" % (_ALLOW_GUIDED_REJECTION % root_fwd, reason)
+                return "%s\n%s" % (_ALLOW_GUIDED_REJECTION % working_dir_root_fwd, reason)
         else:
             rel_raw = tok_fwd
         had_trailing_slash = rel_raw.endswith("/")
@@ -449,11 +449,11 @@ def _handle_allow(rest):
         ok, vreason = validate_dir_entry(rel)
         if not ok:
             return "%s\n'%s' %s" % (
-                _ALLOW_GUIDED_REJECTION % root_fwd, tok, vreason,
+                _ALLOW_GUIDED_REJECTION % working_dir_root_fwd, tok, vreason,
             )
         if not _mark("p", rel):
             continue
-        full = os.path.join(str(root), *rel.split("/"))
+        full = os.path.join(str(working_dir_root), *rel.split("/"))
         if os.path.lexists(full):
             # Existence decides first (--create on existing = plain add).
             if os.path.isdir(full):
@@ -534,7 +534,7 @@ def _handle_remove(rest):
             files, dirs, tail="Remove: /dir-whip remove <number|name>",
         )
     ctx = _get_cmd_ctx()
-    root = effective_root(ctx)
+    working_dir_root = effective_working_dir_root(ctx)
     tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
         return "Usage: /dir-whip [allow|remove|list]"
@@ -555,8 +555,8 @@ def _handle_remove(rest):
             tok_fwd = tok.replace("\\", "/")
             rel = None
             if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
-                if root:
-                    rel, _reason = _relativize_input(tok, root)
+                if working_dir_root:
+                    rel, _reason = _relativize_input(tok, working_dir_root)
             if rel is None:
                 rel = tok_fwd.strip().rstrip("/")
             if not rel or rel in (".", ".."):

@@ -280,12 +280,12 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
         # blocked-at-pre call has no pre snapshot and skips here.
         if tool_name == "terminal":
             audit.audit_post_check(
-                session_id, task_id, is_subagent=sessions.is_child(session_id),
+                session_id, task_id, is_subagent=sessions._is_subagent_session(session_id),
             )
         events.emit(
             "allow", tool_name, "landed:" + str(tool_name), target,
             "write tool call completed (status: %s)" % (status or "ok"),
-            session_id, sessions.is_child(session_id),
+            session_id, sessions._is_subagent_session(session_id),
         )
     except Exception as exc:
         logger.debug("dir-whip: post_tool_call hook error: %s", exc)

@@ -18,7 +18,7 @@ T1-T9 applied, structural contracts locked by testing-standards 7.17.
 Layer: core
 Refs: spec 5.3, spec 5.4, spec 5.11, spec 5.12, spec 5.18, spec 5.19, spec 5.20, SCR-041, SCR-043, SCR-047, SCR-048, ADR-0007, ADR-0014
 Key exports:
-  - FAIL_OPEN_WARNING_MESSAGE, REMINDER_MESSAGE -- guard-disabled warning (spec 5.12) + session-start discipline reminder (spec 5.4).
+  - FAIL_OPEN_WARNING_MESSAGE, DISCIPLINE_BLOCK_MESSAGE -- guard-disabled warning (spec 5.12) + session-start discipline block (spec 5.4; SCR-052 G7 renamed from REMINDER_MESSAGE, text verbatim).
   - BLOCK_MESSAGE_* -- unified block skeleton fragments (header / fix lines / uniqueness / allowlist hint / [Reason]+[Next] tail).
   - SESSION_DIR_LIMIT_* -- one-Session-Directory-per-conversation limit messages (top-level + subagent).
   - ORPHAN_NOTICE_* -- advisory orphan-notice lines (header / tail / create-relocate); never blocks.
@@ -40,16 +40,18 @@ FAIL_OPEN_WARNING_MESSAGE = (
 )
 
 # Spec 5.4 (v2.15 R3 rewrite; v2.16 SCR-048 R3 reuse rule): session-start
-# discipline reminder (top-level sessions only). Full "Session Directory"
+# discipline block (top-level sessions only). Full "Session Directory"
 # term (T2, the "WD" abbreviation retired), angle-bracket placeholders
 # matching the script argument names (R9 disambiguation), ASCII arrow
 # (T5), and the reuse rule: ONE Session Directory per conversation --
 # write into the existing directory's Outputs/ and .tmp/ rather than
-# creating a second one.
+# creating a second one. SCR-052 G7: renamed from REMINDER_MESSAGE to
+# DISCIPLINE_BLOCK_MESSAGE (the injected entity is the Discipline Block);
+# text verbatim.
 # Content requirements (CR-1): <=280 chars cap (tokenizer-independent,
 # v2.7 ruling; current text 276) + the key command substrings below +
 # `reuse`; no standalone "WD", no em-dash.
-REMINDER_MESSAGE = (
+DISCIPLINE_BLOCK_MESSAGE = (
     "[dir-whip] Active. Root writes need a Session Directory: "
     "python scripts/create_session_dir.py <task_name> "
     "--workspace <root> (deliverables to Outputs/, scratch to "

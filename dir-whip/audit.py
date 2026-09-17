@@ -64,8 +64,9 @@ from .paths import (
     within_working_dir,
 )
 
+from . import sessions
+
 from .sessions import (
-    is_child,
     owner_session,
     record_top_session,
 )
@@ -95,8 +96,8 @@ def set_classifier(fn):
     _classify_fn = fn
 
 
-def snapshot(root):
-    """Snap the top-level entries of root (spec 5.18 mechanism).
+def snapshot(working_dir_root):
+    """Snap the top-level entries of working_dir_root (spec 5.18 mechanism).
 
     Recorded per entry: (st_size, st_mtime_ns, is_dir) -- exactly the
     fidelity the diff needs. Scan OSError -> None (fail-open; callers
@@ -104,7 +105,7 @@ def snapshot(root):
     """
     try:
         entries = {}
-        with os.scandir(root) as it:
+        with os.scandir(working_dir_root) as it:
             for entry in it:
                 st = entry.stat()
                 entries[entry.name] = (st.st_size, st.st_mtime_ns, entry.is_dir())
@@ -374,7 +375,7 @@ def transform_tool_result(tool_name=None, args=None, result=None,
         # (transform fires before post_tool_call for terminal). Safe even if
         # the command was blocked-at-pre (no snapshot -> early return).
         audit_post_check(
-            session_id, task_id, is_subagent=is_child(session_id),
+            session_id, task_id, is_subagent=sessions._is_subagent_session(session_id),
         )
         if not isinstance(result, str):
             return None
@@ -695,7 +696,7 @@ def settle_paths(session_id, paths):
     a move error leaves the latch latched.
     """
     try:
-        if session_id and is_child(session_id):
+        if session_id and sessions._is_subagent_session(session_id):
             _record_settle_rejected("subagent-rejected", is_subagent=True)
             return {"error": "subagent sessions cannot settle; report the "
                              "pending path(s) to the parent agent"}
@@ -786,7 +787,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
     try:
         if not changed_paths:
             return None
-        if session_id and is_child(session_id):
+        if session_id and sessions._is_subagent_session(session_id):
             return None
         unresolved = pending_violation_paths(session_id)
         if not unresolved:
@@ -826,7 +827,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         return None
 
 
-def _audit_session_start(session_id):
+def on_session_start(session_id):
     """Top-level session start: clear this session's pending violations
     and leftover pre snapshots, reset the one-time cap warning and the
     continuation-nudge cap counter (SCR-040 R2), and record the current
@@ -854,12 +855,10 @@ def _audit_session_start(session_id):
 # module-tail alias block -- classify_diff / unresolved_paths /
 # transform_tool_result / pending_snapshot / pending_add / pending_clear /
 # mark_announced / settle_paths / pre_verify_nudge / gate_block /
-# gate_unresolved / pre_snapshot / audit_post_check -- is gone; the defs
-# above carry the public names directly).
-# R2 EXCEPTION kept verbatim this round: session_start (the alias of
-# _audit_session_start) stays; SCR-052 4.4 renames it to on_session_start
-# in the R2 batch.
-session_start = _audit_session_start
+# gate_unresolved / pre_snapshot / audit_post_check / session_start --
+# is gone; the defs above carry the public names directly. The R2 batch
+# completed 4.4: on_session_start IS the def, the session_start alias of
+# the former _audit_session_start is deleted).
 
 __all__ = [
     "set_classifier",
@@ -876,6 +875,6 @@ __all__ = [
     "gate_block",
     "gate_unresolved",
     "pre_snapshot",
-    "session_start",
+    "on_session_start",
     "audit_post_check",
 ]
