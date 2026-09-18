@@ -7,7 +7,7 @@ Layer: skill-subprocess
 Refs: spec 3.4, spec 4.4, spec 5.7, spec 8.1, spec v2.7 R9, SCR-037, SCR-039 R9, SCR-042, SCR-043, ADR-0008
 Key exports:
   - main -- CLI entry: resolve/validate the root, run the checks + inventory, emit plain/JSON/gate output; exit 0/1/2.
-  - cleanup_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes (SCR-043 R6).
+  - list_expired_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes (SCR-043 R6).
 """
 
 import argparse
@@ -414,7 +414,7 @@ def is_old(path, days):
     return age >= days * 86400
 
 
-def cleanup_tmp(root, days):
+def list_expired_tmp(root, days):
     """Read-only inventory of expired session .tmp/ entries (SCR-043 R6).
 
     Returns the sorted entry paths that have not been modified for
@@ -444,7 +444,7 @@ def print_json(violations):
 def main(argv=None):
     """CLI entry: resolve and validate the audit root, run the structural checks + read-only .tmp inventory, emit plain / --json / --gate output (SCR-042 H1)."""
     parser = argparse.ArgumentParser(
-        description="Audit a workspace root against structural compliance checks (with embedded .tmp cleanup)."
+        description="Audit a workspace root against structural compliance checks (read-only inventory; expired .tmp entries are listed as a proposal)."
     )
     parser.add_argument(
         "root",
@@ -528,7 +528,7 @@ def main(argv=None):
     # as a proposal in interactive plain mode only (gate outputs no
     # expired list; --json keeps stdout schema-clean). Nothing is ever
     # deleted; --days serves the inventory threshold.
-    items = cleanup_tmp(root, args.days)
+    items = list_expired_tmp(root, args.days)
     if items and not args.gate and not args.json:
         sys.stdout.write(
             "Expired .tmp entries (proposal only; cleanup needs your confirmation):\n"

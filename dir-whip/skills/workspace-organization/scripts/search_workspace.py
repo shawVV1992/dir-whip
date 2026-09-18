@@ -108,15 +108,18 @@ def _is_reparse_point(st):
 def _dir_exempt(name, dirs_entries):
     """True when a root entry's first segment matches an allowlist dirs entry.
 
-    v2.7 R9 first-segment subtree exemption, casefolded (spec 4.6); the
+    v2.7 R9 first-segment subtree exemption; casefolded on Windows only
+    (POSIX compares case-sensitively, spec 4.6 v2.22 — aligned with
+    4.2 audit_workspace.py and the plugin's allowlist matching); the
     entry list comes from the resolver's allowlist loading surface.
     """
     if not dirs_entries:
         return False
-    name_cf = name.casefold()
+    name_cmp = name.casefold() if os.name == "nt" else name
     for entry in dirs_entries:
         first = str(entry).replace("\\", "/").split("/")[0]
-        if first and name_cf == first.casefold():
+        first_cmp = first.casefold() if os.name == "nt" else first
+        if first_cmp and name_cmp == first_cmp:
             return True
     return False
 

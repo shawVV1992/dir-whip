@@ -62,9 +62,9 @@ Triggered by: any file write, create, save, delete, or move.
 | Target | Guard behavior |
 |--------|----------------|
 | Inside a Session Directory (`YYYYMMDD_HHMMSS_TaskName/...`) | Allow |
-| Root whitelist file (`allowlist` `files` entry) | Allow |
+| Root allowlist file (`allowlist` `files` entry) | Allow |
 | Outside the Working Directory | Allow + logged (external) |
-| Working Directory root, non-whitelist | Block |
+| Working Directory root, non-allowlist | Block |
 
 ### 2. Session directory discipline
 
@@ -215,7 +215,7 @@ Boundary: `--workspace` must match the resolved root (exit 2 on mismatch); resol
 - File inside a session dir, in the correct `Outputs/`/`.tmp/`/`Inputs/`?
 - Introduced files placed in `Inputs/` (not mixed with scratch or deliverables)?
 - Past-session files located via `search_workspace.py` (not hand-rolled `ls`/`glob`)?
-- No non-whitelist files at the Working Directory root? (root allows only
+- No non-allowlist files at the Working Directory root? (root allows only
   `allowlist` `files` entries, session-format dirs, and `allowlist` `dirs`
   subtrees; a leftover `.hermes/` directory is flagged by the audit)
 - Confirmation obtained before delete/overwrite/move?

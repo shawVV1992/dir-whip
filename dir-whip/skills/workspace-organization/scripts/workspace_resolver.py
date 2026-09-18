@@ -9,8 +9,7 @@ Key exports:
   - hermes_home -- Hermes home (HERMES_HOME override first; Windows LOCALAPPDATA/hermes, POSIX ~/.hermes).
   - normalize_path -- SCR-006 normalization for exact matching (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).
   - parse_terminal_cwd -- minimal terminal.cwd parser for config.yaml, mirroring config.py parse_terminal_cwd.
-  - allowlist_state -- structured allowlist {files, dirs, legacy}; STRICT empty when absent (spec v2.7 R9 parity).
-  - allowed_root_files -- allowlist files subset; STRICT EMPTY when absent (shared audit, spec v2.7 R9 parity).
+  - allowlist_state -- structured allowlist {files, dirs, legacy}; STRICT empty when absent (spec v2.7 R9 parity). The audit consumes the files subset from here.
   - resolve_working_dir_root -- 4-step chain (spec 4.4); fail-open None after exactly ONE stderr WARNING.
   - validate_workspace -- boundary validation of an explicit --workspace (spec 4.4).
 """
@@ -616,18 +615,6 @@ def allowlist_state(hh=None):
         return _parse_allowlist_lines(path)
     except Exception:
         return {"files": [], "dirs": [], "legacy": 0}
-
-
-def allowed_root_files(hh=None):
-    """Root-file whitelist from dir-whip-config.yaml (audit side, v2.7 R9).
-
-    The ``files`` subset of the structured ``allowlist`` mapping (root-level
-    basenames). STRICT fallback: when the config file or the key is absent,
-    returns an EMPTY list -> every root file is flagged (fail-closed,
-    over-report), matching the plugin guard's semantics so guard and audit
-    never disagree. Legacy flat values are ignored (empty subset).
-    """
-    return allowlist_state(hh)["files"]
 
 
 def validate_workspace(path, hh=None, env=None):

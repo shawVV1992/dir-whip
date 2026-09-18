@@ -18,12 +18,12 @@ Before auditing, confirm the target is a legitimate Working Directory:
   fail-open). An explicit `--workspace` must equal the resolved root (exit 2
   on mismatch); when resolution fails, the audit fails open to CWD with one
   concise stderr warning and proceeds.
-- **Whitelist** -- the root rules file must be covered by an `allowlist`
+- **Allowlist** -- the root rules file must be covered by an `allowlist`
   `files` entry (config-driven,
   `HERMES_HOME/dir-whip/dir-whip-config.yaml`). The guard and the audit
   read the same key, so they never disagree about which root files are
-  permitted. Missing key -> strict empty whitelist (fail-closed); legacy
-  flat-format entries are ignored with a warning.
+  permitted. Missing key -> (strict empty allowlist) fallback, fail-closed;
+  legacy flat-format entries are ignored with a warning.
 
 ## Audit Checklist
 
@@ -43,7 +43,7 @@ Before auditing, confirm the target is a legitimate Working Directory:
 
 The rules file is the root file covered by an `allowlist` `files` entry
 (config-driven, shared with the guard). Read it by its actual name (the
-placeholder below stands for the whitelisted name):
+placeholder below stands for the allowlisted name):
 
 ```bash
 cat "<WORKSPACE_PATH>/<rules-file>"
