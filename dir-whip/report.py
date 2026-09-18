@@ -39,7 +39,7 @@ from .allowlist import (
 )
 
 # Structured allowlist persistence (v2.7 R9): row-level mapping writer.
-from . import config_writer
+from . import allowlist_writer
 
 logger = logging.getLogger("dir-whip")
 
@@ -502,12 +502,12 @@ def _handle_allow(rest):
         else:
             new_dirs.append(d)
             feedback.append("Added to dirs: %s" % d)
-    if len(new_files) + len(new_dirs) > config_writer.MAX_ENTRIES:
+    if len(new_files) + len(new_dirs) > allowlist_writer.MAX_ENTRIES:
         return "[dir-whip] Too many entries: max %d allowlisted items" % (
-            config_writer.MAX_ENTRIES,
+            allowlist_writer.MAX_ENTRIES,
         )
     if any(line.startswith("Added to") for line in feedback):
-        config_writer.write_config(
+        allowlist_writer.write_config(
             {"files": sorted(new_files), "dirs": sorted(new_dirs)}
         )
     return "\n".join(feedback) + "\n\n" + _render_current_state()
@@ -585,7 +585,7 @@ def _handle_remove(rest):
         return "Not in allowlist: %s\n\n%s" % (
             ", ".join(rem_names), _render_current_state(),
         )
-    config_writer.write_config(
+    allowlist_writer.write_config(
         {"files": sorted(new_files), "dirs": sorted(new_dirs)}
     )
     return "\n".join(removed_lines) + "\n\n" + _render_current_state()

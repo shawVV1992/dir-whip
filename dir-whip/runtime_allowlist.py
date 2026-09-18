@@ -1,6 +1,6 @@
 """dir_whip_allow_path entry-gating chain: subagent rejection -> Working Directory root rejection -> outside-root rejection -> two-step user confirmation (spec 5.11 v2.9/v2.11).
 
-Extracted from the __init__.py assembly layer (SCR-045 R4) with its helpers and verbatim message constants; the EXTERNAL rejection message is single-sourced in the core leaf messages.py, and the config add layer (which asserts the same value domain and must not import the assembly layer, ADR-0007) answers identically. Core discipline: no host imports; depends on config / sessions / verdict / events / paths / audit / state, nothing imports this module back (no cycle); the assembly layer keeps the _allow_path_handler thin adapter (fail-open single layer; tests call it directly) and re-exports the five moved names.
+Extracted from the __init__.py assembly layer (SCR-045 R4) with its helpers and verbatim message constants; the EXTERNAL rejection message is single-sourced in the core leaf messages.py, and the config add layer (which asserts the same value domain and must not import the assembly layer, ADR-0007) answers identically. Core discipline: no host imports; depends on config / subagents / guard / events / paths / audit / state, nothing imports this module back (no cycle); the assembly layer keeps the _allow_path_handler thin adapter (fail-open single layer; tests call it directly) and re-exports the five moved names.
 
 Layer: core
 Refs: spec 5.11 v2.9/v2.11, SCR-045 R4, ADR-0007
@@ -11,11 +11,11 @@ Key exports:
 
 import logging
 
-from . import config, sessions, state, verdict
+from . import config, guard, state, subagents
 from .audit import pending_violation_paths
 # Message templates: centralized in the core leaf module messages.py
 # (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
-# allow_path.* call site and test import path unchanged. The EXTERNAL
+# runtime_allowlist.* call site and test import path unchanged. The EXTERNAL
 # rejection message is single-sourced in messages.py -- config.py and
 # this module both import it from there (ADR-0007 direction respected;
 # the former verbatim duplicate pair is gone).
@@ -145,7 +145,7 @@ def handle(args, session_id=None, **kwargs):
     confirm = bool(args.get("confirm")) if isinstance(args, dict) else False
     # R2a: subagents are rejected before any other check (the sanction
     # flows top-down only; parent-guidance variant, 5.11 v2.9).
-    if sessions._is_subagent_session(session_id):
+    if subagents._is_subagent_session(session_id):
         emit(
             "block", "allow-path", RULE_KEY_ALLOW_PATH_SUBAGENT_REJECTED, None,
             "subagent-rejected", session_id, True,
@@ -153,7 +153,7 @@ def handle(args, session_id=None, **kwargs):
         return ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE
     # R2b: the Working Directory root itself is never allowlisted.
     if path:
-        working_dir_root, _ = verdict.resolved_config()
+        working_dir_root, _ = guard.resolved_config()
         if working_dir_root and _is_working_dir_root(path, working_dir_root):
             emit(
                 "block", "allow-path", RULE_KEY_ALLOW_PATH_ROOT_REJECTED, None,
@@ -196,7 +196,7 @@ def handle(args, session_id=None, **kwargs):
     # resolved BEFORE the add call and passed through so the add layer
     # can assert the strict-subtree value domain (None = fail-open,
     # assertion skipped).
-    working_dir_root, _ = verdict.resolved_config()
+    working_dir_root, _ = guard.resolved_config()
     result = config.dir_whip_allow_path(
         args, working_dir_root=working_dir_root, session_id=session_id,
         **kwargs,
@@ -214,6 +214,6 @@ def handle(args, session_id=None, **kwargs):
         emit(
             "allow", "allow-path", RULE_KEY_RUNTIME_ALLOWLIST_ADD, path,
             "runtime allowlist entry added", session_id,
-            sessions._is_subagent_session(session_id),
+            subagents._is_subagent_session(session_id),
         )
     return result

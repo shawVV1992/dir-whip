@@ -60,7 +60,7 @@ command without hand-editing YAML:
 Non-existent paths need --create (confirm-create protocol); outside-root /
 root-itself inputs are rejected with guidance. The full slash surface:
 /dir-whip (merged report), /dir-whip allow, /dir-whip list, /dir-whip
-remove (config_writer does row-level edits preserving comments).
+remove (allowlist_writer does row-level edits preserving comments).
 
 **Profiles**: plugin is per-profile opt-in. After install, verify each
 profile's config (default: HERMES_HOME/config.yaml; named:

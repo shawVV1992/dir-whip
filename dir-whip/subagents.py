@@ -159,7 +159,7 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
 # Public thin aliases (SCR-035 interface convergence point).
 # SCR-052 G6: the former is_child = _is_child_session alias is deleted --
 # _is_subagent_session is the single authoritative name (the cross-module
-# consumers read it as a sessions-module attribute; SCR-050 v3 R6.1 TS-1
+# consumers read it as a subagents-module attribute; SCR-050 v3 R6.1 TS-1
 # bans module-level private imports, attribute access is the sanctioned
 # form).
 register_child = _audit_register_child

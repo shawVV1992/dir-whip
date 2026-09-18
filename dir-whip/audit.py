@@ -1,6 +1,6 @@
 """Root write audit layer: snapshot/diff/classify kernels + pending-violation store + L1 notice + L3 gate + dir_whip_settle settlement (spec 5.18).
 
-Detection backbone: pre/post snapshot pairing, session-scoped pending violations (the L3 latch input), the fire-once L1 result notice, the settlement gate, and the pre_verify continuation nudge; lazily registers dir_whip_settle through state.session.registered_ctx on first notice fire. The classification chain is INJECTED via set_classifier (assembly layer, ADR-0007 inject-don't-import) to break the audit<->verdict cycle; depends on paths/state/events/config/sessions + stdlib only, no host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.12), unified allowlist per spec v2.6 B2.
+Detection backbone: pre/post snapshot pairing, session-scoped pending violations (the L3 latch input), the fire-once L1 result notice, the settlement gate, and the pre_verify continuation nudge; lazily registers dir_whip_settle through state.session.registered_ctx on first notice fire. The classification chain is INJECTED via set_classifier (assembly layer, ADR-0007 inject-don't-import) to break the audit<->guard cycle; depends on paths/state/events/config/subagents + stdlib only, no host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.12), unified allowlist per spec v2.6 B2.
 
 Layer: core+registration-helper
 Refs: spec 5.18, spec v2.6 B2, SCR-035, SCR-040 R4, SCR-045 R6, ADR-0007
@@ -64,9 +64,9 @@ from .paths import (
     within_working_dir,
 )
 
-from . import sessions
+from . import subagents
 
-from .sessions import (
+from .subagents import (
     owner_session,
     record_top_session,
 )
@@ -193,7 +193,7 @@ def _audit_now():
 
 
 # SCR-052 R1: the former _audit_owner_session thin delegate (a call-site
-# preservation shim for sessions.owner_session, SCR-044 R3) is inlined --
+# preservation shim for subagents.owner_session, SCR-044 R3) is inlined --
 # owner resolution is called directly as owner_session(session_id).
 
 
@@ -375,7 +375,7 @@ def transform_tool_result(tool_name=None, args=None, result=None,
         # (transform fires before post_tool_call for terminal). Safe even if
         # the command was blocked-at-pre (no snapshot -> early return).
         audit_post_check(
-            session_id, task_id, is_subagent=sessions._is_subagent_session(session_id),
+            session_id, task_id, is_subagent=subagents._is_subagent_session(session_id),
         )
         if not isinstance(result, str):
             return None
@@ -696,7 +696,7 @@ def settle_paths(session_id, paths):
     a move error leaves the latch latched.
     """
     try:
-        if session_id and sessions._is_subagent_session(session_id):
+        if session_id and subagents._is_subagent_session(session_id):
             _record_settle_rejected("subagent-rejected", is_subagent=True)
             return {"error": "subagent sessions cannot settle; report the "
                              "pending path(s) to the parent agent"}
@@ -787,7 +787,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
     try:
         if not changed_paths:
             return None
-        if session_id and sessions._is_subagent_session(session_id):
+        if session_id and subagents._is_subagent_session(session_id):
             return None
         unresolved = pending_violation_paths(session_id)
         if not unresolved:

@@ -1,6 +1,6 @@
 """Session-start orchestration deep module: session_start(session_id, ctx) -- reminder lifecycle + R2 cwd conditional injection + R7 project exemption + discipline predicates + orphan-scan dispatch (spec 5.4, spec 5.17).
 
-SCR-050 v3 R6.2 (spec 5.1 v2.19): the decision chain moved VERBATIM from the __init__.py assembly layer (on_start was a fat adapter); the assembly hook adapters are now thin fail-open dispatches. Fail-open posture inherited: session_start itself never catches top-level (the adapter does); the inline cwd/project probe guards moved unchanged. Depends on verdict ONLY for reset_fail_open_flag / resolved_config (one-way; verdict never imports lifecycle at module level -- its same-name predicate aliases are lazy delegation stubs, state.py cycle-break precedent).
+SCR-050 v3 R6.2 (spec 5.1 v2.19): the decision chain moved VERBATIM from the __init__.py assembly layer (on_start was a fat adapter); the assembly hook adapters are now thin fail-open dispatches. Fail-open posture inherited: session_start itself never catches top-level (the adapter does); the inline cwd/project probe guards moved unchanged. Depends on guard ONLY for reset_fail_open_flag / resolved_config (one-way; guard never imports session_start at module level -- its same-name predicate aliases are lazy delegation stubs, state.py cycle-break precedent).
 
 Layer: core
 Refs: spec 5.4, spec 5.17, SCR-027, SCR-039, SCR-040, SCR-041, SCR-044, SCR-048, SCR-050
@@ -15,7 +15,7 @@ import datetime
 import json
 import logging
 
-from . import audit, config, events, sessions, session_dirs, state, stats
+from . import audit, config, events, subagents, session_dirs, state, stats
 
 from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
@@ -23,10 +23,10 @@ from .messages import DISCIPLINE_BLOCK_MESSAGE
 
 from .paths import within_working_dir
 
-# One-way lifecycle -> verdict edge (spec 5.1 v2.19 dependency figure):
+# One-way session_start -> guard edge (spec 5.1 v2.19 dependency figure):
 # only the fail-open latch reset and the cached (root, allowlist) reader
-# are consumed here; verdict imports nothing from this module.
-from . import verdict
+# are consumed here; guard imports nothing from this module.
+from . import guard
 
 logger = logging.getLogger("dir-whip")
 
@@ -42,7 +42,7 @@ def _record_session_reminder(session_id, status):
     surface stays at 7). Fail-open: events.emit never raises."""
     events.emit(
         "allow", "session", RULE_KEY_SESSION_REMINDER, None,
-        status, session_id, sessions._is_subagent_session(session_id),
+        status, session_id, subagents._is_subagent_session(session_id),
     )
 
 
@@ -135,7 +135,7 @@ def _append_reminder_fallback(audited_result, original_result, session_id):
     try:
         if not state.session.reminder_pending_fallback:
             return audited_result
-        if sessions._is_subagent_session(session_id):
+        if subagents._is_subagent_session(session_id):
             return audited_result
         text = (
             audited_result if isinstance(audited_result, str)
@@ -201,7 +201,7 @@ def session_start(session_id, ctx):
     degrade: inject_message unavailable or falsy -> DEBUG log, no crash.
     Fail-open: the assembly adapter catches any top-level error (5.8).
     """
-    if sessions._is_subagent_session(session_id):
+    if subagents._is_subagent_session(session_id):
         state.session.reminder_status = "skipped-child"
         # 5.13 v2.8: the five-state stats outlet covers skipped-child
         # too (the report Reminder line is removed in v2.8).
@@ -225,7 +225,7 @@ def session_start(session_id, ctx):
     # allowlist lifecycle -- cleared at every top-level session start.
     with state.session.lock:
         state.session.confirmation_issued.clear()
-    verdict.reset_fail_open_flag()
+    guard.reset_fail_open_flag()
     profile = getattr(ctx, "profile_name", None) if ctx else None
     # SCR-027: session-scoped resolution — re-resolve working_dir_root
     # from THIS session's profile (child sessions skip and inherit).
@@ -275,7 +275,7 @@ def session_start(session_id, ctx):
                         active_id,
                     )
                     return
-    working_dir_root, allowlist = verdict.resolved_config()
+    working_dir_root, allowlist = guard.resolved_config()
     if not discipline_applies(cwd, working_dir_root):
         state.session.reminder_status = "skipped-outside"
         _record_session_reminder(session_id, "skipped-outside")

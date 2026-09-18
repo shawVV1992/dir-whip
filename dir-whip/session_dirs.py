@@ -1,6 +1,6 @@
 """Per-session unique Session Directory lifecycle: claims / pending binding / orphan scan + persistent claims sidecar (SCR-044 R5, SCR-048 R1, spec 5.19).
 
-Pure decision layer (imports state / sessions / config / paths / events / terminal only, NEVER audit or verdict; no host imports, ADR-0007): one Session Directory per conversation -- claims maps the owner session (sessions.owner_session: subagent -> parent attribution) to the bound root-relative first segment (Windows casefold), pending_create marks a script creation in flight; a session-dir ALLOW whose first segment does not exist binds, a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), a write into an existing dir passes unbound (creation-count semantics, BND-5), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. Claims are write-through mirrored to session-claims.json in the profile-independent default dir-whip home (atomic tmp+replace, fail-open, 64-entry ts-LRU) and restored at register() for CLR-1 resume; every top-level session start clears except a restored live claim, state.reset_all clears the file too (CLR-2).
+Pure decision layer (imports state / subagents / config / paths / events / terminal only, NEVER audit or guard; no host imports, ADR-0007): one Session Directory per conversation -- claims maps the owner session (subagents.owner_session: subagent -> parent attribution) to the bound root-relative first segment (Windows casefold), pending_create marks a script creation in flight; a session-dir ALLOW whose first segment does not exist binds, a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), a write into an existing dir passes unbound (creation-count semantics, BND-5), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. Claims are write-through mirrored to session-claims.json in the profile-independent default dir-whip home (atomic tmp+replace, fail-open, 64-entry ts-LRU) and restored at register() for CLR-1 resume; every top-level session start clears except a restored live claim, state.reset_all clears the file too (CLR-2).
 
 Layer: core
 Refs: spec 5.19, SCR-044 R5, SCR-044 R6, SCR-044 R7, SCR-048 R1, SCR-048 R2, ADR-0006, ADR-0007, ADR-0015
@@ -41,7 +41,7 @@ from .messages import (
 
 from .paths import dirwhip_home, is_absolute_any, paths_equal
 
-from .sessions import owner_session
+from .subagents import owner_session
 
 from .terminal import is_session_dir_script, terminal_cp_mv_src
 
@@ -352,7 +352,7 @@ def is_creation_signal(target, working_dir_root, verdict=None):
     parent creation and terminal touch/redirect alike).
 
     verdict is the caller-held classify-chain result for the target (the
-    shared-chain dict guard_create receives from verdict._evaluate_target);
+    shared-chain dict guard_create receives from guard._evaluate_target);
     the T3 ALLOW half reads it -- re-running the chain here would need the
     allowlist guard_create does not carry and could diverge from the real
     verdict. verdict=None falls back to the config-kernel compliant-name
@@ -440,7 +440,7 @@ def script_invocation_line(task, working_dir_root):
 
 # Classification chain, injected by the assembly layer (SCR-044 R7;
 # ADR-0007 inject-don't-import, mirroring audit.set_classifier -- the
-# verdict module imports this one, so a static verdict import is a
+# guard module imports this one, so a static guard import is a
 # cycle). Unwired -> scan_orphans fails open to None
 # (production-unreachable: register() wires before any hook runs).
 _classify_fn = None
@@ -526,7 +526,7 @@ def scan_orphans(working_dir_root, allowlist=None):
 def guard_create(verdict, normalized, working_dir_root, session_id=None,
                  is_subagent=False, tool_name=None, target=None, tokens=None):
     """Session-dir creation gate (spec 5.19) -- the SINGLE enforcement
-    point, mounted in verdict._evaluate_target right after classify.
+    point, mounted in guard._evaluate_target right after classify.
 
     A no-op (returns None) for every verdict whose rule_key is not
     session-dir: T1 runtime / T2 config allowlist allows are exempt by
@@ -600,7 +600,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
 def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
                  tool_name="terminal"):
     """Session-dir creation SCRIPT gate (spec 5.19), consulted by
-    verdict._guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
+    guard._guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
     the heredoc form stays gated).
 
     is_session_dir_script(tokens) False -> None (no interference). A

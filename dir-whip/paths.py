@@ -264,7 +264,7 @@ def dirwhip_home(profile=None):
 def config_file_path():
     """The profile-aware dir-whip-config.yaml location (SCR-052 R1 single
     source; merges the former config._get_guard_config_path and
-    config_writer._get_config_path).
+    allowlist_writer._get_config_path).
 
     Resolution (superset of the two merged chains; in production the
     registered ctx and the report command ctx are the same object):

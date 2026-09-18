@@ -2,8 +2,8 @@
 
 Core leaf module (spec 5.20, SCR-047 R1): the static runtime message
 constants/templates of the A/B/C/D families live here, moved
-byte-identical from their original modules (verdict / session_dirs /
-audit / allow_path / config); ZERO intra-package imports (no imports at
+byte-identical from their original modules (guard / session_dirs /
+audit / runtime_allowlist / config); ZERO intra-package imports (no imports at
 all), so every core module (config.py included, ADR-0007 dependency
 direction) can import it safely, with no cycle. Dynamic builders
 (script_invocation_line, _block_message, _settle_instruction,
@@ -27,7 +27,7 @@ Key exports:
   - ALLOW_PATH_* / RUNTIME_ALLOWLIST_ADDED_TEMPLATE -- dir_whip_allow_path tool schema, entry-gating messages (spec 5.11), add feedback.
 """
 
-# ---------------------------------------------------------------- verdict.py (session injections + block skeleton)
+# ---------------------------------------------------------------- guard module (session injections + block skeleton)
 
 # Spec 5.12 (term-updated): injected once per session when the guard is
 # disabled because working_dir_root could not be resolved.
@@ -67,7 +67,7 @@ DISCIPLINE_BLOCK_MESSAGE = (
 # template definition lived only in the opt-in SKILL.md, so models that
 # had not loaded the skill never saw it). The dynamic assembly (Target
 # line, shared script invocation line, orphan move line, fragment
-# joining) stays in verdict._block_message.
+# joining) stays in guard._block_message.
 BLOCK_MESSAGE_HEADER_LINE = (
     "BLOCKED: File writes in the Working Directory require a Session "
     "Directory or an allowed root file."
@@ -130,7 +130,7 @@ BLOCK_MESSAGE_SUBAGENT_NEXT_LINE = (
 # Spec 5.19 limit messages (v2.15 rewrite: unified block skeleton with
 # the INLINED [Reason]/[Next] tail, spec 5.20). <root>/<claim> are
 # substituted at build time (forward-slash rendering, same message
-# convention as verdict).
+# convention as guard).
 SESSION_DIR_LIMIT_BLOCK_MESSAGE = (
     "BLOCKED: One Session Directory per conversation.\n"
     "This conversation already uses: %(root)s/%(claim)s\n"
@@ -142,7 +142,7 @@ SESSION_DIR_LIMIT_BLOCK_MESSAGE = (
     "to %(claim)s/.tmp/) instead of creating another Session Directory."
 )
 
-# Subagent variant (verdict subagent block-message convention): the
+# Subagent variant (guard subagent block-message convention): the
 # escape lines are replaced by the parent-target guidance -- subagents
 # never create session directories nor hold allow_path sanctions; the
 # inline tail keeps the report-to-parent [Next].
@@ -292,10 +292,10 @@ SETTLE_TOOL_PATHS_DESCRIPTION = (
     "Directory root tolerated)"
 )
 
-# ---------------------------------------------------------------- allow_path.py (tool schema + entry-gating messages)
+# ---------------------------------------------------------------- runtime_allowlist.py (tool schema + entry-gating messages)
 
 # dir_whip_allow_path tool schema description texts (the schema dict
-# itself stays in allow_path.py, OpenAI function-call format).
+# itself stays in runtime_allowlist.py, OpenAI function-call format).
 ALLOW_PATH_TOOL_DESCRIPTION = (
     "Add an absolute path to the dir-whip runtime allowlist so "
     "file operations under that path are exempt for this session (Tier 0). "
@@ -355,7 +355,7 @@ ALLOW_PATH_LATCH_CONTEXT_LINE = (
 
 # SCR-043 R3 (spec 5.11 v2.11) add-layer rejection messages.
 # SINGLE SOURCE (SCR-047 R1, ADR-0007 direction respected): config.py and
-# allow_path.py both import this constant from here -- the former
+# runtime_allowlist.py both import this constant from here -- the former
 # verbatim duplicate pair is gone.
 ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE = (
     "[dir-whip] BLOCKED: the path is outside the Working Directory; no allowlist\n"

@@ -272,11 +272,11 @@ def is_allowlist_dir(path, working_dir_root, parsed):
     return False
 
 
-# ---------------------------------------------------------------- Supplemental helpers (for config_writer / report)
+# ---------------------------------------------------------------- Supplemental helpers (for allowlist_writer / report)
 
 
 def validate_file_entry(name):
-    """Public wrapper for file validation (config_writer contract).
+    """Public wrapper for file validation (allowlist_writer contract).
 
     Returns (ok, reason).
     """

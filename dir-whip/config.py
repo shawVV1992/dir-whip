@@ -42,7 +42,7 @@ from . import state, stats
 # rejection message is single-sourced there -- config.py must not import
 # the assembly layer (ADR-0007 direction), and messages.py being a leaf
 # makes it safely importable here (the former verbatim duplicate in
-# allow_path.py is gone).
+# runtime_allowlist.py is gone).
 from .messages import (
     ALLOW_PATH_EMPTY_REJECTED_MESSAGE,
     ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
@@ -94,7 +94,7 @@ def _parse_allowlist(value):
     """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
 
     Parsing/validation moved to allowlist.parse_allowlist at the
-    consumption points (verdict/audit/report). Keeping the RAW value
+    consumption points (guard/audit/report). Keeping the RAW value
     (structured mapping dict, legacy flat list, or []) preserves the
     loaded-value contract while legacy flat lists stay visible for the
     clean-break hint. Non-list/dict scalars -> [].
@@ -286,7 +286,7 @@ from .paths import SESSION_DIR_RE, is_inside_session_dir  # noqa: F401
 # SCR-043 R3 (spec 5.11 v2.11) add-layer rejection messages live in
 # messages.py (spec 5.20, SCR-047 R1); the same-name imports above are
 # the aliases. The outside-root text is single-sourced there so the
-# handler layer (allow_path.py) and this add layer answer identically
+# handler layer (runtime_allowlist.py) and this add layer answer identically
 # without a verbatim duplicate (ADR-0007 dependency direction kept:
 # config imports the leaf, never the assembly layer).
 
@@ -308,7 +308,7 @@ def runtime_allowlist_add(path, working_dir_root=None):
     path). When working_dir_root is injected (non-None), the path is
     asserted to be inside the root via paths.within_working_dir (the
     same implementation as the classify chain; config never imports
-    verdict, ADR-0007) -- an outside-root path is NOT stored and the
+    guard, ADR-0007) -- an outside-root path is NOT stored and the
     rejection message is returned. working_dir_root=None (existing
     direct-call/test form) skips the assertion, behavior unchanged.
     """
@@ -440,7 +440,7 @@ def ensure_session_root():
     """Explicitly seed the config cache + session root (SCR-045 R2).
 
     The observation adapters (on_post_tool_call / on_pre_command) used
-    to call verdict.resolved_config() and discard the value; the actual
+    to call guard.resolved_config() and discard the value; the actual
     purpose was get_cached_config's seeding side effect (cache warm-up,
     registered_ctx capture, session-root seed). Same semantics, explicit
     intent. Fail-open: any error -> None (never raises).
@@ -506,7 +506,7 @@ profile_config_path = _profile_config_path
 
 # SCR-050 v3 R6.1: declared public surface (AC-9, spec 5.1 v2.19).
 # R6.3: is_inside_session_dir + SESSION_DIR_RE homed in paths.py; the
-# same-name re-export entries below stay (config/session_dirs/verdict
+# same-name re-export entries below stay (config/session_dirs/guard
 # consumer + test import paths unchanged).
 __all__ = [
     "get_cached_config",

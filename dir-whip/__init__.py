@@ -1,6 +1,6 @@
 """dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (SCR-035, ADR-0007).
 
-Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally. SCR-050 v3 R6.2 (spec 5.1 v2.19): every hook adapter is a THIN dispatch -- the session-start decision chain lives in lifecycle.py, the guard chain in verdict.py, the observers in sessions/audit/events.
+Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally. SCR-050 v3 R6.2 (spec 5.1 v2.19): every hook adapter is a THIN dispatch -- the session-start decision chain lives in session_start.py, the guard chain in dirwhip.guard, the observers in subagents/audit/events.
 
 Layer: assembly
 Refs: spec 3.1, spec 5.4, spec 5.7, spec 5.8, spec 5.11, spec 5.13, spec 5.14, spec 5.15, spec 5.17, spec 5.18, spec 5.19, SCR-035, SCR-039, SCR-040, SCR-041, SCR-044, SCR-045, SCR-048, SCR-050, ADR-0007
@@ -39,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allow_path, audit, config, events, lifecycle, logsetup, report, sessions, session_dirs, state, stats, verdict
+from . import allowlist_writer, audit, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -48,13 +48,13 @@ from .events import (
 
 logger = logging.getLogger("dir-whip")
 
-# Spec 5.11 allow_path surface (SCR-045 R4): the entry-gating chain, its
-# helpers and the five message/schema constants live in the core module
-# allow_path.py; re-exported here so historical import paths (tests read
-# dirwhip.ALLOW_PATH_*) stay identical. The EXTERNAL rejection message is
-# single-sourced in config.py (PB-2: config must not import the assembly
+# Spec 5.11 runtime allowlist surface (SCR-045 R4): the entry-gating chain,
+# its helpers and the five message/schema constants live in the core module
+# runtime_allowlist.py; re-exported here so historical import paths (tests
+# read dirwhip.ALLOW_PATH_*) stay identical. The EXTERNAL rejection message
+# is single-sourced in config.py (PB-2: config must not import the assembly
 # layer, ADR-0007 direction; both layers answer identically).
-from .allow_path import (
+from .runtime_allowlist import (
     ALLOW_PATH_TOOL_SCHEMA,
     ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,
     ALLOW_PATH_ROOT_REJECTED_MESSAGE,
@@ -139,11 +139,11 @@ def register(ctx):
         state.session.plugin_version = report.plugin_version()
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
-        audit.set_classifier(verdict.classify_target)
+        audit.set_classifier(guard.classify_target)
         # SCR-044 R7: the orphan-scan classifier is wired the same way
         # (ADR-0007 inject-don't-import; session_dirs never imports
-        # verdict).
-        session_dirs.set_classifier(verdict.classify_target)
+        # guard).
+        session_dirs.set_classifier(guard.classify_target)
         # SCR-048 R1 (spec 5.19): restore the write-through claims store
         # BEFORE any hook can fire, so a host restart re-arms the
         # per-session slot (fail-open inside load_claims; validation
@@ -238,7 +238,7 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
             # Lock-held check-and-set (SCR-048 R6 follow-up): the outer
             # unlocked read is only a fast path.
             stats.stats_backfill_session(session_id)
-        return verdict.guard(tool_name, args, task_id, **kwargs)
+        return guard.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
         return None
@@ -251,11 +251,11 @@ def on_start(session_id, model=None, platform=None, **kwargs):
     (child short-circuit, state resets, SCR-027 profile re-resolution,
     R2 cwd conditional injection, R7 project exemption, reminder
     lifecycle, advisory orphan scan) lives in the core module
-    lifecycle.py; this adapter only dispatches and swallows failures
+    session_start.py; this adapter only dispatches and swallows failures
     (5.8 fail-open single layer).
     """
     try:
-        lifecycle.session_start(session_id, state.session.registered_ctx)
+        session_start.session_start(session_id, state.session.registered_ctx)
     except Exception as exc:
         logger.debug("dir-whip: session start hook error: %s", exc)
 
@@ -273,19 +273,19 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
         # Seed the config cache / session root (SCR-045 R2: explicit
         # side-effect call; the resolved values are not needed here).
         config.ensure_session_root()
-        targets = verdict.extract_target_paths(tool_name, args) if isinstance(args, dict) else []
+        targets = guard.extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
         # 5.18: terminal re-scan -> diff -> violation classification. Runs
         # alongside (never instead of) the landed: observation below; a
         # blocked-at-pre call has no pre snapshot and skips here.
         if tool_name == "terminal":
             audit.audit_post_check(
-                session_id, task_id, is_subagent=sessions._is_subagent_session(session_id),
+                session_id, task_id, is_subagent=subagents._is_subagent_session(session_id),
             )
         events.emit(
             "allow", tool_name, "landed:" + str(tool_name), target,
             "write tool call completed (status: %s)" % (status or "ok"),
-            session_id, sessions._is_subagent_session(session_id),
+            session_id, subagents._is_subagent_session(session_id),
         )
     except Exception as exc:
         logger.debug("dir-whip: post_tool_call hook error: %s", exc)
@@ -301,7 +301,7 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
     local hermes-agent payloads). Privacy: no command/description text.
     """
     try:
-        granted = verdict.approval_granted(choice)
+        granted = guard.approval_granted(choice)
         rule_key = (
             RULE_KEY_APPROVAL_GRANTED if granted
             else RULE_KEY_APPROVAL_DENIED
@@ -355,9 +355,9 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
 def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
                       parent_session_id=None, parent_turn_id=None,
                       parent_subagent_id=None, child_subagent_id=None, **kwargs):
-    """subagent_start hook adapter (5.4): dispatch to sessions."""
+    """subagent_start hook adapter (5.4): dispatch to subagents."""
     try:
-        return sessions.subagent_start(
+        return subagents.subagent_start(
             child_session_id, child_role, child_goal,
             parent_session_id, parent_turn_id,
             parent_subagent_id, child_subagent_id, **kwargs,
@@ -370,9 +370,9 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
 def on_subagent_stop(child_session_id=None, child_subagent_id=None,
                      child_role=None, child_status=None, duration_ms=None,
                      **kwargs):
-    """subagent_stop hook adapter (5.4): dispatch to sessions."""
+    """subagent_stop hook adapter (5.4): dispatch to subagents."""
     try:
-        return sessions.subagent_stop(
+        return subagents.subagent_stop(
             child_session_id, child_subagent_id,
             child_role, child_status, duration_ms, **kwargs,
         )
@@ -386,14 +386,14 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
     """transform_tool_result hook adapter (5.18 L1 notice + 5.17 fallback).
 
     SCR-050 v3 R6.2: dispatches to audit first; then applies the one-shot
-    REMINDER fallback note (lifecycle.append_reminder_fallback) to the
+    REMINDER fallback note (session_start.append_reminder_fallback) to the
     (possibly audit-adjusted) string result when an unavailable session
     start armed it."""
     try:
         adjusted = audit.transform_tool_result(
             tool_name, args, result, session_id, task_id, **kwargs,
         )
-        return lifecycle.append_reminder_fallback(
+        return session_start.append_reminder_fallback(
             adjusted, result, session_id
         )
     except Exception as exc:
@@ -416,16 +416,16 @@ def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
 
 
 def _allow_path_handler(args, **kwargs):
-    """Thin adapter over allow_path.handle (SCR-045 R4).
+    """Thin adapter over runtime_allowlist.handle (SCR-045 R4).
 
     The entry-gating chain (subagent -> root -> outside-root rejection,
     two-step confirmation, confirmed add) moved to the core module
-    allow_path.py. This historical name stays because tests call it
+    runtime_allowlist.py. This historical name stays because tests call it
     directly (11 sites) and register() hands it to ctx.register_tool.
     The fail-open single layer lives here (handle itself never catches).
     """
     try:
-        return allow_path.handle(args, **kwargs)
+        return runtime_allowlist.handle(args, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: allow_path handler error (fail-open): %s", exc)
         return None

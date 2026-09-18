@@ -72,7 +72,7 @@ class _SessionDirState:
     persistence sidecar per claim (root / dir / profile / ts plus the
     internal restored-at-register flag, SCR-048 R1) so the write-through
     store rebuilds correct entries. Owner resolution goes through
-    sessions.owner_session (subagent -> parent attribution, mirroring the
+    subagents.owner_session (subagent -> parent attribution, mirroring the
     audit pending propagation). Cleared at every top-level session start
     (CLR-1 resume exception: a restored claim whose dir is still on disk
     is kept) and by reset_all (CLR-2, which also clears the persistent

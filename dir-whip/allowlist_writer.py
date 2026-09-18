@@ -194,10 +194,10 @@ def write_config(mapping):
 
 
 def _refresh_cache():
-    """Narrow cache refresh so next verdict.classify_target sees new allowlist.
+    """Narrow cache refresh so next guard.classify_target sees new allowlist.
 
     The allowlist is read via load_guard_config() each time (no cache in
-    config_writer itself, but config.py caches via get_cached_config), so
+    allowlist_writer itself, but config.py caches via get_cached_config), so
     a narrow refresh is required. This hook calls config._refresh_allowlist_cache.
     """
     try:

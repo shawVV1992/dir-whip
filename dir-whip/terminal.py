@@ -429,7 +429,7 @@ def is_device_path(target):
 
     SCR-050 v3 R6.1: public predicate over the frozen _DEVICE_PATHS set
     (deep-module preference: hide the data, expose the judgment; the
-    cross-module consumer verdict.py must not reach the private set).
+    cross-module consumer (guard) must not reach the private set).
     """
     return target in _DEVICE_PATHS
 
