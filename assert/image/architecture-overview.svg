@@ -82,7 +82,7 @@
 
   <rect x="560" y="410" width="240" height="76" rx="10" fill="url(#blueGrad)" stroke="#79c0ff" stroke-width="1.5" filter="url(#soft)"/>
   <text x="680" y="440" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="700" fill="#e6edf3">兜底工具</text>
-  <text x="680" y="463" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">allow_path · settle · /dir-whip</text>
+  <text x="680" y="458" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#8b949e">dir_whip_allow_path<tspan x="680" dy="15">dir_whip_settle · /dir-whip</tspan></text>
 
   <rect x="560" y="496" width="240" height="40" rx="10" fill="url(#slateGrad)" stroke="#8b949e" stroke-width="1.5" filter="url(#soft)"/>
   <text x="680" y="516" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="700" fill="#8b949e">会话开始孤儿扫描 · 只劝不拦</text>

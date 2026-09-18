@@ -198,7 +198,7 @@ false passes, never false blocks**:
 One Session Directory per conversation: the first creation binds the
 conversation to that directory, and a second creation attempt is blocked
 (`session-dir-limit`); writes into already-existing Session Directories and
-user `allow_path` registrations stay exempt.
+user `dir_whip_allow_path` registrations stay exempt.
 
 **Audit layer (backstop, four-level ladder)** — observes only what allowed
 terminal commands actually landed:
