@@ -1,9 +1,9 @@
 """Per-session unique Session Directory gates: creation gating + advisory orphan scan + script message builders (SCR-044 R5/R6/R7, spec 5.19; the claim store split out to claims.py at SCR-055 R5).
 
-Enforcement side of one Session Directory per conversation: a session-dir ALLOW whose first segment does not exist binds through claims.bind (creation signal), a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. The claim store itself (bind/rebind/heal/read + persistence + lifecycle) lives in claims.py (dependency direction: session_dirs -> claims only); this module never imports the guard module or audit. Pure decision layer: state / claims / events / messages / paths / terminal only, no host imports (ADR-0007).
+Enforcement side of one Session Directory per conversation: a session-dir ALLOW whose first segment does not exist binds through claims.bind (creation signal), a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. The claim store itself (bind/rebind/heal/read + persistence + lifecycle) lives in claims.py (dependency direction: session_dirs -> claims only); this module never imports the guard module or audit. Pure decision layer: state / claims / events / messages / paths, plus the SCR-055 R7 function-local terminal_guard predicate imports (is_session_dir_script / terminal_cp_mv_src -- cycle break, terminal_guard statically consumes guard_script / guard_create); no host imports (ADR-0007).
 
 Layer: core
-Refs: spec 5.19, SCR-044 R5, SCR-044 R6, SCR-044 R7, SCR-048 R1, SCR-048 R2, SCR-055 R5, ADR-0006, ADR-0007, ADR-0015
+Refs: spec 5.19, SCR-044 R5, SCR-044 R6, SCR-044 R7, SCR-048 R1, SCR-048 R2, SCR-055 R5, SCR-055 R7, ADR-0006, ADR-0007, ADR-0015
 Key exports:
   - guard_create -- session-dir creation gate: bind / mv-transfer / session-dir-limit block (single enforcement point).
   - guard_script -- create_session_dir.py script gate: arm the pending marker or block.
@@ -38,8 +38,6 @@ from .messages import (
 )
 
 from .paths import is_absolute_any
-
-from .terminal import is_session_dir_script, terminal_cp_mv_src
 
 logger = logging.getLogger("dir-whip")
 
@@ -311,6 +309,10 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
                 bind(owner, first_seg, working_dir_root)
             return None
         if tokens and target is not None:
+            # SCR-055 R7: function-local import = documented cycle break
+            # (the terminal predicate family lives in terminal_guard,
+            # which statically consumes this gate surface).
+            from .terminal_guard import terminal_cp_mv_src
             src = terminal_cp_mv_src(tokens, target)
             if src is not None and same_name(
                 _token_first_segment(src, working_dir_root), claim
@@ -343,6 +345,10 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
     OB-5).
     """
     try:
+        # SCR-055 R7: function-local import = documented cycle break (the
+        # terminal predicate family lives in terminal_guard, which
+        # statically consumes this gate surface).
+        from .terminal_guard import is_session_dir_script
         if not is_session_dir_script(tokens):
             return None
         owner = owner_of(session_id)

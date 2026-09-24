@@ -1,24 +1,19 @@
-"""Configuration loading, working_dir_root resolution and runtime allowlist -- the dir-whip config layer (spec 5.5).
+"""Configuration loading, working_dir_root resolution and the config cache -- the dir-whip config layer (spec 5.5).
 
-Inverted resolution chain: dir-whip-config.yaml working_dir_root override (authoritative) -> current profile terminal.cwd -> fail-open, guard disabled (v0.1.0 memo chain removed, spec 1.3/B4), with the HERMES_HOME env override ahead of the platform default (D5); the guarded plugins.plugin_utils.lazy_singleton import degrades to a local lock-guarded cache when absent. Single unified ``allowlist:`` key, strict empty fallback, no backward compat for deleted exempt_paths / allowed_root_files (spec v2.6 B2): the structured ``{files, dirs}`` mapping (RAW passthrough of legacy flat lists too) supersedes the v2.6 file:<basename> / prefix:<abs-path> tagged form; sole surviving tool is dir_whip_allow_path (spec 5.7).
+Inverted resolution chain: dir-whip-config.yaml working_dir_root override (authoritative) -> current profile terminal.cwd -> fail-open, guard disabled (v0.1.0 memo chain removed, spec 1.3/B4), with the HERMES_HOME env override ahead of the platform default (D5); the guarded plugins.plugin_utils.lazy_singleton import degrades to a local lock-guarded cache when absent. Single unified ``allowlist:`` key, strict empty fallback, no backward compat for deleted exempt_paths / allowed_root_files (spec v2.6 B2): the structured ``{files, dirs}`` mapping (RAW passthrough of legacy flat lists too) supersedes the v2.6 file:<basename> / prefix:<abs-path> tagged form. SCR-055 R7: the runtime-allowlist operation family moved to runtime_allowlist.py (its complete home, spec 5.7/5.11); the resolution chain, the raw-allowlist loader and the config cache stay here.
 
 Layer: core+host-guarded
-Refs: spec 1.3/B4, spec 5.5, spec 5.7, spec v2.6 B2, SCR-050
+Refs: spec 1.3/B4, spec 5.5, spec 5.7, spec v2.6 B2, SCR-050, SCR-055 R7
 Key exports:
   - get_cached_config -- cached (working_dir_root, allowlist); seeds the session root.
   - resolve_working_dir_root -- the inverted 3-step chain; None = guard disabled (fail-open).
   - refresh_resolution -- re-resolve for the session's profile at on_session_start.
   - load_guard_config -- load dir-whip-config.yaml (working_dir_root + raw allowlist).
-  - runtime_allowlist_add -- add a path to the process-lifetime runtime allowlist.
-  - is_runtime_allowlisted -- segment-boundary runtime allowlist check (case-insensitive).
+  - invalidate_config_cache -- narrow cache invalidation for the runtime-allowlist refresh (SCR-055 R7).
   - ensure_session_root / reset_cache / set_session_profile -- cache+session seeding/lifecycle (SCR-045 R2 / SCR-027).
 """
 
-import datetime
-import json
 import logging
-import os
-import re
 import threading
 from pathlib import Path
 
@@ -36,41 +31,31 @@ except ImportError:
 
 from . import state, stats
 
+# SCR-055 R7: the raw-allowlist passthrough is homed in allowlist.py
+# (allowlist semantics home).
+from .allowlist import parse_allowlist_raw
+
 # Message templates: centralized in the core leaf module messages.py
-# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
-# config.* call site and test import path unchanged. The EXTERNAL
-# rejection message is single-sourced there -- config.py must not import
-# the assembly layer (ADR-0007 direction), and messages.py being a leaf
-# makes it safely importable here (the former verbatim duplicate in
-# runtime_allowlist.py is gone).
+# (spec 5.20, SCR-047 R1, ADR-0014); these same-name aliases keep the
+# historical config.* / test import surface (MS-2 pinned). The
+# runtime-allowlist add layer now imports them from messages.py directly.
 from .messages import (
     ALLOW_PATH_EMPTY_REJECTED_MESSAGE,
     ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
     RUNTIME_ALLOWLIST_ADDED_TEMPLATE,
 )
 
-from .paths import (
-    config_file_path,
-    get_hermes_home,
-    normalize_target,
-    relativize_target,
-    within_working_dir,
-)
+from .paths import config_file_path, get_hermes_home
 
 _cache_lock = threading.Lock()
 _cached_result = None
 _cache_initialized = False
 
-_runtime_allowlist = set()
-_runtime_allowlist_lock = threading.Lock()
-
 # SCR-027 session-scoped resolution: a desktop process registers under the
 # ACTIVE profile but later sessions can be a DIFFERENT profile, so the
 # working_dir_root is re-resolved per top-level session at on_session_start
-# (single-threaded session loop assumption, same as stats). The session
-# root starts as the register-time value and is REPLACED by
-# refresh_resolution (including None on fail-open — a stale value is never
-# kept). All of this lives in state.session (see state.py).
+# (single-threaded session loop assumption, same as stats); the register-time
+# value is REPLACED, never kept stale. All of this lives in state.session.
 
 
 def parse_terminal_cwd(config_path):
@@ -90,20 +75,6 @@ def parse_terminal_cwd(config_path):
     return None
 
 
-def _parse_allowlist(value):
-    """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
-
-    Parsing/validation moved to allowlist.parse_allowlist at the
-    consumption points (guard/audit/report). Keeping the RAW value
-    (structured mapping dict, legacy flat list, or []) preserves the
-    loaded-value contract while legacy flat lists stay visible for the
-    clean-break hint. Non-list/dict scalars -> [].
-    """
-    if isinstance(value, (list, dict)):
-        return value
-    return []
-
-
 def load_guard_config(config_path=None):
     """Load dir-whip-config.yaml exemptions and overrides.
 
@@ -112,7 +83,7 @@ def load_guard_config(config_path=None):
     is absent or not a list/dict) and optionally 'working_dir_root'
     (str). v2.8 BREAKING (R7 three-key de-configuration): terminal_guard
     / write_audit / write_audit_entry_cap (and the reserved
-    write_audit_autofix) are NO LONGER read — behavior is internally
+    write_audit_autofix) are NO LONGER read -- behavior is internally
     constant (terminal interception and the write audit are always on;
     the entry guardrail is audit.WRITE_AUDIT_ENTRY_CAP) and leftover
     occurrences of these keys in runtime configs are COMPLETELY ignored
@@ -140,7 +111,7 @@ def load_guard_config(config_path=None):
         if data and isinstance(data, dict):
             if data.get("working_dir_root"):
                 result["working_dir_root"] = data["working_dir_root"]
-            result["allowlist"] = _parse_allowlist(data.get("allowlist"))
+            result["allowlist"] = parse_allowlist_raw(data.get("allowlist"))
     except Exception as exc:
         logger.debug("dir-whip: failed to load dir-whip-config.yaml: %s", exc)
 
@@ -150,7 +121,7 @@ def load_guard_config(config_path=None):
 def resolve_working_dir_root(ctx, config_path=None):
     """Resolve the Working Directory for the current profile (spec 5.5).
 
-    Inverted 3-step chain (plugin side — deliberately different from the
+    Inverted 3-step chain (plugin side -- deliberately different from the
     script-side 4-step chain in workspace_resolver.py):
     1. dir-whip-config.yaml explicit working_dir_root -> authoritative when set
     2. current profile terminal.cwd: HERMES_HOME/config.yaml for "default",
@@ -281,104 +252,6 @@ def set_session_profile(profile):
 from .paths import SESSION_DIR_RE, is_inside_session_dir  # noqa: F401
 
 
-# ---------------------------------------------------------------- Runtime allowlist (spec 5.11)
-
-# SCR-043 R3 (spec 5.11 v2.11) add-layer rejection messages live in
-# messages.py (spec 5.20, SCR-047 R1); the same-name imports above are
-# the aliases. The outside-root text is single-sourced there so the
-# handler layer (runtime_allowlist.py) and this add layer answer identically
-# without a verbatim duplicate (ADR-0007 dependency direction kept:
-# config imports the leaf, never the assembly layer).
-
-
-def _normalize_allowlist_path(path):
-    """Normalize a path for allowlist comparison (forward slashes)."""
-    if path is None:
-        return ""
-    return str(path).replace("\\", "/")
-
-
-def runtime_allowlist_add(path, working_dir_root=None):
-    """Add a path to the runtime allowlist (process-lifetime).
-
-    Returns a confirmation string for the dir_whip_allow_path tool.
-
-    SCR-043 R3 (spec 5.11 v2.11) value-domain gating: empty/None paths
-    are rejected (a normalized-empty entry would prefix-match every
-    path). When working_dir_root is injected (non-None), the path is
-    asserted to be inside the root via paths.within_working_dir (the
-    same implementation as the classify chain; config never imports
-    guard, ADR-0007) -- an outside-root path is NOT stored and the
-    rejection message is returned. working_dir_root=None (existing
-    direct-call/test form) skips the assertion, behavior unchanged.
-    """
-    normalized = _normalize_allowlist_path(path)
-    if not normalized:
-        return ALLOW_PATH_EMPTY_REJECTED_MESSAGE
-    if working_dir_root is not None and not within_working_dir(
-        normalize_target(normalized, working_dir_root), working_dir_root
-    ):
-        return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
-    with _runtime_allowlist_lock:
-        _runtime_allowlist.add(normalized)
-    logger.debug("dir-whip: runtime allowlist added: %s", normalized)
-    return RUNTIME_ALLOWLIST_ADDED_TEMPLATE % normalized
-
-
-def is_runtime_allowlisted(path):
-    """Check a path against the runtime allowlist (normalized slashes).
-
-    Segment-boundary match (SCR-043 R4, case-insensitive): an entry
-    exempts ITSELF (file-level registration) and everything UNDER it
-    (directory subtree, entry with or without a trailing slash). A bare
-    string prefix no longer matches -- allowing "docs" does not exempt a
-    same-prefix sibling like "docs_secret/x.txt". casefold (Windows
-    caliber) and the forward-slash _normalize_allowlist_path lexical
-    domain (same domain as the classify chain) are kept.
-    """
-    normalized = _normalize_allowlist_path(path).casefold()
-    with _runtime_allowlist_lock:
-        return any(
-            normalized == ec or normalized.startswith(ec.rstrip("/") + "/")
-            for ec in (e.casefold() for e in _runtime_allowlist)
-        )
-
-
-def runtime_allowlist_snapshot():
-    """Return a copy of the runtime allowlist (debug/testing)."""
-    with _runtime_allowlist_lock:
-        return set(_runtime_allowlist)
-
-
-def runtime_allowlist_clear():
-    """Clear the runtime allowlist (session-start scope reset).
-
-    The dir_whip_allow_path tool grants a session-scoped exemption
-    ("exempt for this session"); the guard must not keep allowing a path
-    across sessions in the same process. on_session_start calls this so
-    each new session starts without leftover allowlist entries.
-    """
-    with _runtime_allowlist_lock:
-        _runtime_allowlist.clear()
-
-
-def dir_whip_allow_path(args, working_dir_root=None, **kwargs):
-    """Tool handler: add a path to the runtime allowlist (spec 5.7, 5.11).
-
-    Accepts either the tool-handler contract (args dict + extra kwargs such
-    as task_id, per Hermes registry dispatch) or a bare path string (direct
-    helper/test callers). Returns a confirmation string. This is the
-    plugin's ONLY tool. Wiring into ctx.register_tool happens in __init__.py
-    (register).
-
-    SCR-043 R3: optional working_dir_root pass-through to the add layer's
-    value-domain assertion (the handler injects the resolved root; the
-    bare-path/rootless direct-call form keeps the assertion skipped).
-    """
-    path = args.get("path") if isinstance(args, dict) else args
-    return runtime_allowlist_add(path, working_dir_root=working_dir_root)
-
-
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
@@ -442,8 +315,8 @@ def ensure_session_root():
     The observation adapters (on_post_tool_call / on_pre_command) used
     to call guard.resolved_config() and discard the value; the actual
     purpose was get_cached_config's seeding side effect (cache warm-up,
-    registered_ctx capture, session-root seed). Same semantics, explicit
-    intent. Fail-open: any error -> None (never raises).
+    registered_ctx capture, session-root seed). Fail-open: any error ->
+    None (never raises).
     """
     try:
         get_cached_config(state.session.registered_ctx)
@@ -451,13 +324,15 @@ def ensure_session_root():
         return None
 
 
-def _refresh_allowlist_cache():
-    """Narrow cache refresh for unified allowlist (spec v2.6 B2).
+def invalidate_config_cache():
+    """Narrow config-cache invalidation (SCR-055 R7; spec v2.6 B2 refresh).
 
-    Invalidates the cached allowlist so the next get_cached_config /
-    classify_target sees the updated file. Clears both the local lock-guarded
-    cache and the lazy_singleton accessor when present. Session root is
-    re-seeded from the refreshed result via get_cached_config's session logic.
+    Clears both the local lock-guarded cache and the lazy_singleton
+    accessor when present, so the next get_cached_config / classify
+    re-reads dir-whip-config.yaml. Session root is re-seeded from the
+    refreshed result via get_cached_config's session logic. Consumed by
+    runtime_allowlist.refresh_allowlist_cache (allowlist-writer refresh
+    hook); the cache globals stay in their home module.
     """
     global _cached_result, _cache_initialized
     with _cache_lock:
@@ -471,11 +346,6 @@ def _refresh_allowlist_cache():
     return
 
 
-def refresh_allowlist_cache():
-    """Public alias for narrow allowlist cache refresh."""
-    return _refresh_allowlist_cache()
-
-
 def reset_cache():
     """Reset config cache, stats and runtime allowlist (register/re-register)."""
     global _cached_result, _cache_initialized
@@ -484,8 +354,11 @@ def reset_cache():
         _cache_initialized = False
     if _registered_config_accessor is not None:
         _registered_config_accessor.reset()
-    with _runtime_allowlist_lock:
-        _runtime_allowlist.clear()
+    # SCR-055 R7: the runtime-allowlist state family moved to
+    # runtime_allowlist.py; the function-local import is the documented
+    # cycle-break idiom (that module's refresh hook reaches this one).
+    from . import runtime_allowlist
+    runtime_allowlist.runtime_allowlist_clear()
     # SCR-041 R3: the allow_path confirmation-issued set follows the
     # runtime allowlist lifecycle (register/re-register clears it too).
     with state.session.lock:
@@ -506,8 +379,7 @@ profile_config_path = _profile_config_path
 
 # SCR-050 v3 R6.1: declared public surface (AC-9, spec 5.1 v2.19).
 # R6.3: is_inside_session_dir + SESSION_DIR_RE homed in paths.py; the
-# same-name re-export entries below stay (config/session_dirs/guard
-# consumer + test import paths unchanged).
+# same-name re-export entries below stay (consumer/test import paths).
 __all__ = [
     "get_cached_config",
     "get_working_dir_root",
@@ -515,13 +387,10 @@ __all__ = [
     "refresh_resolution",
     "load_guard_config",
     "parse_terminal_cwd",
-    "runtime_allowlist_add",
-    "runtime_allowlist_clear",
-    "is_runtime_allowlisted",
     "ensure_session_root",
     "reset_cache",
     "set_session_profile",
-    "refresh_allowlist_cache",
+    "invalidate_config_cache",
     "effective_working_dir_root",
     "profile_terminal_cwd",
     "profile_config_path",

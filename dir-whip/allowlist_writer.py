@@ -3,7 +3,7 @@
 Structured mapping (spec v2.7 R9, BREAKING clean break of the v2.6 flat tagged list): ``files`` = root-level file basenames, ``dirs`` = root-relative recursive subtree. Each key stays a single flow-style line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced line-level with comments above the key preserved, and block-style ``- item`` lists are never produced. Pure stdlib + pyyaml, no host imports (ADR-0007), line scan + regex per report.py precedent; path resolution is single-sourced in paths.config_file_path (SCR-052 R1) at HERMES_HOME/dir-whip/dir-whip-config.yaml.
 
 Layer: core
-Refs: spec v2.7 R9, SCR-039 R9, SCR-052 R1, ADR-0007
+Refs: spec v2.7 R9, SCR-039 R9, SCR-052 R1, SCR-055 R7, ADR-0007
 Key exports:
   - load_config -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
   - load_allowlist_legacy_count -- count of ignored legacy flat entries (clean-break visibility signal).
@@ -198,13 +198,12 @@ def _refresh_cache():
 
     The allowlist is read via load_guard_config() each time (no cache in
     allowlist_writer itself, but config.py caches via get_cached_config), so
-    a narrow refresh is required. This hook calls config._refresh_allowlist_cache.
+    a narrow refresh is required. This hook calls
+    runtime_allowlist.refresh_allowlist_cache (SCR-055 R7: the refresh
+    surface moved with the runtime-allowlist family).
     """
     try:
-        from . import config as _cfg
-        if hasattr(_cfg, "_refresh_allowlist_cache"):
-            _cfg._refresh_allowlist_cache()
-        elif hasattr(_cfg, "refresh_allowlist_cache"):
-            _cfg.refresh_allowlist_cache()
+        from . import runtime_allowlist as _ra
+        _ra.refresh_allowlist_cache()
     except Exception:
         pass

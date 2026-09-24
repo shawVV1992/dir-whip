@@ -15,9 +15,10 @@ config allowlist = T2); pure functions only, no host imports, no
 state (ADR-0007), import surface = stdlib + ``paths``.
 
 Layer: core
-Refs: spec 5.3, spec 5.6, spec 5.18, SCR-006, SCR-039 R7, SCR-039 R9, ADR-0007
+Refs: spec 5.3, spec 5.6, spec 5.18, SCR-006, SCR-039 R7, SCR-039 R9, SCR-055 R7, ADR-0007
 Key exports:
   - parse_allowlist -- raw ``allowlist`` config value -> validated ``{"files": set, "dirs": set}`` (fail-closed).
+  - parse_allowlist_raw -- RAW value passthrough (list/dict kept; scalars -> []); loaded-value contract holder.
   - format_allowlist -- parsed sets -> canonical sorted ``{"files": [...], "dirs": [...]}`` mapping.
   - is_allowlist_file -- root-file basename exemption (exact match, casefold on Windows).
   - is_allowlist_dir -- recursive subtree exemption under <working_dir_root>/<entry>; root never exempt.
@@ -162,6 +163,21 @@ def parse_allowlist(raw):
     return {"files": files, "dirs": dirs}
 
 
+def parse_allowlist_raw(value):
+    """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
+
+    Parsing/validation is done by parse_allowlist at the consumption
+    points (guard/audit/report). Keeping the RAW value (structured
+    mapping dict, legacy flat list, or []) preserves the loaded-value
+    contract while legacy flat lists stay visible for the clean-break
+    hint. Non-list/dict scalars -> []. SCR-055 R7: moved verbatim from
+    config._parse_allowlist (allowlist semantics home).
+    """
+    if isinstance(value, (list, dict)):
+        return value
+    return []
+
+
 def format_allowlist(parsed):
     """Format a parsed allowlist back to the structured mapping form.
 
@@ -300,6 +316,7 @@ def normalize_dir_entry(rel):
 
 __all__ = [
     "parse_allowlist",
+    "parse_allowlist_raw",
     "format_allowlist",
     "is_allowlist_file",
     "is_allowlist_dir",

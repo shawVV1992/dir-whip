@@ -1,9 +1,9 @@
 """Session-start orchestration deep module: session_start(session_id, ctx) -- reminder lifecycle + R2 cwd conditional injection + R7 project exemption + discipline predicates + orphan-scan dispatch (spec 5.4, spec 5.17).
 
-SCR-050 v3 R6.2 (spec 5.1 v2.19): the decision chain moved VERBATIM from the __init__.py assembly layer (on_start was a fat adapter); the assembly hook adapters are now thin fail-open dispatches. Fail-open posture inherited: session_start itself never catches top-level (the adapter does); the inline cwd/project probe guards moved unchanged. Depends on guard ONLY for reset_fail_open_flag / resolved_config (one-way; guard never imports session_start at module level -- its same-name predicate aliases are lazy delegation stubs, state.py cycle-break precedent).
+SCR-050 v3 R6.2 (spec 5.1 v2.19): the decision chain moved VERBATIM from the __init__.py assembly layer (on_start was a fat adapter); the assembly hook adapters are now thin fail-open dispatches. Fail-open posture inherited: session_start itself never catches top-level (the adapter does); the inline cwd/project probe guards moved unchanged. Depends on guard for reset_fail_open_flag / resolved_config and on runtime_allowlist for the session-scope allowlist reset (both one-way; guard never imports session_start at module level -- its same-name predicate aliases are lazy delegation stubs, state.py cycle-break precedent).
 
 Layer: core
-Refs: spec 5.4, spec 5.17, SCR-027, SCR-039, SCR-040, SCR-041, SCR-044, SCR-048, SCR-050
+Refs: spec 5.4, spec 5.17, SCR-027, SCR-039, SCR-040, SCR-041, SCR-044, SCR-048, SCR-050, SCR-055 R7
 Key exports:
   - session_start -- top-level session-start decision chain; child sessions short-circuit to skipped-child.
   - append_reminder_fallback -- one-shot REMINDER tail note after an unavailable session start (5.17 fallback channel).
@@ -15,7 +15,7 @@ import datetime
 import json
 import logging
 
-from . import audit_prompts, claims, config, events, subagents, session_dirs, state, stats
+from . import audit_prompts, claims, config, events, runtime_allowlist, subagents, session_dirs, state, stats
 
 from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
@@ -191,6 +191,91 @@ def project_exemption_applies(cwd, folders):
         return False
 
 
+def _reset_session_scope(session_id):
+    """Top-level session-start resets (SCR-048 R4 / SCR-044 R5 / SCR-041 R3).
+
+    The fallback flag is reset at the START of every top-level session
+    start (before injection); only the unavailable arm of _inject_reminder
+    sets it. The audit state (pending violations, leftover pre snapshots,
+    cap warning) and the session-dir claim + pending marker are cleared
+    (child sessions return upstream and inherit the parent's slots); the
+    runtime allowlist and the confirmation-issued set follow the same
+    top-level lifecycle; the fail-open warning flag is reset.
+    """
+    state.session.reminder_pending_fallback = False
+    audit_prompts.on_session_start(session_id)
+    claims.on_session_start(session_id)
+    runtime_allowlist.runtime_allowlist_clear()
+    with state.session.lock:
+        state.session.confirmation_issued.clear()
+    guard.reset_fail_open_flag()
+
+
+def _bind_session_profile(session_id, ctx):
+    """Re-resolve the SESSION's profile + working_dir_root and attribute
+    stats (SCR-027: child sessions return upstream and inherit)."""
+    profile = getattr(ctx, "profile_name", None) if ctx else None
+    config.set_session_profile(profile)
+    config.refresh_resolution(ctx)
+    stats.stats_set_session(
+        profile=profile,
+        session_id=session_id,
+        is_subagent=False,
+        started_at=datetime.datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+def _agent_cwd():
+    """R2 conditional-injection step 1: the agent CWD via the injected
+    accessor (None when absent or failing; never raises)."""
+    cwd = None
+    cwd_fn = getattr(state.session, "agent_cwd_fn", None)
+    if callable(cwd_fn):
+        try:
+            cwd = cwd_fn()
+        except Exception as exc:
+            logger.debug("dir-whip: resolve_agent_cwd failed: %s", exc)
+            cwd = None
+    return cwd
+
+
+def _project_skip_id(cwd):
+    """R7 project-mode exemption probe: the active project id when the
+    CWD falls under one of its folders (project mode has its own layout,
+    the Working Directory discipline does not apply), else None.
+
+    Evaluated HERE at session start (the active pointer varies across
+    sessions); any probe failure fails open to the normal flow.
+    """
+    project_fn = getattr(state.session, "project_active_fn", None)
+    if not callable(project_fn):
+        return None
+    try:
+        project_info = project_fn()
+    except Exception as exc:
+        logger.debug("dir-whip: project_active_fn failed: %s", exc)
+        return None
+    if not project_info:
+        return None
+    active_id, folders = project_info
+    if active_id and project_exemption_applies(cwd, folders):
+        return active_id
+    return None
+
+
+def _deliver_orphan_notice(working_dir_root, allowlist, session_id, ctx):
+    """SCR-044 R7 (spec 5.4) advisory orphan scan: ONE call after the
+    REMINDER injection (child sessions returned at the top, so subagents
+    never scan; CWD-outside sessions returned at the skipped-outside
+    branch). Decision logic lives in session_dirs; advise-only TEXT,
+    never a block action. The stats row lands via the events/stats
+    setdefault chain when the notice is delivered."""
+    notice = session_dirs.scan_orphans(working_dir_root, allowlist)
+    if notice and ctx is not None and hasattr(ctx, "inject_message"):
+        if ctx.inject_message(notice):
+            _record_orphan_notice(session_id)
+
+
 def session_start(session_id, ctx):
     """Top-level session-start decision chain (5.4; SCR-050 v3 R6.2:
     moved verbatim from the __init__.py on_start adapter).
@@ -207,74 +292,20 @@ def session_start(session_id, ctx):
         # too (the report Reminder line is removed in v2.8).
         _record_session_reminder(session_id, "skipped-child")
         return
-    # SCR-048 R4 (5.17): the fallback flag is reset at the START of
-    # every top-level session start (before injection); only the
-    # unavailable arm of _inject_reminder below sets it. Child
-    # sessions return above and never touch the parent's pending flag.
-    state.session.reminder_pending_fallback = False
-    # 5.18: top-level session start clears the audit state (pending
-    # violations, leftover pre snapshots, cap warning); child sessions
-    # skip and inherit the parent's latched state.
-    audit_prompts.on_session_start(session_id)
-    # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
-    # the session-dir claim + pending marker (child sessions returned
-    # above and inherit the parent's slot).
-    claims.on_session_start(session_id)
-    config.runtime_allowlist_clear()
-    # SCR-041 R3: the confirmation-issued set follows the runtime
-    # allowlist lifecycle -- cleared at every top-level session start.
-    with state.session.lock:
-        state.session.confirmation_issued.clear()
-    guard.reset_fail_open_flag()
-    profile = getattr(ctx, "profile_name", None) if ctx else None
-    # SCR-027: session-scoped resolution — re-resolve working_dir_root
-    # from THIS session's profile (child sessions skip and inherit).
-    config.set_session_profile(profile)
-    config.refresh_resolution(ctx)
-    stats.stats_set_session(
-        profile=profile,
-        session_id=session_id,
-        is_subagent=False,
-        started_at=datetime.datetime.now().isoformat(timespec="seconds"),
-    )
-    # R2 conditional injection three steps: cwd -> predicate -> inject.
-    cwd = None
-    cwd_fn = getattr(state.session, "agent_cwd_fn", None)
-    if callable(cwd_fn):
-        try:
-            cwd = cwd_fn()
-        except Exception as exc:
-            logger.debug("dir-whip: resolve_agent_cwd failed: %s", exc)
-            cwd = None
-    # R7 project-mode exemption: an ACTIVE host project whose folders
-    # contain the agent CWD skips the reminder entirely (project mode
-    # has its own layout). Evaluated HERE at session start (the active
-    # pointer varies across sessions), BEFORE the discipline predicate;
-    # any probe failure fails open to the normal flow.
+    _reset_session_scope(session_id)
+    _bind_session_profile(session_id, ctx)
+    cwd = _agent_cwd()
     if cwd:
-        project_fn = getattr(state.session, "project_active_fn", None)
-        if callable(project_fn):
-            project_info = None
-            try:
-                project_info = project_fn()
-            except Exception as exc:
-                logger.debug(
-                    "dir-whip: project_active_fn failed: %s", exc
-                )
-                project_info = None
-            if project_info:
-                active_id, folders = project_info
-                if active_id and project_exemption_applies(
-                    cwd, folders
-                ):
-                    state.session.reminder_status = "skipped-project"
-                    _record_session_reminder(session_id, "skipped-project")
-                    logger.debug(
-                        "dir-whip: session-start reminder skipped "
-                        "(active project %s contains the agent CWD)",
-                        active_id,
-                    )
-                    return
+        active_id = _project_skip_id(cwd)
+        if active_id:
+            state.session.reminder_status = "skipped-project"
+            _record_session_reminder(session_id, "skipped-project")
+            logger.debug(
+                "dir-whip: session-start reminder skipped "
+                "(active project %s contains the agent CWD)",
+                active_id,
+            )
+            return
     working_dir_root, allowlist = guard.resolved_config()
     if not discipline_applies(cwd, working_dir_root):
         state.session.reminder_status = "skipped-outside"
@@ -285,16 +316,7 @@ def session_start(session_id, ctx):
         )
         return
     _inject_reminder(ctx, session_id)
-    # SCR-044 R7 (spec 5.4): advisory orphan scan -- ONE call after
-    # the REMINDER injection (child sessions returned at the top, so
-    # subagents never scan; CWD-outside sessions returned at the
-    # skipped-outside branch). Decision logic lives in session_dirs;
-    # advise-only TEXT, never a block action. Stats row lands via
-    # the events/stats setdefault chain when the notice is delivered.
-    notice = session_dirs.scan_orphans(working_dir_root, allowlist)
-    if notice and ctx is not None and hasattr(ctx, "inject_message"):
-        if ctx.inject_message(notice):
-            _record_orphan_notice(session_id)
+    _deliver_orphan_notice(working_dir_root, allowlist, session_id, ctx)
 
 
 # SCR-050 v3 R6.2: the assembly transform_tool_result adapter calls this
