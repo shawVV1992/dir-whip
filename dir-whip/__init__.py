@@ -39,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents
+from . import allowlist_writer, audit, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -197,8 +197,8 @@ def register(ctx):
             except Exception as exc:
                 logger.warning("dir-whip: register_tool failed: %s", exc)
         # Spec 5.7 command (/dir-whip merged report, SCR-029) lives in
-        # report.py (D3).
-        report.register_dir_whip_commands(ctx)
+        # commands.py (SCR-055 R3 split; render family stays in report.py).
+        commands.register_dir_whip_commands(ctx)
         # Spec 5.17: bundled skill (opt-in, qualified name) + discipline
         # block (SCR-052 R1: stale "discipline prompt" wording corrected --
         # the always-on prompt was removed; the once-per-session block

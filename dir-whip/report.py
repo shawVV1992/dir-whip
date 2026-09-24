@@ -1,16 +1,17 @@
-"""/dir-whip report rendering + allow|remove|list unified command surface (spec 5.7, spec v2.8 R6, SCR-037).
+"""/dir-whip merged report rendering + the read-side helpers consumed by commands.py (spec 5.7, spec v2.8 R6).
 
-Renders the merged report in fixed field order -- version, State enabled/disabled, Working Directory + resolution source, Allowlist block, anomaly-only WARNING, Stats File, Debug Log, Health last -- and manages the persistent allowlist (unified single-key model per spec v2.6 B2; command shape per SCR-037, spec v2.5) via row-level edits preserving comments. Depends on the config resolution/stats surface (report -> config direction per the plan dependency graph); extracted from config.py (task 31.8).
+Renders the merged report in fixed field order -- version, State enabled/disabled, Working Directory + resolution source, Allowlist block, anomaly-only WARNING, Stats File, Debug Log, Health last -- and holds the two-section allowlist formatters plus the read-side single sources shared with the command family: the captured /dir-whip command ctx slot and load_allowlist_state (structured allowlist + ignored-legacy count, flat values fail-closed via parse_allowlist). The legacy `_get_cmd_ctx` alias is kept for the paths.config_file_path probe (same object as get_cmd_ctx). The mutable command surface (allow|remove|list) moved to commands.py at SCR-055 R3; dependency direction stays commands -> report (this module never imports commands). Depends on the config resolution/stats surface (report -> config direction per the plan dependency graph); extracted from config.py (task 31.8).
 
-Layer: core+registration-helper
-Refs: spec 5.5, spec 5.6, spec 5.7, spec v2.5, spec v2.6 B2, spec v2.7 R9, spec v2.8 R6, SCR-029, SCR-035, SCR-037, SCR-043 R5, SCR-045 R5, SCR-046 R1
+Layer: core
+Refs: spec 5.5, spec 5.6, spec 5.7, spec v2.5, spec v2.6 B2, spec v2.7 R9, spec v2.8 R6, SCR-029, SCR-035, SCR-037, SCR-043 R5, SCR-045 R5, SCR-046 R1, SCR-050 v3 R6.1, SCR-055 R3
 Key exports:
-  - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
   - render -- render the merged /dir-whip report.
   - plugin_version -- plugin.yaml version probe (SCR-050 v3 R6.1 public; consumer: assembly register-time precompute).
+  - load_allowlist_state -- current structured allowlist + ignored-legacy count (consumer: commands.py).
+  - get_cmd_ctx / set_cmd_ctx -- the /dir-whip command ctx slot (render reads it; commands.register_dir_whip_commands is the only writer).
+  - relativize_input / render_two_sections / render_current_state -- command-output helpers consumed by commands.py (SCR-055 R3).
 """
 
-import logging
 import os
 import re
 from pathlib import Path
@@ -18,7 +19,6 @@ from pathlib import Path
 from . import state
 
 from .config import (
-    SESSION_DIR_RE,
     effective_working_dir_root,
     load_guard_config,
     parse_terminal_cwd,
@@ -26,31 +26,37 @@ from .config import (
     profile_terminal_cwd,
 )
 
-from .paths import dirwhip_home, get_hermes_home, is_absolute_any, paths_equal
+from .paths import get_hermes_home, is_absolute_any, paths_equal
 from .stats import stats_jsonl_path
 
 # Diagnostic log path (v2.8 R6): single source of truth from logsetup.
 from . import logsetup
 
 # Unified allowlist core (v2.7 R9 structured mapping)
-from .allowlist import (
-    parse_allowlist,
-    validate_dir_entry,
-)
+from .allowlist import parse_allowlist
 
-# Structured allowlist persistence (v2.7 R9): row-level mapping writer.
-from . import allowlist_writer
-
-logger = logging.getLogger("dir-whip")
-
-# The ctx captured by register_dir_whip_commands; command handlers
-# read profile_name from it (the host invokes handlers as fn(raw_args)).
+# The ctx captured by commands.register_dir_whip_commands (SCR-055 R3: the
+# command family moved out; the capture stays HERE because render() reads it
+# and paths.config_file_path probes the legacy alias).
 _cmd_ctx = None
 
 
-def _get_cmd_ctx():
-    """The ctx captured at command registration (None when unregistered)."""
+def get_cmd_ctx():
+    """The ctx captured by commands.register_dir_whip_commands (None when
+    unregistered)."""
     return _cmd_ctx
+
+
+def set_cmd_ctx(ctx):
+    """Capture the /dir-whip command ctx (only writer:
+    commands.register_dir_whip_commands)."""
+    global _cmd_ctx
+    _cmd_ctx = ctx
+
+
+# Legacy probe name (paths.config_file_path documented cycle-break idiom;
+# code-design-standards 2.3 same-object alias).
+_get_cmd_ctx = get_cmd_ctx
 
 
 def _resolution_source(ctx):
@@ -128,6 +134,84 @@ def plugin_version(path=None):
     return "unknown"
 
 
+def _render_working_dir_line(ctx, working_dir_root):
+    """Line 3: Working Directory + resolving source (5.5 chain)."""
+    if not working_dir_root:
+        return "Working Directory: (unresolved)"
+    source = _resolution_source(ctx)
+    source = _SOURCE_LABELS.get(source, source)
+    return "Working Directory: %s  (source: %s)" % (working_dir_root, source)
+
+
+def _render_allowlist_lines(state_map, legacy_n):
+    """Line 4 (v2.8): the allowlist multi-line block.
+
+    Header + one line each for Files/Dirs (indented 2 spaces); with NO
+    entries at all (no files/dirs/legacy) the strict-empty single line is
+    kept; an ignored legacy flat value adds an indented block line.
+    """
+    if not state_map["files"] and not state_map["dirs"] and not legacy_n:
+        return ["Allowlist: (strict empty allowlist)"]
+    files_str = ", ".join(state_map["files"]) if state_map["files"] else "(none)"
+    dirs_str = ", ".join(state_map["dirs"]) if state_map["dirs"] else "(none)"
+    lines = ["Allowlist:", "  Files: %s" % files_str, "  Dirs: %s" % dirs_str]
+    if legacy_n:
+        lines.append(
+            "  [!] ignored legacy entries: %d -- re-add via /dir-whip allow"
+            % legacy_n
+        )
+    return lines
+
+
+def _render_warning_line(cfg, ctx):
+    """Anomaly-only WARNING line (Q6 footgun) or None.
+
+    Explicit dir-whip-config override differs from the profile
+    terminal.cwd (doctor logic retained).
+    """
+    override = cfg.get("working_dir_root")
+    if override:
+        profile_cwd = profile_terminal_cwd(ctx)
+        if profile_cwd is not None and not paths_equal(override, profile_cwd):
+            return (
+                "WARNING: dir-whip-config working_dir_root (%s) differs from "
+                "profile terminal.cwd (%s); the desktop-settings edit is "
+                "masked by the override" % (override, profile_cwd)
+            )
+    return None
+
+
+def _render_debug_log_line():
+    """Debug Log line (v2.8): absolute path + suffix.
+
+    (no records yet) when the file does not exist yet; (unavailable) when
+    log setup failed (log_handler_installed False wins over a stale file).
+    """
+    log_path = logsetup.diagnostic_log_path()
+    if not state.session.log_handler_installed:
+        log_suffix = " (unavailable)"
+    elif not log_path.exists():
+        log_suffix = " (no records yet)"
+    else:
+        log_suffix = ""
+    return "Debug Log: %s%s" % (log_path, log_suffix)
+
+
+def _render_health_lines(working_dir_root):
+    """Health lines (v2.8, LAST): single Good, or a brief issue list."""
+    problems = []
+    if not working_dir_root:
+        problems.append("resolution: FAIL-OPEN")
+    writable, error = _stats_writable()
+    if not writable:
+        problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
+    if not problems:
+        return ["Health: Good"]
+    return ["Health: %d issue(s)" % len(problems)] + [
+        "  - %s" % p for p in problems
+    ]
+
+
 def render():
     """Render the merged /dir-whip report (spec 5.7 v2.8 R6).
 
@@ -139,7 +223,7 @@ def render():
     Health problem. Never raises.
     """
     try:
-        ctx = _get_cmd_ctx()
+        ctx = get_cmd_ctx()
         cfg = load_guard_config()
         working_dir_root = effective_working_dir_root(ctx)
         lines = []
@@ -151,90 +235,43 @@ def render():
         lines.append("State: enabled" if working_dir_root else "State: disabled")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
-        if working_dir_root:
-            source = _resolution_source(ctx)
-            source = _SOURCE_LABELS.get(source, source)
-            lines.append("Working Directory: %s  (source: %s)" % (working_dir_root, source))
-        else:
-            lines.append("Working Directory: (unresolved)")
+        lines.append(_render_working_dir_line(ctx, working_dir_root))
 
-        # Line 4 (v2.8): allowlist multi-line block -- header + one line
-        # each for Files/Dirs (indented 2 spaces); with NO entries at
-        # all (no files/dirs/legacy) the strict-empty single line is
-        # kept; an ignored legacy flat value adds an indented block line.
-        state_map, legacy_n = _load_allowlist_state()
-        if not state_map["files"] and not state_map["dirs"] and not legacy_n:
-            lines.append("Allowlist: (strict empty allowlist)")
-        else:
-            files_str = (
-                ", ".join(state_map["files"]) if state_map["files"] else "(none)"
-            )
-            dirs_str = ", ".join(state_map["dirs"]) if state_map["dirs"] else "(none)"
-            lines.append("Allowlist:")
-            lines.append("  Files: %s" % files_str)
-            lines.append("  Dirs: %s" % dirs_str)
-            if legacy_n:
-                lines.append(
-                    "  [!] ignored legacy entries: %d -- re-add via /dir-whip allow"
-                    % legacy_n
-                )
+        # Line 4 (v2.8): allowlist multi-line block (formatter above).
+        state_map, legacy_n = load_allowlist_state()
+        lines.extend(_render_allowlist_lines(state_map, legacy_n))
 
-        # Anomaly-only WARNING: Q6 footgun — explicit override differs
-        # from the profile terminal.cwd (doctor logic retained).
-        override = cfg.get("working_dir_root")
-        if override:
-            profile_cwd = profile_terminal_cwd(ctx)
-            if profile_cwd is not None and not paths_equal(override, profile_cwd):
-                lines.append(
-                    "WARNING: dir-whip-config working_dir_root (%s) differs from "
-                    "profile terminal.cwd (%s); the desktop-settings edit is "
-                    "masked by the override" % (override, profile_cwd)
-                )
+        # Anomaly-only WARNING: Q6 footgun (formatter above).
+        warning = _render_warning_line(cfg, ctx)
+        if warning:
+            lines.append(warning)
 
         # Stats File (always): stats.jsonl absolute path (session profile
         # home, 5.13/SCR-027), placed before Debug Log.
         lines.append("Stats File: %s" % stats_jsonl_path())
 
         # Debug Log (v2.8, second-to-last): absolute path from logsetup
-        # (single source of truth); suffixed (no records yet) when the
-        # file does not exist yet, (unavailable) when log setup failed
-        # (log_handler_installed False wins over a stale file).
-        log_path = logsetup.diagnostic_log_path()
-        if not state.session.log_handler_installed:
-            log_suffix = " (unavailable)"
-        elif not log_path.exists():
-            log_suffix = " (no records yet)"
-        else:
-            log_suffix = ""
-        lines.append("Debug Log: %s%s" % (log_path, log_suffix))
+        # (single source of truth).
+        lines.append(_render_debug_log_line())
 
         # Health (v2.8, LAST): single Good when clean; with problems a
         # brief issue list (one indented line per problem).
-        problems = []
-        if not working_dir_root:
-            problems.append("resolution: FAIL-OPEN")
-        writable, error = _stats_writable()
-        if not writable:
-            problems.append("stats.jsonl: NOT WRITABLE (%s)" % error)
-        if problems:
-            lines.append("Health: %d issue(s)" % len(problems))
-            lines.extend("  - %s" % p for p in problems)
-        else:
-            lines.append("Health: Good")
+        lines.extend(_render_health_lines(working_dir_root))
 
         return "\n".join(lines)
     except Exception as exc:
         return "[dir-whip] report failed: %s" % exc
 
 
-# ---------------------------------------------------------------- Allowlist state + rendering (v2.7 R9)
+# ---------------------------------------------------------------- Allowlist read state + two-section rendering (v2.7 R9)
 
-def _load_allowlist_state():
+def load_allowlist_state():
     """Current structured allowlist + ignored legacy count.
 
     Returns ({"files": [sorted...], "dirs": [sorted...]}, legacy_count).
     Legacy flat values are ignored fail-closed by parse_allowlist; the
-    count surfaces them for the clean-break hint.
+    count surfaces them for the clean-break hint. Read-side single source
+    for render() and commands.py (SCR-055 R3).
     """
     try:
         cfg = load_guard_config()
@@ -251,7 +288,26 @@ def _load_allowlist_state():
     }, legacy
 
 
-def _render_two_sections(files, dirs, header=None, tail=None):
+def relativize_input(token, working_dir_root):
+    """Relativize an input token against working_dir_root (5.6 input layer).
+
+    Returns (rel_or_None, reason_clause). rel keeps forward slashes and a
+    possible trailing slash (the --create form signal); None means guided
+    rejection (root itself / ancestor / outside root).
+    """
+    t = str(token).replace("\\", "/").strip()
+    r = str(working_dir_root).replace("\\", "/").rstrip("/")
+    cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
+    t_cmp = t.casefold() if cf else t
+    r_cmp = r.casefold() if cf else r
+    if t_cmp == r_cmp:
+        return None, "'%s' is the Working Directory itself" % token
+    if t_cmp.startswith(r_cmp + "/"):
+        return t[len(r) + 1:], None
+    return None, "'%s' resolves outside it" % token
+
+
+def render_two_sections(files, dirs, header=None, tail=None):
     """Files:/Dirs: two-section listing with ONE continuous numbering
     (R1); empty sections render (none); both-empty renders the compact
     single-line empty state (R6)."""
@@ -283,385 +339,27 @@ def _render_two_sections(files, dirs, header=None, tail=None):
     return "\n".join(lines)
 
 
-def _render_current_state():
+def render_current_state():
     """The trailing two-section current-state block (R3/R5 feedback)."""
-    state_map, _legacy = _load_allowlist_state()
-    return _render_two_sections(state_map["files"], state_map["dirs"])
+    state_map, _legacy = load_allowlist_state()
+    return render_two_sections(state_map["files"], state_map["dirs"])
 
 
 # SCR-052 R1: the former _case_eq thin delegate of paths.paths_equal
 # (SCR-045 R7 single source) is deleted; all call sites use
-# paths.paths_equal directly (already imported above).
+# paths.paths_equal directly (imported above).
 
 
-def _relativize_input(token, working_dir_root):
-    """Relativize an input token against working_dir_root (5.6 input layer).
-
-    Returns (rel_or_None, reason_clause). rel keeps forward slashes and a
-    possible trailing slash (the --create form signal); None means guided
-    rejection (root itself / ancestor / outside root).
-    """
-    t = str(token).replace("\\", "/").strip()
-    r = str(working_dir_root).replace("\\", "/").rstrip("/")
-    cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
-    t_cmp = t.casefold() if cf else t
-    r_cmp = r.casefold() if cf else r
-    if t_cmp == r_cmp:
-        return None, "'%s' is the Working Directory itself" % token
-    if t_cmp.startswith(r_cmp + "/"):
-        return t[len(r) + 1:], None
-    return None, "'%s' resolves outside it" % token
-
-
-def _list_candidates():
-    """Scan working_dir_root for allow candidates (R2).
-
-    Returns ((file_candidates, dir_candidates), error_string). Files =
-    top-level files minus already-listed files entries; Dirs = top-level
-    directories minus session-format dirs and subtrees already
-    covered by a dirs entry (a leftover .hermes/ is enumerated like any
-    other non-session dir, SCR-046 R1). Sorted for determinism.
-    """
-    ctx = _get_cmd_ctx()
-    working_dir_root = effective_working_dir_root(ctx)
-    if not working_dir_root:
-        return None, "[dir-whip] Working Directory unresolved: cannot list candidates"
-    state_map, _legacy = _load_allowlist_state()
-    listed_files = state_map["files"]
-    dir_first_segments = [d.split("/")[0] for d in state_map["dirs"]]
-    file_cands = []
-    dir_cands = []
-    try:
-        with os.scandir(working_dir_root) as it:
-            for entry in it:
-                try:
-                    if entry.is_file():
-                        if any(paths_equal(entry.name, f) for f in listed_files):
-                            continue
-                        file_cands.append(entry.name)
-                    elif entry.is_dir():
-                        name = entry.name
-                        if SESSION_DIR_RE.match(name):
-                            continue
-                        # SCR-046 R1 (v2.14): the .hermes skip is removed --
-                        # a leftover root .hermes/ (pre-v0.6.3 quarantine
-                        # residue) is enumerated like any other non-session
-                        # directory (the SCR-043 R5 four-way consistency).
-                        if any(paths_equal(name, seg) for seg in dir_first_segments):
-                            continue
-                        dir_cands.append(name)
-                except Exception:
-                    continue
-    except Exception as exc:
-        return None, "[dir-whip] failed to list candidates: %s" % exc
-    file_cands.sort()
-    dir_cands.sort()
-    return (file_cands, dir_cands), None
-
-
-_ALLOW_GUIDED_REJECTION = (
-    "[dir-whip] Invalid path: choose a file or folder inside the "
-    "Working Directory (%s)."
-)
-
-
-def _handle_allow(rest):
-    """/dir-whip allow (v2.7 R2/R3 + input layer v2.1).
-
-    Bare -> candidate enumeration (two-section numbered + Add hint).
-    Args -> digit tokens map into the candidate list (file number ->
-    files, dir number -> dirs); path tokens accept relative/absolute
-    input (relativized against the root): existing -> disk-aware
-    classification; non-existent -> confirm-create protocol (--create
-    form decides: trailing slash -> makedirs + dirs, bare name -> empty
-    root file + files, nested no-slash -> directory tree + dirs);
-    outside-root/root-itself/ancestor -> guided rejection. Batch
-    comma/whitespace, all-or-nothing (first invalid token rejects).
-    """
-    rest = (rest or "").strip()
-    create = False
-    m = re.search(r"(?:^|\s)--create\b", rest)
-    if m:
-        create = True
-        rest = (rest[:m.start()] + " " + rest[m.end():]).strip()
-    ctx = _get_cmd_ctx()
-    working_dir_root = effective_working_dir_root(ctx)
-    working_dir_root_fwd = str(working_dir_root).replace("\\", "/") if working_dir_root else ""
-    if not rest:
-        if not working_dir_root:
-            return "[dir-whip] Working Directory unresolved: cannot list candidates"
-        cands, err = _list_candidates()
-        if err:
-            return err
-        fc, dc = cands
-        return _render_two_sections(
-            fc, dc,
-            header="Candidates in %s:" % working_dir_root_fwd,
-            tail="Add: /dir-whip allow <number|name>",
-        )
-    if not working_dir_root:
-        return "[dir-whip] Working Directory unresolved: cannot allow"
-    tokens = [t for t in re.split(r"[,\s]+", rest) if t]
-    if not tokens:
-        return "[dir-whip] Invalid argument: empty filename"
-    cands, err = _list_candidates()
-    if err:
-        return err
-    fc, dc = cands
-    numbered = list(fc) + list(dc)
-    adds_files = []
-    adds_dirs = []
-    seen = set()
-
-    def _mark(kind, value):
-        key = (kind, value.casefold() if os.name == "nt" else value)
-        if key in seen:
-            return False
-        seen.add(key)
-        return True
-
-    for tok in tokens:
-        if tok.isdigit():
-            idx = int(tok)
-            if not numbered or not 1 <= idx <= len(numbered):
-                return "[dir-whip] Invalid index '%s': valid 1-%d" % (
-                    tok, max(len(numbered), 1),
-                )
-            name = numbered[idx - 1]
-            if idx <= len(fc):
-                if _mark("f", name):
-                    adds_files.append(name)
-            else:
-                if _mark("d", name):
-                    adds_dirs.append(name)
-            continue
-        # Path token: ABSOLUTE input is relativized against the root
-        # (input tolerance); a relative token is taken as-is.
-        tok_fwd = tok.replace("\\", "/")
-        if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
-            rel_raw, reason = _relativize_input(tok, working_dir_root)
-            if rel_raw is None:
-                return "%s\n%s" % (_ALLOW_GUIDED_REJECTION % working_dir_root_fwd, reason)
-        else:
-            rel_raw = tok_fwd
-        had_trailing_slash = rel_raw.endswith("/")
-        rel = rel_raw.rstrip("/")
-        ok, vreason = validate_dir_entry(rel)
-        if not ok:
-            return "%s\n'%s' %s" % (
-                _ALLOW_GUIDED_REJECTION % working_dir_root_fwd, tok, vreason,
-            )
-        if not _mark("p", rel):
-            continue
-        full = os.path.join(str(working_dir_root), *rel.split("/"))
-        if os.path.lexists(full):
-            # Existence decides first (--create on existing = plain add).
-            if os.path.isdir(full):
-                adds_dirs.append(rel)
-            elif "/" in rel:
-                return (
-                    "[dir-whip] Invalid path: '%s' is an existing file in a "
-                    "subdirectory; only root-level files can be files entries."
-                    % tok
-                )
-            else:
-                adds_files.append(rel)
-        else:
-            if not create:
-                return "'%s' does not exist -- run: /dir-whip allow %s --create" % (
-                    tok, tok,
-                )
-            # Form decides the created artifact (input layer v2.1).
-            if had_trailing_slash or "/" in rel:
-                try:
-                    os.makedirs(full, exist_ok=True)
-                except OSError as exc:
-                    return "[dir-whip] cannot create '%s': %s" % (rel, exc)
-                adds_dirs.append(rel)
-            else:
-                try:
-                    with open(full, "a", encoding="utf-8"):
-                        pass
-                except OSError as exc:
-                    return "[dir-whip] cannot create '%s': %s" % (rel, exc)
-                adds_files.append(rel)
-    # Merge idempotently (Added to ... / Already in ...), cap, persist.
-    state_map, _legacy = _load_allowlist_state()
-    new_files = list(state_map["files"])
-    new_dirs = list(state_map["dirs"])
-    feedback = []
-    for f in adds_files:
-        if any(paths_equal(f, x) for x in new_files):
-            feedback.append("Already in files: %s" % f)
-        else:
-            new_files.append(f)
-            feedback.append("Added to files: %s" % f)
-    for d in adds_dirs:
-        if any(paths_equal(d, x) for x in new_dirs):
-            feedback.append("Already in dirs: %s" % d)
-        else:
-            new_dirs.append(d)
-            feedback.append("Added to dirs: %s" % d)
-    if len(new_files) + len(new_dirs) > allowlist_writer.MAX_ENTRIES:
-        return "[dir-whip] Too many entries: max %d allowlisted items" % (
-            allowlist_writer.MAX_ENTRIES,
-        )
-    if any(line.startswith("Added to") for line in feedback):
-        allowlist_writer.write_config(
-            {"files": sorted(new_files), "dirs": sorted(new_dirs)}
-        )
-    return "\n".join(feedback) + "\n\n" + _render_current_state()
-
-
-def _handle_remove(rest):
-    """/dir-whip remove (v2.7 R4/R5).
-
-    Bare -> enumerate CURRENT entries (two-section numbered + Remove
-    hint); strict-empty hint when nothing is listed. Args -> digit
-    tokens map into the current-entry numbering; name tokens accept
-    relative/absolute input and match BOTH sets (casefold on Windows;
-    a hand-edited double entry is removed from both). Disk-awareness is
-    an ALLOW-time concern only (remove deletes an entry, not a path).
-    """
-    rest = (rest or "").strip()
-    state_map, _legacy = _load_allowlist_state()
-    files = state_map["files"]
-    dirs = state_map["dirs"]
-    if not rest:
-        if not files and not dirs:
-            return "Allowlist: (strict empty allowlist)"
-        return _render_two_sections(
-            files, dirs, tail="Remove: /dir-whip remove <number|name>",
-        )
-    ctx = _get_cmd_ctx()
-    working_dir_root = effective_working_dir_root(ctx)
-    tokens = [t for t in re.split(r"[,\s]+", rest) if t]
-    if not tokens:
-        return "Usage: /dir-whip [allow|remove|list]"
-    numbered = list(files) + list(dirs)
-    rem_names = []
-    seen = set()
-    for tok in tokens:
-        if tok.isdigit():
-            idx = int(tok)
-            if not numbered or not 1 <= idx <= len(numbered):
-                return "[dir-whip] Invalid index '%s': valid 1-%d" % (
-                    tok, max(len(numbered), 1),
-                )
-            name = numbered[idx - 1]
-        else:
-            # Name token: relative or absolute (normalized, 5.6); matched
-            # by NAME against both sets -- no disk-aware discrimination.
-            tok_fwd = tok.replace("\\", "/")
-            rel = None
-            if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
-                if working_dir_root:
-                    rel, _reason = _relativize_input(tok, working_dir_root)
-            if rel is None:
-                rel = tok_fwd.strip().rstrip("/")
-            if not rel or rel in (".", ".."):
-                return "[dir-whip] Invalid entry '%s'" % tok
-            name = rel
-        if name not in seen:
-            seen.add(name)
-            rem_names.append(name)
-    removed_lines = []
-    new_files = list(files)
-    new_dirs = list(dirs)
-
-    def _drop(entries, name, label):
-        kept = []
-        for x in entries:
-            if paths_equal(x, name):
-                removed_lines.append("Removed from %s: %s" % (label, x))
-            else:
-                kept.append(x)
-        return kept
-
-    for name in rem_names:
-        new_files = _drop(new_files, name, "files")
-        new_dirs = _drop(new_dirs, name, "dirs")
-    if not removed_lines:
-        return "Not in allowlist: %s\n\n%s" % (
-            ", ".join(rem_names), _render_current_state(),
-        )
-    allowlist_writer.write_config(
-        {"files": sorted(new_files), "dirs": sorted(new_dirs)}
-    )
-    return "\n".join(removed_lines) + "\n\n" + _render_current_state()
-
-
-def _handle_list(rest):
-    """/dir-whip list (v2.7 R6): the same two-section numbered format as
-    remove (numbers align so a listed number can be copied directly),
-    plus the ignored-legacy hint when a flat value was ignored. SCR-043
-    R5: appends the current audit-quarantine path line (discoverability
-    after the relocation out of the workspace root)."""
-    if (rest or "").strip():
-        return "Usage: /dir-whip [allow|remove|list]"
-    state_map, legacy = _load_allowlist_state()
-    out = _render_two_sections(state_map["files"], state_map["dirs"])
-    if legacy:
-        out += "\n[!] ignored legacy entries: %d -- re-add via /dir-whip allow" % legacy
-    home = dirwhip_home(state.session.session_profile)
-    out += "\nQuarantine: %s" % (home / "audit-quarantine")
-    return out
-
-
-def _dir_whip_cmd(raw_args):
-    """/dir-whip dispatcher (spec 5.7, SCR-037 B2): report + allowlist management.
-
-    Bare /dir-whip renders the merged report; allow|remove|list manage the
-    persistent allowlist via row-level edit preserving
-    comments. Unknown subcommand renders the Usage line. Never raises.
-    """
-    try:
-        arg = (raw_args or "").strip()
-        if not arg:
-            return render()
-        parts = arg.split(None, 1)
-        sub = parts[0].lower() if parts else ""
-        rest = parts[1] if len(parts) > 1 else ""
-        if sub == "allow":
-            return _handle_allow(rest)
-        elif sub == "remove":
-            return _handle_remove(rest)
-        elif sub == "list":
-            return _handle_list(rest)
-        else:
-            return "Usage: /dir-whip [allow|remove|list]"
-    except Exception as exc:
-        return "[dir-whip] command failed: %s" % exc
-
-
-def register_dir_whip_commands(ctx):
-    """Register the /dir-whip slash command (spec 5.7).
-
-    Exactly ONE command named "dir-whip": Hermes dispatches slash commands
-    on the FIRST token only (cli.py: base_cmd = split()[0]), so every
-    argument reaches the same handler, which manages subcommands internally.
-    Guarded: a ctx without register_command still registers. allow_path is a
-    TOOL and is NOT registered here (__init__.py registers it).
-    args_hint surfaces in Discord/Telegram menus (commands.py:640).
-    """
-    global _cmd_ctx
-    _cmd_ctx = ctx
-    if not hasattr(ctx, "register_command"):
-        return
-    try:
-        ctx.register_command(
-            "dir-whip", _dir_whip_cmd,
-            description="dir-whip: Working Directory guard report",
-            args_hint=" [allow|remove|list]",
-        )
-    except Exception as exc:
-        logger.warning("dir-whip: register_command failed: %s", exc)
-
-
-# Single authoritative names (SCR-052 R1 alias convergence: the former
-# module-tail register_commands/render/plugin_version alias lines are
-# gone; the defs above carry the public names. The version probe went
-# public at SCR-050 v3 R6.1, consumer: the assembly layer precomputes
-# state.session.plugin_version; spec 5.1 v2.19).
-
-__all__ = ["register_dir_whip_commands", "render", "plugin_version"]
+# Declared render-side surface (SCR-055 R3): render + version probe + the
+# shared read-side accessors and command-output helpers consumed by
+# commands.py (dependency direction commands -> report).
+__all__ = [
+    "get_cmd_ctx",
+    "load_allowlist_state",
+    "plugin_version",
+    "relativize_input",
+    "render",
+    "render_current_state",
+    "render_two_sections",
+    "set_cmd_ctx",
+]
