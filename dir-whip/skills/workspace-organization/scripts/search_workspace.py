@@ -266,48 +266,7 @@ def _positive_int(value):
 
 def main(argv=None):
     """CLI entry: parse args, validate the --workspace boundary, scan + filter Session Directory metadata, emit plain or --json output (spec 4.6)."""
-    parser = _SearchArgumentParser(
-        description="Search file metadata across Session Directories under the workspace root."
-    )
-    parser.add_argument(
-        "--task",
-        default=None,
-        help="Casefold substring of the TaskName segment (sessions without a task name never match).",
-    )
-    parser.add_argument(
-        "--name",
-        default=None,
-        help="Casefold glob over the file basename (directories never appear in results).",
-    )
-    parser.add_argument(
-        "--since",
-        default=None,
-        type=_calendar_date,
-        help="Inclusive session date lower bound, YYYYMMDD.",
-    )
-    parser.add_argument(
-        "--until",
-        default=None,
-        type=_calendar_date,
-        help="Inclusive session date upper bound, YYYYMMDD.",
-    )
-    parser.add_argument(
-        "--limit",
-        default=DEFAULT_LIMIT,
-        type=_positive_int,
-        help="Maximum results after ordering (default: %d)." % DEFAULT_LIMIT,
-    )
-    parser.add_argument(
-        "--workspace",
-        default=None,
-        help="Working Directory to search (default: resolved Working Directory, or the current directory on fail-open).",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output a single JSON document instead of plain lines.",
-    )
-    args = parser.parse_args(argv)
+    args = _build_parser().parse_args(argv)
 
     if args.task is not None and args.task == "":
         sys.stderr.write("error: --task must not be empty\n")
@@ -317,27 +276,9 @@ def main(argv=None):
         return EXIT_PARAM_ERROR
 
     hh = workspace_resolver.hermes_home()
-    if args.workspace is None:
-        # Omitted --workspace: resolved Working Directory, or the CWD on
-        # fail-open (the resolver emitted exactly ONE stderr WARNING; this
-        # script adds none).
-        resolved = workspace_resolver.resolve_working_dir_root(hh=hh)
-        workspace = os.path.abspath(resolved) if resolved is not None else os.getcwd()
-    else:
-        workspace = os.path.abspath(args.workspace)
-        # Existence check FIRST (parameter error, exit 1) -- never emits the
-        # fail-open warning for a missing directory.
-        if not os.path.isdir(workspace):
-            sys.stderr.write(
-                "error: workspace directory does not exist: %s\n" % to_fwd(workspace)
-            )
-            return EXIT_PARAM_ERROR
-        # Boundary validation SECOND (exit 2 on mismatch; None -> fail-open
-        # pass, the resolver already carried its ONE warning).
-        valid, reason = workspace_resolver.validate_workspace(workspace, hh=hh)
-        if not valid:
-            sys.stderr.write("error: %s\n" % reason)
-            return EXIT_BOUNDARY_ERROR
+    workspace, code = _resolve_workspace(args, hh)
+    if code is not None:
+        return code
 
     # Allowlist dirs exclusion (spec 4.6): same loading surface as the audit;
     # a load failure returns the empty state inside the resolver and therefore
@@ -352,35 +293,105 @@ def main(argv=None):
     results = matches[:args.limit]
 
     if args.json:
-        payload = {
-            "results": results,
-            "total": total,
-            "truncated": truncated,
-            "sessions_scanned": len(sessions),
-            "errors": errors,
-        }
-        sys.stdout.write(
-            json.dumps(payload, ensure_ascii=True, indent=2) + "\n"
-        )
+        _emit_json(results, total, truncated, sessions, errors)
     else:
-        for record in results:
-            sys.stdout.write(
-                "%s  %d  %s\n"
-                % (
-                    record["mtime"].replace("T", " ")[:16],
-                    record["size_bytes"],
-                    record["path"],
-                )
-            )
-        if truncated:
-            # Independent final line (spec 4.6); N = total - returned count.
-            sys.stdout.write("(+%d more)\n" % (total - len(results)))
-        if errors:
-            sys.stderr.write(
-                "note: %d unreadable entries skipped (use --json for details)\n"
-                % len(errors)
-            )
+        _emit_plain(results, total, truncated, errors)
     return EXIT_OK
+
+
+def _build_parser():
+    parser = _SearchArgumentParser(
+        description="Search file metadata across Session Directories under the workspace root."
+    )
+    parser.add_argument(
+        "--task", default=None,
+        help="Casefold substring of the TaskName segment (sessions without a task name never match).",
+    )
+    parser.add_argument(
+        "--name", default=None,
+        help="Casefold glob over the file basename (directories never appear in results).",
+    )
+    parser.add_argument(
+        "--since", default=None, type=_calendar_date,
+        help="Inclusive session date lower bound, YYYYMMDD.",
+    )
+    parser.add_argument(
+        "--until", default=None, type=_calendar_date,
+        help="Inclusive session date upper bound, YYYYMMDD.",
+    )
+    parser.add_argument(
+        "--limit", default=DEFAULT_LIMIT, type=_positive_int,
+        help="Maximum results after ordering (default: %d)." % DEFAULT_LIMIT,
+    )
+    parser.add_argument(
+        "--workspace", default=None,
+        help="Working Directory to search (default: resolved Working Directory, or the current directory on fail-open).",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Output a single JSON document instead of plain lines.",
+    )
+    return parser
+
+
+def _resolve_workspace(args, hh):
+    """Resolve + validate the search workspace; (workspace, None) or
+    (None, EXIT_PARAM_ERROR / EXIT_BOUNDARY_ERROR)."""
+    if args.workspace is None:
+        # Omitted --workspace: resolved Working Directory, or the CWD on
+        # fail-open (the resolver emitted exactly ONE stderr WARNING; this
+        # script adds none).
+        resolved = workspace_resolver.resolve_working_dir_root(hh=hh)
+        workspace = os.path.abspath(resolved) if resolved is not None else os.getcwd()
+        return workspace, None
+    workspace = os.path.abspath(args.workspace)
+    # Existence check FIRST (parameter error, exit 1) -- never emits the
+    # fail-open warning for a missing directory.
+    if not os.path.isdir(workspace):
+        sys.stderr.write(
+            "error: workspace directory does not exist: %s\n" % to_fwd(workspace)
+        )
+        return None, EXIT_PARAM_ERROR
+    # Boundary validation SECOND (exit 2 on mismatch; None -> fail-open
+    # pass, the resolver already carried its ONE warning).
+    valid, reason = workspace_resolver.validate_workspace(workspace, hh=hh)
+    if not valid:
+        sys.stderr.write("error: %s\n" % reason)
+        return None, EXIT_BOUNDARY_ERROR
+    return workspace, None
+
+
+def _emit_json(results, total, truncated, sessions, errors):
+    payload = {
+        "results": results,
+        "total": total,
+        "truncated": truncated,
+        "sessions_scanned": len(sessions),
+        "errors": errors,
+    }
+    sys.stdout.write(
+        json.dumps(payload, ensure_ascii=True, indent=2) + "\n"
+    )
+
+
+def _emit_plain(results, total, truncated, errors):
+    for record in results:
+        sys.stdout.write(
+            "%s  %d  %s\n"
+            % (
+                record["mtime"].replace("T", " ")[:16],
+                record["size_bytes"],
+                record["path"],
+            )
+        )
+    if truncated:
+        # Independent final line (spec 4.6); N = total - returned count.
+        sys.stdout.write("(+%d more)\n" % (total - len(results)))
+    if errors:
+        sys.stderr.write(
+            "note: %d unreadable entries skipped (use --json for details)\n"
+            % len(errors)
+        )
 
 
 if __name__ == "__main__":

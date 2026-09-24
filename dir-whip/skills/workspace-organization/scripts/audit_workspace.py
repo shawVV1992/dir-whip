@@ -99,14 +99,8 @@ def _precheck_profile_config_path(hh, profile):
     return os.path.join(hh, "profiles", profile, "config.yaml")
 
 
-def _precheck_parse_plugins_lists(path):
-    """Parse plugins.enabled / plugins.disabled from config.yaml.
-
-    Uses yaml.safe_load when available, else a minimal line scan that
-    handles both inline (enabled: [dir-whip]) and block
-    (enabled:\\n  - dir-whip) forms. Returns (enabled, disabled) lists.
-    """
-    # Try PyYAML first
+def _plugins_from_yaml(path):
+    """PyYAML fast path: (enabled, disabled), or None for the line scan."""
     try:
         import yaml  # noqa: PLC0415
 
@@ -121,11 +115,29 @@ def _precheck_parse_plugins_lists(path):
                 disabled = [str(x) for x in dis if isinstance(x, str)] if isinstance(dis, list) else []
                 return enabled, disabled
         return [], []
-    except ImportError:
-        pass
     except Exception:
-        pass
-    # Fallback line scan (stdlib only)
+        return None
+
+
+def _apply_plugins_key_line(stripped, key, target, state):
+    """One enabled:/disabled: line (prefix already matched): an inline list
+    appends entries; an empty body enters block-list mode for `key`."""
+    rest = stripped[len(key) + 1:].strip()
+    if rest:
+        inner = rest.strip("[]").strip()
+        if inner:
+            for part in inner.split(","):
+                part = part.strip().strip("'\"")
+                if part:
+                    target.append(part)
+        state.update(key=None, in_list=False)
+    else:
+        state.update(key=key, in_list=True)
+
+
+def _plugins_from_lines(path):
+    """Stdlib line scan for plugins.enabled / plugins.disabled (inline and
+    block forms); ([], []) when the file is unreadable."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
@@ -133,72 +145,42 @@ def _precheck_parse_plugins_lists(path):
         return [], []
     enabled = []
     disabled = []
-    in_plugins = False
-    current_key = None
-    in_list = False
+    state = {"in_plugins": False, "key": None, "in_list": False}
     for raw in lines:
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue
         if raw.startswith("plugins:"):
-            in_plugins = True
-            current_key = None
-            in_list = False
+            state.update(in_plugins=True, key=None, in_list=False)
+        elif not state["in_plugins"]:
             continue
-        if in_plugins:
-            if raw[0] not in (" ", "\t"):
-                if ":" in raw:
-                    in_plugins = False
-                    current_key = None
-                    in_list = False
-                    continue
-            if stripped.startswith("enabled:"):
-                rest = stripped[len("enabled:"):].strip()
-                if rest:
-                    inner = rest.strip("[]").strip()
-                    if inner:
-                        for part in inner.split(","):
-                            part = part.strip().strip("'\"")
-                            if part:
-                                enabled.append(part)
-                    current_key = None
-                    in_list = False
-                else:
-                    current_key = "enabled"
-                    in_list = True
-                continue
-            if stripped.startswith("disabled:"):
-                rest = stripped[len("disabled:"):].strip()
-                if rest:
-                    inner = rest.strip("[]").strip()
-                    if inner:
-                        for part in inner.split(","):
-                            part = part.strip().strip("'\"")
-                            if part:
-                                disabled.append(part)
-                    current_key = None
-                    in_list = False
-                else:
-                    current_key = "disabled"
-                    in_list = True
-                continue
-            if in_list and current_key and stripped.startswith("- "):
-                val = stripped[2:].strip().strip("'\"")
-                if val:
-                    if current_key == "enabled":
-                        enabled.append(val)
-                    else:
-                        disabled.append(val)
-                continue
-            if in_list and current_key and stripped and not stripped.startswith("- "):
-                # End of current block list on next key or non-list line
-                if ":" in stripped:
-                    in_list = False
-                    current_key = None
-                    continue
-                in_list = False
-                current_key = None
+        elif raw[0] not in (" ", "\t") and ":" in raw:
+            state.update(in_plugins=False, key=None, in_list=False)
+        elif stripped.startswith("enabled:"):
+            _apply_plugins_key_line(stripped, "enabled", enabled, state)
+        elif stripped.startswith("disabled:"):
+            _apply_plugins_key_line(stripped, "disabled", disabled, state)
+        elif state["in_list"] and state["key"] and stripped.startswith("- "):
+            val = stripped[2:].strip().strip("'\"")
+            if val:
+                (enabled if state["key"] == "enabled" else disabled).append(val)
+        elif state["in_list"] and state["key"]:
+            # End of the current block list on the next key / non-list line.
+            state.update(key=None, in_list=False)
     return enabled, disabled
+
+
+def _precheck_parse_plugins_lists(path):
+    """Parse plugins.enabled / plugins.disabled from config.yaml.
+
+    Uses yaml.safe_load when available, else a minimal line scan that
+    handles both inline (enabled: [dir-whip]) and block
+    (enabled:\\n  - dir-whip) forms. Returns (enabled, disabled) lists.
+    """
+    parsed = _plugins_from_yaml(path)
+    if parsed is not None:
+        return parsed
+    return _plugins_from_lines(path)
 
 
 def _precheck_plugin_status(hh=None):
@@ -443,6 +425,29 @@ def print_json(violations):
 
 def main(argv=None):
     """CLI entry: resolve and validate the audit root, run the structural checks + read-only .tmp inventory, emit plain / --json / --gate output (SCR-042 H1)."""
+    args = _build_parser().parse_args(argv)
+
+    if args.days < 0:
+        sys.stderr.write("error: --days must be a non-negative integer\n")
+        return 2
+
+    hh = workspace_resolver.hermes_home()
+    root, code = _resolve_root(args, hh)
+    if code is not None:
+        return code
+
+    # SCR-037 enablement precheck (spec 5.7): quiet when enabled, WARN otherwise; no exit code change
+    _run_enablement_precheck(hh)
+
+    violations = audit(root, hh)
+    _emit_result(args, violations)
+    _emit_expired_proposal(root, args)
+    if args.gate:
+        _emit_gate(violations)
+    return 1 if violations else 0
+
+
+def _build_parser():
     parser = argparse.ArgumentParser(
         description="Audit a workspace root against structural compliance checks (read-only inventory; expired .tmp entries are listed as a proposal)."
     )
@@ -467,67 +472,53 @@ def main(argv=None):
         action="store_true",
         help="Cron mode: audit-only run (zero deletion) and append the wakeAgent JSON line.",
     )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=30,
-        help=argparse.SUPPRESS,
-    )
-    args = parser.parse_args(argv)
+    parser.add_argument("--days", type=int, default=30, help=argparse.SUPPRESS)
+    return parser
 
-    if args.days < 0:
-        sys.stderr.write("error: --days must be a non-negative integer\n")
-        return 2
 
-    hh = workspace_resolver.hermes_home()
+def _resolve_root(args, hh):
+    """Resolve + validate the audit root; (root, None) or (None, 2)."""
     target = args.workspace if args.workspace is not None else args.root
     if target is not None:
         root = os.path.abspath(target)
         if not os.path.isdir(root):
             sys.stderr.write("error: target directory does not exist: %s\n" % to_fwd(root))
-            return 2
+            return None, 2
         valid, reason = workspace_resolver.validate_workspace(root, hh=hh)
         if not valid:
             sys.stderr.write("error: %s\n" % reason)
-            return 2
-    else:
-        root = workspace_resolver.resolve_working_dir_root(hh=hh)
-        if root is None and args.gate:
-            # SCR-042 H1, reframed by SCR-043 R6 as cron failure
-            # visibility: gate mode never falls back to the fail-open
-            # CWD -- an unresolved Working Directory is a gate failure
-            # (exit 2, zero stdout, no wakeAgent line) so cron surfaces
-            # the broken environment instead of auditing the wrong
-            # directory. Checked BEFORE the enablement precheck: the
-            # exit-2 path stays output-clean on stdout.
-            sys.stderr.write(
-                "error: Working Directory unresolved; --gate refuses to "
-                "fall back to the current directory\n"
-            )
-            return 2
-        if root is None:
-            # Fail-open (spec 4.4 step 4): the resolver already emitted
-            # exactly ONE concise stderr warning; fall back to CWD.
-            root = os.getcwd()
-        root = os.path.abspath(root)
-        if not os.path.isdir(root):
-            sys.stderr.write("error: resolved Working Directory does not exist: %s\n" % to_fwd(root))
-            return 2
+            return None, 2
+        return root, None
+    root = workspace_resolver.resolve_working_dir_root(hh=hh)
+    if root is None and args.gate:
+        # SCR-042 H1 / SCR-043 R6: gate mode never falls back to the
+        # fail-open CWD -- exit 2, zero stdout, no wakeAgent line.
+        sys.stderr.write(
+            "error: Working Directory unresolved; --gate refuses to "
+            "fall back to the current directory\n"
+        )
+        return None, 2
+    if root is None:
+        root = os.getcwd()  # fail-open (resolver already emitted ONE warning)
+    root = os.path.abspath(root)
+    if not os.path.isdir(root):
+        sys.stderr.write("error: resolved Working Directory does not exist: %s\n" % to_fwd(root))
+        return None, 2
+    return root, None
 
-    # SCR-037 enablement precheck (spec 5.7): quiet when enabled, WARN otherwise; no exit code change
-    _run_enablement_precheck(hh)
 
-    violations = audit(root, hh)
-
+def _emit_result(args, violations):
     if args.json:
         print_json(violations)
     else:
         print_plain(violations)
 
+
+def _emit_expired_proposal(root, args):
     # SCR-043 R6: read-only inventory -- the expired entries are listed
     # as a proposal in interactive plain mode only (gate outputs no
-    # expired list; --json keeps stdout schema-clean). Nothing is ever
-    # deleted; --days serves the inventory threshold.
+    # expired list; --json keeps stdout schema-clean); nothing is ever
+    # deleted, --days serves the inventory threshold.
     items = list_expired_tmp(root, args.days)
     if items and not args.gate and not args.json:
         sys.stdout.write(
@@ -537,16 +528,14 @@ def main(argv=None):
             sys.stdout.write(to_fwd(path) + "\n")
         sys.stdout.write("Proposed %d item(s) for .tmp cleanup.\n" % len(items))
 
-    if args.gate:
-        # SCR-043 R6: exactly two keys (removed/failed are gone with
-        # auto-delete); the exit code stays violations-driven.
-        payload = {
-            "wakeAgent": bool(violations),
-            "violations": len(violations),
-        }
-        sys.stdout.write(json.dumps(payload) + "\n")
 
-    return 1 if violations else 0
+def _emit_gate(violations):
+    # SCR-043 R6: exactly two keys (removed/failed are gone with auto-delete).
+    payload = {
+        "wakeAgent": bool(violations),
+        "violations": len(violations),
+    }
+    sys.stdout.write(json.dumps(payload) + "\n")
 
 
 if __name__ == "__main__":

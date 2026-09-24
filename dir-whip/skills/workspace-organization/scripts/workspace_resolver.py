@@ -503,6 +503,41 @@ def _parse_allowlist_yaml(data):
     }
 
 
+def _apply_allowlist_inline(rest, raw_map, legacy_items):
+    """Inline allowlist body: mapping {...} -> sub-key scan; flat [...] ->
+    legacy entries (counted, ignored fail-closed)."""
+    if rest.startswith("{"):
+        body = rest.strip("{}")
+        # minimal inline-mapping scan: files:[...], dirs:[...]
+        m_files = re.search(r"files\s*:\s*\[([^\]]*)\]", body)
+        m_dirs = re.search(r"dirs\s*:\s*\[([^\]]*)\]", body)
+        if m_files:
+            raw_map["files"].extend(_split_flow_list(m_files.group(1)))
+        if m_dirs:
+            raw_map["dirs"].extend(_split_flow_list(m_dirs.group(1)))
+    elif rest.startswith("["):
+        inner = rest.strip("[]").strip()
+        if inner:
+            legacy_items.extend(_split_flow_list(inner))
+
+
+def _apply_allowlist_subkey(stripped, raw_map, in_sub):
+    """One indented line inside the allowlist block: a files:/dirs: flow or
+    block-list head, or a ``- item`` continuation; returns the new in_sub."""
+    for key in ("files", "dirs"):
+        prefix = key + ":"
+        if stripped.startswith(prefix):
+            rest = stripped[len(prefix):].strip()
+            if rest.startswith("["):
+                raw_map[key].extend(_split_flow_list(rest))
+                return None
+            return key
+    if in_sub and stripped.startswith("- "):
+        raw_map[in_sub].append(stripped[2:].strip().strip("'\""))
+        return in_sub
+    return None
+
+
 def _parse_allowlist_lines(path):
     """Line-based structured allowlist parser (PyYAML unavailable, v2.7 R9).
 
@@ -537,58 +572,23 @@ def _parse_allowlist_lines(path):
             in_map = True
             in_sub = None
             if rest:
-                # Inline form: mapping {...} -> parse sub-keys; list [...] ->
-                # legacy flat (counted, ignored).
-                if rest.startswith("{"):
-                    body = rest.strip("{}")
-                    # minimal inline-mapping scan: files:[...], dirs:[...]
-                    m_files = re.search(r"files\s*:\s*\[([^\]]*)\]", body)
-                    m_dirs = re.search(r"dirs\s*:\s*\[([^\]]*)\]", body)
-                    if m_files:
-                        raw_map["files"].extend(_split_flow_list(m_files.group(1)))
-                    if m_dirs:
-                        raw_map["dirs"].extend(_split_flow_list(m_dirs.group(1)))
-                elif rest.startswith("["):
-                    inner = rest.strip("[]").strip()
-                    if inner:
-                        legacy_items.extend(_split_flow_list(inner))
+                _apply_allowlist_inline(rest, raw_map, legacy_items)
                 in_map = False
             continue
         if in_map:
             if not indented:
                 in_map = False
                 in_sub = None
-            elif stripped.startswith("files:"):
-                rest = stripped[len("files:"):].strip()
-                if rest.startswith("["):
-                    raw_map["files"].extend(_split_flow_list(rest))
-                    in_sub = None
-                else:
-                    in_sub = "files"
-            elif stripped.startswith("dirs:"):
-                rest = stripped[len("dirs:"):].strip()
-                if rest.startswith("["):
-                    raw_map["dirs"].extend(_split_flow_list(rest))
-                    in_sub = None
-                else:
-                    in_sub = "dirs"
-            elif in_sub and stripped.startswith("- "):
-                raw_map[in_sub].append(stripped[2:].strip().strip("'\""))
             else:
-                in_sub = None
+                in_sub = _apply_allowlist_subkey(stripped, raw_map, in_sub)
     parsed = _ws_parse_allowlist({
         "files": raw_map["files"],
         "dirs": raw_map["dirs"],
     })
-    legacy = len(legacy_items)
-    if not raw_map["files"] and not raw_map["dirs"]:
-        # No mapping content found: treat any collected strings under a
-        # legacy "- item" block as flat entries for the hint count.
-        pass
     return {
         "files": sorted(parsed.get("files") or []),
         "dirs": sorted(parsed.get("dirs") or []),
-        "legacy": legacy,
+        "legacy": len(legacy_items),
     }
 
 
