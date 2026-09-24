@@ -15,7 +15,7 @@ import datetime
 import json
 import logging
 
-from . import audit_prompts, config, events, subagents, session_dirs, state, stats
+from . import audit_prompts, claims, config, events, subagents, session_dirs, state, stats
 
 from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
@@ -219,7 +219,7 @@ def session_start(session_id, ctx):
     # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
     # the session-dir claim + pending marker (child sessions returned
     # above and inherit the parent's slot).
-    session_dirs.on_session_start(session_id)
+    claims.on_session_start(session_id)
     config.runtime_allowlist_clear()
     # SCR-041 R3: the confirmation-issued set follows the runtime
     # allowlist lifecycle -- cleared at every top-level session start.

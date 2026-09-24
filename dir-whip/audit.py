@@ -37,9 +37,9 @@ from .paths import (
 from .subagents import owner_session
 
 # SCR-044 R5 (spec 5.19): the script-vector binding observer lives in
-# session_dirs; the audit -> session_dirs direction is sanctioned (the
-# reverse import would be a cycle and does not exist).
-from . import session_dirs
+# claims; the audit -> claims direction is sanctioned (the reverse
+# import would be a cycle and does not exist).
+from . import claims
 
 logger = logging.getLogger("dir-whip")
 
@@ -323,7 +323,7 @@ def audit_post_check(session_id, task_id, is_subagent=False):
         # FIRST new compliant session dir under the root and ALWAYS
         # consumes the marker (a failed script leaves no ghost slot).
         if state.session_dirs.pending_create:
-            session_dirs.observe_added(
+            claims.observe_added(
                 working_dir_root, session_id, diff.get("added", []),
             )
         classified = classify_diff(

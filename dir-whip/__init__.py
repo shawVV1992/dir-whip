@@ -39,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, audit_prompts, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents
+from . import allowlist_writer, audit, audit_prompts, claims, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -148,7 +148,7 @@ def register(ctx):
         # BEFORE any hook can fire, so a host restart re-arms the
         # per-session slot (fail-open inside load_claims; validation
         # drops entries whose root/dir is gone).
-        session_dirs.load_claims()
+        claims.load_claims()
         # Host API injection slots (ADR-0007): session CWD accessor +
         # agent CWD accessor (R2 conditional injection) filled at register
         # time; absent host API -> None -> on_start always injects.

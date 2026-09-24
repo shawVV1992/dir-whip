@@ -123,12 +123,12 @@ def reset_all():
 def _clear_persistent_claims():
     """Delete the persistent claims file (CLR-2; fail-open).
 
-    Function-local import: session_dirs imports state at module load, so
-    a module-level state -> session_dirs edge would be a cycle. The cold
+    Function-local import: claims imports state at module load, so
+    a module-level state -> claims edge would be a cycle. The cold
     path only runs on test reset / re-register.
     """
     try:
-        from .session_dirs import clear_claims_store
+        from .claims import clear_claims_store
         clear_claims_store()
     except Exception:
         pass
