@@ -165,7 +165,7 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
 register_child = _audit_register_child
 subagent_start = on_subagent_start
 subagent_stop = on_subagent_stop
-# SCR-050 v3 R6.1: cross-module consumer (audit on_session_start) uses the
+# SCR-050 v3 R6.1: cross-module consumer (audit_prompts on_session_start) uses the
 # declared public name (seam discipline, spec 5.1 v2.19).
 record_top_session = _record_top_session
 

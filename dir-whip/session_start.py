@@ -15,7 +15,7 @@ import datetime
 import json
 import logging
 
-from . import audit, config, events, subagents, session_dirs, state, stats
+from . import audit_prompts, config, events, subagents, session_dirs, state, stats
 
 from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
@@ -215,7 +215,7 @@ def session_start(session_id, ctx):
     # 5.18: top-level session start clears the audit state (pending
     # violations, leftover pre snapshots, cap warning); child sessions
     # skip and inherit the parent's latched state.
-    audit.on_session_start(session_id)
+    audit_prompts.on_session_start(session_id)
     # SCR-044 R5 (CLR-1, spec 5.19): top-level session start clears
     # the session-dir claim + pending marker (child sessions returned
     # above and inherit the parent's slot).

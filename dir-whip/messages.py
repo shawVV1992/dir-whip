@@ -179,7 +179,7 @@ ORPHAN_NOTICE_MV_LINE = (
     '  mv "<root>/<entry>" "<session_dir>/Outputs/"'
 )
 
-# ---------------------------------------------------------------- audit.py (L1 notice / remediation / L3 gate / nudge / settle schema)
+# ---------------------------------------------------------------- audit family (L1 notice / remediation / L3 gate / nudge / settle schema)
 
 # L1 notice header line (one notice per result, context hygiene).
 AUDIT_NOTICE_HEADER_LINE = (
@@ -214,7 +214,7 @@ AUDIT_NOTICE_TAIL_LINE = (
 
 # L3 gate message static line fragments (spec 5.18); the dynamic
 # assembly (path list, settle-call join, fragment joining) stays in
-# audit._audit_gate_block_message.
+# audit_prompts._audit_gate_block_message.
 GATE_BLOCK_HEADER_LINE = (
     "BLOCKED: earlier command(s) wrote file(s) to the Working Directory "
     "root that still need remediation:"
@@ -278,7 +278,7 @@ NUDGE_MESSAGE_TEMPLATE = (
 )
 
 # dir_whip_settle tool schema description texts (the schema dict itself
-# stays in audit.py, same contract as ALLOW_PATH_TOOL_SCHEMA).
+# stays in settle.py, same contract as ALLOW_PATH_TOOL_SCHEMA).
 SETTLE_TOOL_DESCRIPTION = (
     "Move files that the dir-whip write audit flagged in the Working "
     "Directory root into the audit quarantine "

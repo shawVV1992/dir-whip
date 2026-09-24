@@ -1,6 +1,6 @@
 """Verdict chain: guard / classify_target / discipline_applies / terminal interception -- the plugin's core guard logic (spec 5.3, spec 5.10, spec 5.12).
 
-Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers paths/terminal/events/state/config plus the sanctioned import-back of subagents/audit; extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
+Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers paths/terminal/events/state/config plus the sanctioned import-back of subagents/audit/audit_prompts; extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
 
 Layer: core
 Refs: spec 5.3, spec 5.10, spec 5.12, spec v2.6 B2, SCR-050
@@ -21,11 +21,8 @@ import re
 
 from . import state
 
-from .audit import (
-    gate_block,
-    gate_unresolved,
-    pre_snapshot,
-)
+from .audit import pre_snapshot
+from .audit_prompts import gate_block, gate_unresolved
 
 from .config import (
     get_cached_config,

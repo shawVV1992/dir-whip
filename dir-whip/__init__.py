@@ -39,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents
+from . import allowlist_writer, audit, audit_prompts, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -182,7 +182,7 @@ def register(ctx):
         ctx.register_hook("transform_tool_result", on_transform_tool_result)
         # 5.18 R5 / v2.8 R2: pre_verify continuation fallback. The nudge
         # budget is the plugin-side SESSION-CUMULATIVE cap=3
-        # (audit.PRE_VERIFY_NUDGE_CAP, counter reset at session start);
+        # (audit_prompts.PRE_VERIFY_NUDGE_CAP, counter reset at session start);
         # the host's per-turn max_verify_nudges budget remains the outer
         # bound.
         ctx.register_hook("pre_verify", on_pre_verify)
@@ -385,12 +385,12 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
     """transform_tool_result hook adapter (5.18 L1 notice + 5.17 fallback).
 
-    SCR-050 v3 R6.2: dispatches to audit first; then applies the one-shot
+    SCR-050 v3 R6.2: dispatches to audit_prompts first; then applies the one-shot
     REMINDER fallback note (session_start.append_reminder_fallback) to the
     (possibly audit-adjusted) string result when an unavailable session
     start armed it."""
     try:
-        adjusted = audit.transform_tool_result(
+        adjusted = audit_prompts.transform_tool_result(
             tool_name, args, result, session_id, task_id, **kwargs,
         )
         return session_start.append_reminder_fallback(
@@ -403,11 +403,11 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
 
 def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
     """pre_verify hook adapter (5.18 R5 continuation fallback): dispatch to
-    audit. Returns {"action": "continue", "message": ...} when this turn
+    audit_prompts. Returns {"action": "continue", "message": ...} when this turn
     mutated files AND unresolved pending violations remain; None otherwise
     (turn finishes naturally). Fail-open: never raises."""
     try:
-        return audit.pre_verify_nudge(
+        return audit_prompts.pre_verify_nudge(
             session_id, changed_paths, **kwargs,
         )
     except Exception as exc:
