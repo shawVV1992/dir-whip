@@ -67,7 +67,7 @@ DISCIPLINE_BLOCK_MESSAGE = (
 # template definition lived only in the opt-in SKILL.md, so models that
 # had not loaded the skill never saw it). The dynamic assembly (Target
 # line, shared script invocation line, orphan move line, fragment
-# joining) stays in guard._block_message.
+# joining) stays in classify._block_message.
 BLOCK_MESSAGE_HEADER_LINE = (
     "BLOCKED: File writes in the Working Directory require a Session "
     "Directory or an allowed root file."

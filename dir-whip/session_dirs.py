@@ -83,7 +83,7 @@ def is_creation_signal(target, working_dir_root, verdict=None):
     parent creation and terminal touch/redirect alike).
 
     verdict is the caller-held classify-chain result for the target (the
-    shared-chain dict guard_create receives from guard._evaluate_target);
+    shared-chain dict guard_create receives from classify.evaluate_target);
     the T3 ALLOW half reads it -- re-running the chain here would need the
     allowlist guard_create does not carry and could diverge from the real
     verdict. verdict=None falls back to the config-kernel compliant-name
@@ -171,8 +171,8 @@ def script_invocation_line(task, working_dir_root):
 
 # Classification chain, injected by the assembly layer (SCR-044 R7;
 # ADR-0007 inject-don't-import, mirroring audit.set_classifier -- the
-# guard module imports this one, so a static guard import is a
-# cycle). Unwired -> scan_orphans fails open to None
+# verdict chain (classify) imports this one, so a static import back
+# is a cycle). Unwired -> scan_orphans fails open to None
 # (production-unreachable: register() wires before any hook runs).
 _classify_fn = None
 
@@ -257,7 +257,7 @@ def scan_orphans(working_dir_root, allowlist=None):
 def guard_create(verdict, normalized, working_dir_root, session_id=None,
                  is_subagent=False, tool_name=None, target=None, tokens=None):
     """Session-dir creation gate (spec 5.19) -- the SINGLE enforcement
-    point, mounted in guard._evaluate_target right after classify.
+    point, mounted from classify.evaluate_target right after classify.
 
     A no-op (returns None) for every verdict whose rule_key is not
     session-dir: T1 runtime / T2 config allowlist allows are exempt by
@@ -331,7 +331,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
 def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
                  tool_name="terminal"):
     """Session-dir creation SCRIPT gate (spec 5.19), consulted by
-    guard._guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
+    terminal_guard.guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
     the heredoc form stays gated).
 
     is_session_dir_script(tokens) False -> None (no interference). A

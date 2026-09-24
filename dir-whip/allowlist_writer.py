@@ -194,7 +194,7 @@ def write_config(mapping):
 
 
 def _refresh_cache():
-    """Narrow cache refresh so next guard.classify_target sees new allowlist.
+    """Narrow cache refresh so next classify.classify_target sees new allowlist.
 
     The allowlist is read via load_guard_config() each time (no cache in
     allowlist_writer itself, but config.py caches via get_cached_config), so

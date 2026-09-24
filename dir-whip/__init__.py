@@ -39,7 +39,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, audit_prompts, claims, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents
+from . import allowlist_writer, audit, audit_prompts, claims, classify, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents, terminal_guard
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -139,11 +139,11 @@ def register(ctx):
         state.session.plugin_version = report.plugin_version()
         # Assembly-layer injection (ADR-0007): wire the audit classifier
         # BEFORE any hook can fire.
-        audit.set_classifier(guard.classify_target)
+        audit.set_classifier(classify.classify_target)
         # SCR-044 R7: the orphan-scan classifier is wired the same way
         # (ADR-0007 inject-don't-import; session_dirs never imports
         # guard).
-        session_dirs.set_classifier(guard.classify_target)
+        session_dirs.set_classifier(classify.classify_target)
         # SCR-048 R1 (spec 5.19): restore the write-through claims store
         # BEFORE any hook can fire, so a host restart re-arms the
         # per-session slot (fail-open inside load_claims; validation
