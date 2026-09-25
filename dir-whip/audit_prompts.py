@@ -1,6 +1,6 @@
 """Audit conversation surface: L1 fire-once notice + L3 gate + continuation nudge + session-start cleanup (spec 5.18; split out of audit.py at SCR-055 R4).
 
-The audit-layer faces that touch the conversation or the hook chain: the L1 notice appended to terminal results (fire-once per violation; also triggers the lazy settle-tool registration), the L3 latch unresolved/block decision, the pre_verify continuation nudge and the top-level session-start audit reset. Judgment kernels and the pending store live in audit.py (read-only from here); the L4 settlement family lives in settle.py and is reached through a function-local import, so the module-level edge graph stays audit_prompts -> audit only. Depends on audit/paths/state/events/messages/subagents + stdlib; no host imports (ADR-0007).
+The audit-layer faces that touch the conversation or the hook chain: the L1 notice appended to terminal results (fire-once per violation; also triggers the lazy settle-tool registration), the L3 latch unresolved/block decision, the pre_verify continuation nudge and the top-level session-start audit reset. Judgment kernels and the pending store live in audit.py (read-only from here); the L4 settlement family also lives in audit.py and is reached through a function-local import. Depends on audit/paths/state/events/messages/subagents + stdlib; no host imports (ADR-0007).
 
 Layer: core
 Refs: spec 5.18, spec v2.8 R1, spec v2.9 R4, SCR-040 R2/R4, SCR-041 R1, SCR-044 R3, SCR-050 v3 R6.2, SCR-055 R4, ADR-0007
@@ -164,13 +164,13 @@ def transform_tool_result(tool_name=None, args=None, result=None,
             mark_announced(session_id, path)
         # R4 lazy registration: the settle tool enters the registry on the
         # FIRST notice fire (not at register() -- the eager tool surface is
-        # pinned to dir_whip_allow_path alone). SCR-055 R4: the L4 family
-        # lives in settle.py and is reached via a function-local import
-        # (module-level edge graph stays audit_prompts -> audit only;
-        # state.py cycle-break precedent). Registration failure must never
-        # eat the notice (fail-open inside the helper).
-        from . import settle as _settle
-        _settle.lazy_register_settle_tool()
+        # pinned to dir_whip_allow_path alone). SCR-056 R1c: the L4 family
+        # lives in audit.py and is reached via a function-local import
+        # (call-site laziness preserved; state.py cycle-break precedent).
+        # Registration failure must never eat the notice (fail-open inside
+        # the helper).
+        from . import audit as _audit
+        _audit.lazy_register_settle_tool()
         return result + "\n\n" + _audit_notice_message(unannounced)
     except Exception as exc:
         logger.debug("dir-whip: transform_tool_result error (fail-open): %s", exc)
