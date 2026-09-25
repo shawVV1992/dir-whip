@@ -153,7 +153,12 @@ def resolve_working_dir_root(ctx, config_path=None):
         pass
 
     # 3. Fail-open: guard disabled
-    logger.warning("dir-whip: cannot resolve working_dir_root, guard disabled")
+    logger.warning(
+        "dir-whip: cannot resolve working_dir_root, guard disabled "
+        "(profile=%s session=%s)",
+        getattr(ctx, "profile_name", None) if ctx else None,
+        state.stats.session.get("session_id"),
+    )
     return None
 
 

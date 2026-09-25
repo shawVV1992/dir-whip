@@ -110,8 +110,7 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             outcome, tool, rule_key, target=target, reason=reason,
             is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
         )
-        rel_target = relativize_target(target, working_dir_root)
-        # The log/bus routing basis is GEOMETRIC (computed fresh,
+        rel_target = relativize_target(target, working_dir_root)        # The log/bus routing basis is GEOMETRIC (computed fresh,
         # chain-homologous); the outcome string stays as fallback so
         # fail-open shapes keep their levels.
         outside = (
@@ -128,6 +127,9 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             "rule_key": rule_key,
             "is_subagent": bool(is_subagent),
             "session_id": session_id,
+            # v2.25 SCR-057 D1: multi-profile attribution inside one
+            # desktop-process log (session_id alone is ambiguous).
+            "profile": state.session.session_profile,
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
         }
         line = json.dumps(event)

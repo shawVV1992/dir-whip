@@ -45,6 +45,7 @@ class _SessionState:
         self.orphan_notice_text = None   # cached orphan notice text for the fallback tail
         self.log_handler_installed = False  # dir-whip.log attach idempotence flag
         self.confirmation_issued = set()  # allow_path two-step confirmation issued set (guarded by self.lock)
+        self.unseen_tools = set()        # unseen:<tool> probe throttle, (session_id, tool_name) keys (self.lock)
         self.child_session_ids = set()   # guarded by self.lock
         # Session-topology pair; same container and lock discipline as
         # child_session_ids above.

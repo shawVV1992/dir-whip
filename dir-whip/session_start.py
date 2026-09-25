@@ -237,6 +237,7 @@ def _reset_session_scope(session_id):
     runtime_allowlist.runtime_allowlist_clear()
     with state.session.lock:
         state.session.confirmation_issued.clear()
+        state.session.unseen_tools.clear()
     guard.reset_fail_open_flag()
 
 

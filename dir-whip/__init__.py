@@ -50,6 +50,33 @@ from .events import (
 
 logger = logging.getLogger("dir-whip")
 
+# Plugin-owned tools excluded from the unseen probe (D4, v2.25 SCR-057).
+_PLUGIN_TOOLS = frozenset(("dir_whip_allow_path", "dir_whip_settle"))
+
+
+def _observe_unseen_tool(tool_name, session_id):
+    """One DEBUG observation per (session, tool) for tools outside the
+    write-class set (v2.25 SCR-057 D4 probe): the next unobserved
+    write-capable channel surfaces here instead of via an incident.
+    Excludes plugin-owned tools; throttled per session+tool (mirrors the
+    one-time fail-open warning precedent); fail-open, never raises.
+    """
+    try:
+        if not tool_name or tool_name in _PLUGIN_TOOLS:
+            return
+        key = (session_id, tool_name)
+        with state.session.lock:
+            if key in state.session.unseen_tools:
+                return
+            state.session.unseen_tools.add(key)
+        events.emit(
+            "allow", tool_name, "unseen:" + str(tool_name), None,
+            "non-write-class tool observed (once per session)", session_id,
+            subagents._is_subagent_session(session_id),
+        )
+    except Exception as exc:
+        logger.debug("dir-whip: unseen probe failed (fail-open): %s", exc)
+
 # Runtime allowlist surface: see runtime_allowlist.py.
 from .runtime_allowlist import (
     ALLOW_PATH_TOOL_SCHEMA,
@@ -246,6 +273,7 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
     execute_code) additionally run the 5.18 re-scan; other tools ignored."""
     try:
         if tool_name not in guard.WRITE_CLASS_TOOLS:
+            _observe_unseen_tool(tool_name, session_id)
             return
         # Seed the config cache / session root (side-effect call).
         config.ensure_session_root()
