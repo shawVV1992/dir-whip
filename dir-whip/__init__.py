@@ -221,14 +221,6 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
         if session_id and not state.stats.session.get("session_id"):
             # Lock-held check-and-set; unlocked read = fast path.
             stats.stats_backfill_session(session_id)
-        if tool_name == "execute_code":
-            # 57.R0 temporary probe (superseded by 57.R1/R2): verify the
-            # host fires pre_tool_call for execute_code WITH a task_id
-            # (the audit pairing key half). Debug-only, no behavior.
-            logger.debug(
-                "dir-whip: R0 probe pre tool=%s task_id=%s session=%s",
-                tool_name, task_id, session_id,
-            )
         return guard.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
         logger.debug("dir-whip: guard hook error (fail-open): %s", exc)
@@ -249,27 +241,19 @@ def on_start(session_id, model=None, platform=None, **kwargs):
 
 def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
                       session_id=None, status=None, **kwargs):
-    """post_tool_call observer adapter: records write_file / patch /
-    terminal completions (rule_key ``landed:<tool>``); other tools ignored."""
+    """post_tool_call observer adapter: records write-class tool
+    completions (rule_key ``landed:<tool>``); paired tools (terminal /
+    execute_code) additionally run the 5.18 re-scan; other tools ignored."""
     try:
-        if tool_name == "execute_code":
-            # 57.R0 temporary probe (superseded by 57.R1/R2): verify the
-            # host fires post_tool_call for execute_code with a task_id
-            # matching the pre-side key (audit pairing contract).
-            # Debug-only, no behavior.
-            logger.debug(
-                "dir-whip: R0 probe post tool=%s task_id=%s session=%s "
-                "status=%s", tool_name, task_id, session_id, status,
-            )
-        if tool_name not in ("write_file", "patch", "terminal"):
+        if tool_name not in guard.WRITE_CLASS_TOOLS:
             return
         # Seed the config cache / session root (side-effect call).
         config.ensure_session_root()
         targets = guard.extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
-        # Terminal re-scan -> diff -> violation classification; runs
+        # Paired-tool re-scan -> diff -> violation classification; runs
         # alongside (never instead of) the landed: observation below.
-        if tool_name == "terminal":
+        if tool_name in audit.AUDIT_PAIRED_TOOLS:
             audit.audit_post_check(
                 session_id, task_id, is_subagent=subagents._is_subagent_session(session_id),
             )

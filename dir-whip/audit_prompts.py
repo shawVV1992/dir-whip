@@ -23,6 +23,7 @@ import logging
 from . import state
 
 from .audit import (
+    AUDIT_PAIRED_TOOLS,
     audit_post_check,
     mark_announced,
     pending_violation_clear,
@@ -118,21 +119,22 @@ def transform_tool_result(tool_name=None, args=None, result=None,
     """L1 fire-once notice hook, registered at register().
 
     Returning a string REPLACES the tool result the model sees next turn;
-    None leaves it unchanged. The audit is terminal-triggered, so only
-    TERMINAL results are decorated. Appends ONE notice naming every
+    None leaves it unchanged. The audit pairs the write-class tools
+    (terminal / execute_code), so only THOSE results are decorated.
+    Appends ONE notice naming every
     unannounced pending violation, then flips the announced flags (HARD
     fire-once: one notice per violation, never re-appended). Non-string
     results are untouched; JSON error results are not decorated; nothing
     unannounced -> None. Fail-open: any exception -> None.
 
     Ordering (live-verified): transform_tool_result fires BEFORE
-    post_tool_call for terminal, so the audit re-scan runs HERE first --
+    post_tool_call for paired tools, so the audit re-scan runs HERE first --
     it pops the pre snapshot and fills the pending set, then the notice
     reads it. The post_tool_call call stays as an order-agnostic no-op
     fallback. The audit runs exactly once regardless of hook order.
     """
     try:
-        if tool_name != "terminal":
+        if tool_name not in AUDIT_PAIRED_TOOLS:
             return None
         # Run the audit re-scan BEFORE reading the pending set (transform
         # fires before post_tool_call for terminal); safe when blocked-at-

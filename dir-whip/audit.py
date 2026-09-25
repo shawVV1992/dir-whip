@@ -11,6 +11,7 @@ Layer: core
 Refs: spec 5.18, SCR-043, ADR-0007
 Key exports:
   - set_classifier -- wire the classification chain (assembly-layer injection).
+  - AUDIT_PAIRED_TOOLS -- the write-class tools covered by pre/post pairing (single source).
   - snapshot / diff_snapshots -- read-only root snapshot + four-state diff.
   - classify_diff -- four-state diff -> {violations, recorded}; deletions record-only.
   - audit_norm_path -- deterministic pending-set key (absolute + native-normalized).
@@ -63,6 +64,12 @@ from . import claims
 from . import subagents
 
 logger = logging.getLogger("dir-whip")
+
+# Tools whose ALLOWED calls are covered by the pre/post snapshot pairing
+# (v2.25 SCR-057: terminal + execute_code). Single definition point --
+# consumed by the guard pre branch, the assembly post adapter and the L1
+# transform surface; no second literal list.
+AUDIT_PAIRED_TOOLS = ("terminal", "execute_code")
 
 # Audit entry guardrail: the DoS cap is an internal audit-owned constant
 # (de-configured); no config key adjusts it.
@@ -587,6 +594,7 @@ def settle_paths(session_id, paths):
 
 __all__ = [
     "set_classifier",
+    "AUDIT_PAIRED_TOOLS",
     "snapshot",
     "classify_diff",
     "audit_norm_path",
