@@ -162,7 +162,7 @@ Subagent variant: replace "I will create..." with "I will write to the target di
 
 ## Terminal Write Discipline
 
-Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations, and resolvable `mkdir` / `curl -o` / `wget -O` targets; uncertain intent is allowed + logged.
+Layer 1 applies to terminal writes. Guard intercepts redirects (`>` `>>`), `touch`, `cp`/`mv` destinations, and resolvable `mkdir` / `curl -o` / `wget -O` targets; uncertain intent is allowed + logged. In-kernel writes (the `execute_code` tool writing files from inside its interpreter kernel) follow the SAME root-forbid: place them in a Session Directory or an allowlisted path; the write audit pairs around them exactly like terminal writes.
 
 1. Prefer Session Directories for all writes
 2. One session directory per conversation - a second creation attempt is blocked (session-dir limit)
