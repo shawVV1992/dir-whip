@@ -1,30 +1,21 @@
 """Structured allowlist parsing / matching (``{files, dirs}`` mapping, root-relative) -- single source of truth.
 
-Storage is ALWAYS relative to working_dir_root (absolute input is
-input-layer tolerance only; the report command layer relativizes before
-storing); a legacy FLAT value (v2.6 tagged list) or any non-dict input
-is ignored fail-closed (empty sets), with legacy shapes surfaced as
-ignored entries on the report/list surfaces, while invalid entries are
-silently filtered (hand-edited configs fail-closed; guard and audit
-agree). Matching: ``files`` = exact basename match
-(case-insensitive on Windows), ``dirs`` = recursive subtree exemption
-under <working_dir_root>/<entry> with the root itself never exempt --
-the T2 (config allowlist) exemption source (SCR-052 R1 V1: the former
-"(Tier 0)" prose contradicted the T0-T4 chain; Runtime Allowlist = T1,
-config allowlist = T2); pure functions only, no host imports, no
-state (ADR-0007), import surface = stdlib + ``paths``.
+Storage is relative to working_dir_root (absolute input is input-layer
+tolerance only); legacy flat / non-dict input is ignored fail-closed
+(empty sets), legacy shapes surfacing on the report/list surfaces.
+``files`` = exact basename match (casefold on Windows), ``dirs`` =
+recursive subtree exemption under <working_dir_root>/<entry>; the root
+is never exempt. Pure functions, no host imports, no state.
 
 Layer: core
-Refs: spec 5.3, spec 5.6, spec 5.18, SCR-006, SCR-039 R7, SCR-039 R9, SCR-055 R7, ADR-0007
+Refs: spec 5.6, spec 5.3, ADR-0007
 Key exports:
   - parse_allowlist -- raw ``allowlist`` config value -> validated ``{"files": set, "dirs": set}`` (fail-closed).
-  - parse_allowlist_raw -- RAW value passthrough (list/dict kept; scalars -> []); loaded-value contract holder.
+  - parse_allowlist_raw -- raw value passthrough (list/dict kept; scalars -> []).
   - format_allowlist -- parsed sets -> canonical sorted ``{"files": [...], "dirs": [...]}`` mapping.
   - is_allowlist_file -- root-file basename exemption (exact match, casefold on Windows).
   - is_allowlist_dir -- recursive subtree exemption under <working_dir_root>/<entry>; root never exempt.
-  - validate_file_entry -- public file-basename validation wrapper: (ok, reason).
-  - validate_dir_entry -- public relative-dir validation wrapper: (ok, reason).
-  - normalize_dir_entry -- stored-form dir normalization (fwd slashes, no trailing slash) or None.
+  - validate_file_entry / validate_dir_entry / normalize_dir_entry -- entry validation wrappers (ok, reason) + stored-form dir normalization.
 """
 
 import os
@@ -39,7 +30,7 @@ MAX_DIR_LEN = 4096
 
 
 def _validate_file(name):
-    """Strict file basename checks (spec 5.6 R9).
+    """Strict file basename checks (spec 5.6).
 
     Returns (ok, reason). Valid file: non-empty stripped, length <=255,
     no "/" or "\\", not "." or "..", no ".." substring, basename == name,
@@ -66,7 +57,7 @@ def _validate_file(name):
 
 
 def _validate_dir_rel(path):
-    """Strict relative-dir checks (spec 5.6 R9).
+    """Strict relative-dir checks (spec 5.6).
 
     Returns (ok, reason). Valid dir entry: non-empty stripped string,
     RELATIVE to working_dir_root (no drive/absolute forms, no ":"),
@@ -99,7 +90,7 @@ def _validate_dir_rel(path):
 
 def _normalize_dir_rel(path):
     """Normalize a validated dir entry: forward slashes, trailing slash
-    stripped, duplicate slashes collapsed (R7 storage normalization)."""
+    stripped, duplicate slashes collapsed."""
     if not isinstance(path, str):
         return ""
     s = path.strip().replace("\\", "/")
@@ -115,7 +106,7 @@ def _normalize_for_match(path):
         return ""
     s = str(path).replace("\\", "/")
     s = re.sub(r"/{2,}", "/", s)
-    # Trailing slash normalized except roots (same rule as prefixes had)
+    # Trailing slash normalized except roots
     if s != "/" and not re.match(r"^[A-Za-z]:/$", s) and s.endswith("/"):
         s = s.rstrip("/")
     return s
@@ -127,21 +118,13 @@ def _normalize_for_match(path):
 def parse_allowlist(raw):
     """Parse the raw ``allowlist`` config value into structured sets.
 
-    Args:
-        raw: value of the ``allowlist`` key after yaml.safe_load.
-            Expected MAPPING ``{"files": [...], "dirs": [...]}`` with
-            root-relative entries (spec 5.6 v2.7). A legacy FLAT value
-            (v2.6 list of tagged strings) or any non-dict input is
-            ignored fail-closed -> empty sets (clean break).
-
-    Returns:
-        dict ``{"files": set, "dirs": set}`` with validated, normalized
-        entries. Invalid entries are silently ignored (strict filter,
-        hand-edited configs fail-closed; guard and audit agree).
-
-    Example:
-        parse_allowlist({"files": ["a.txt"], "dirs": ["proj/sub"]})
-        -> {"files": {"a.txt"}, "dirs": {"proj/sub"}}
+    ``raw`` is the value of the ``allowlist`` key after yaml.safe_load;
+    the expected mapping is ``{"files": [...], "dirs": [...]}`` with
+    root-relative entries. A legacy flat list or any non-dict input is
+    ignored fail-closed -> empty sets. Invalid entries are silently
+    ignored (hand-edited configs fail-closed; guard and audit agree).
+    ``parse_allowlist({"files": ["a.txt"], "dirs": ["proj/sub"]})`` ->
+    ``{"files": {"a.txt"}, "dirs": {"proj/sub"}}``.
     """
     if not isinstance(raw, dict):
         # Legacy flat list / missing key / scalar -> fail-closed ignore.
@@ -164,14 +147,13 @@ def parse_allowlist(raw):
 
 
 def parse_allowlist_raw(value):
-    """RAW passthrough of the allowlist config value (spec 5.6 v2.7 R9).
+    """RAW passthrough of the allowlist config value.
 
     Parsing/validation is done by parse_allowlist at the consumption
-    points (guard/audit/report). Keeping the RAW value (structured
-    mapping dict, legacy flat list, or []) preserves the loaded-value
-    contract while legacy flat lists stay visible for the clean-break
-    hint. Non-list/dict scalars -> []. SCR-055 R7: moved verbatim from
-    config._parse_allowlist (allowlist semantics home).
+    points (guard / audit / report). Keeping the raw value (structured
+    dict, legacy flat list, or []) preserves the loaded-value contract
+    while legacy flat lists stay visible for the clean-break hint.
+    Non-list/dict scalars -> [].
     """
     if isinstance(value, (list, dict)):
         return value
@@ -181,18 +163,10 @@ def parse_allowlist_raw(value):
 def format_allowlist(parsed):
     """Format a parsed allowlist back to the structured mapping form.
 
-    Args:
-        parsed: dict with ``files`` and ``dirs`` (sets or lists) as
-            returned by ``parse_allowlist``.
-
-    Returns:
-        dict ``{"files": [sorted...], "dirs": [sorted...]}`` — the
-        canonical YAML mapping shape (deterministic sorted order for
-        stable flow-style writing).
-
-    Example:
-        format_allowlist({"files": {"a.txt"}, "dirs": {"proj"}})
-        -> {"files": ["a.txt"], "dirs": ["proj"]}
+    Input: dict with ``files`` and ``dirs`` (sets or lists) as returned
+    by parse_allowlist. Output: ``{"files": [sorted...], "dirs":
+    [sorted...]}`` -- the canonical YAML shape (deterministic sorted
+    order for stable flow-style writing); invalid entries are dropped.
     """
     if not isinstance(parsed, dict):
         return {"files": [], "dirs": []}
@@ -215,14 +189,9 @@ def format_allowlist(parsed):
 def is_allowlist_file(name, parsed):
     """Check whether a basename is allowlisted as a root file.
 
-    Args:
-        name: basename to test (e.g. "notes.txt"). If a full path is
-            passed, its basename is used.
-        parsed: dict from ``parse_allowlist``.
-
-    Returns:
-        True if ``name`` matches an allowlist ``files`` entry (exact
-        basename, case-insensitive on Windows via casefold).
+    Uses the basename when a full path is passed; matching is exact and
+    case-insensitive on Windows via casefold. ``parsed`` is the dict
+    from parse_allowlist.
     """
     if not isinstance(name, str):
         return False
@@ -244,18 +213,10 @@ def is_allowlist_file(name, parsed):
 def is_allowlist_dir(path, working_dir_root, parsed):
     """Check whether a path is exempted by an allowlist ``dirs`` entry.
 
-    Args:
-        path: absolute path to test (forward or back slashes).
-        working_dir_root: the Working Directory root (dirs entries are
-            relative to it).
-        parsed: dict from ``parse_allowlist``.
-
-    Returns:
-        True when ``path`` equals or is UNDER ``<root>/<entry>`` for any
-        ``dirs`` entry (recursive subtree exemption, forward-slash
-        normalized, case-insensitive on Windows via casefold — and for
-        drive-rooted pairs on any host, SCR-006). The root itself and
-        anything outside it are never exempt.
+    True when ``path`` equals or is UNDER ``<root>/<entry>`` for any
+    dirs entry (recursive subtree exemption, forward-slash normalized,
+    case-insensitive on Windows and for drive-rooted pairs on any host).
+    The root itself and anything outside it are never exempt.
     """
     if not isinstance(path, str) or not path.strip():
         return False
@@ -292,18 +253,12 @@ def is_allowlist_dir(path, working_dir_root, parsed):
 
 
 def validate_file_entry(name):
-    """Public wrapper for file validation (allowlist_writer contract).
-
-    Returns (ok, reason).
-    """
+    """Public wrapper for file validation; returns (ok, reason)."""
     return _validate_file(name)
 
 
 def validate_dir_entry(rel):
-    """Public wrapper for relative-dir validation (R9 contract).
-
-    Returns (ok, reason).
-    """
+    """Public wrapper for relative-dir validation; returns (ok, reason)."""
     return _validate_dir_rel(rel)
 
 

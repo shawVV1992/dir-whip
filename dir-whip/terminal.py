@@ -3,25 +3,19 @@
 Tokenizes shell commands (quote/escape aware, chain boundaries as
 standalone tokens), extracts block-tier write targets (redirect / touch /
 cp-mv / mkdir / downloads) per segment, and owns the terminal interception
-loop (guard_terminal: session-dir script gate, heredoc blanket demotion,
-per-segment targets through classify.evaluate_target, uncertain allow+log)
-plus its decision predicates (is_terminal_uncertain / is_device_path /
-is_session_dir_script / terminal_cp_mv_src) -- lexical extraction and
-judgment are one concept (SCR-056 R1b reverts the SCR-055 R6/R7 module
-split). Pure functions, no host imports, no state (SCR-035, ADR-0007);
-extracted from dir_whip.py (task 31.5).
+loop (guard_terminal) plus its decision predicates. Pure functions, no
+host imports, no state.
 
 Layer: core
-Refs: spec 4.1, spec 4.2, spec 4.3, spec 5.10, spec 5.19, spec v2.6 B2, spec v2.8 R7, SCR-033, SCR-035, SCR-044, SCR-052, SCR-055 R6, SCR-055 R7, SCR-056 R1b, ADR-0007
+Refs: spec 4.1, spec 5.10, spec 5.19
 Key exports:
   - tokenize_command -- split a shell command into tokens (lenient POSIX-ish lexer; never raises).
   - chain_segments -- split tokens into command segments at chain boundaries (5.10).
   - terminal_block_targets -- chain-aware block-tier write targets as (target, rule_key) pairs.
   - guard_terminal -- terminal write interception loop (guard() dispatch; None = allow).
   - is_terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
-  - is_device_path -- exempt device-path predicate (4.3; SCR-050 v3 R6.1 public).
-  - is_session_dir_script -- does a chain segment invoke create_session_dir.py under a Python interpreter?
-  - terminal_cp_mv_src -- literal source token of the mv/cp segment whose destination equals ``dst``.
+  - is_device_path -- exempt device-path predicate (4.3).
+  - is_session_dir_script / terminal_cp_mv_src -- session-dir creation-script predicate + mv/cp source lookup.
 """
 
 import logging
@@ -43,17 +37,16 @@ from . import session_dirs
 
 logger = logging.getLogger("dir-whip")
 
-# Terminal coarse tiers (spec 5.10). Redirect operators are emitted by
-# tokenize_command as standalone tokens; block-tier targets are exact
-# membership + next plain token. Everything else with write intent is
-# ALLOW + LOG (terminal-write-uncertain), never approved or blocked.
+# Terminal coarse tiers (spec 5.10): redirect operators are standalone
+# tokens; block-tier targets are exact membership + next plain token.
+# Everything else with write intent is ALLOW + LOG, never approved.
 REDIRECT_TOKENS = frozenset((">", ">>", "1>", "2>", "1>>", "2>>", "&>"))
 OPERATOR_TOKENS = frozenset(("|", "&")) | REDIRECT_TOKENS
 NON_LITERAL_RE = re.compile(r"[$`]")
 
-# 4.1 (SCR-033): chain boundaries emitted by tokenize_command. `&&` is
-# two `&` tokens (both boundaries); `&>` stays a single redirect token and
-# is NOT a boundary. Newlines are emitted as "\n" marker tokens.
+# 4.1 chain boundaries emitted by tokenize_command: `&&` is two `&`
+# tokens (both boundaries); `&>` stays one redirect token, NOT a
+# boundary; newlines are "\n" marker tokens.
 _CHAIN_BOUNDARY_TOKENS = frozenset((";", "|", "&", "\n"))
 
 
@@ -61,13 +54,12 @@ def tokenize_command(command):
     """Split a shell command into tokens (lightweight, POSIX-ish).
 
     Respects single quotes (fully literal), double quotes (backslash only
-    escapes " \\ $ ` inside), and backslash escaping outside quotes.
-    Unquoted whitespace separates tokens. Redirect operators (>, >>, 2>,
+    escapes " \\ $ ` inside), and backslash escaping outside quotes;
+    unquoted whitespace separates tokens. Redirect operators (>, >>, 2>,
     &>, 1>, 1>>, 2>>), pipes, background ampersands, semicolons and
-    newlines are emitted as standalone tokens (semicolons and newlines are
-    chain-boundary markers, 5.10 "Chain-aware target extraction"). Lenient
-    by design: unclosed quotes and malformed input never raise (the
-    remainder is absorbed into the current token).
+    newlines are emitted as standalone tokens (semicolons/newlines are
+    chain boundaries). Lenient by design: unclosed quotes and malformed
+    input never raise (the remainder is absorbed into the current token).
     """
     if not isinstance(command, str):
         return []
@@ -100,8 +92,8 @@ def tokenize_command(command):
 
 
 def _scan_operator(command, i, n):
-    """Standalone operator token at command[i] (5.10 chain markers +
-    redirect operators), or (None, i) when a word starts there.
+    """Standalone operator token at command[i], or (None, i) when a word
+    starts there.
 
     Newline / pipe / semicolon emit verbatim; a lone "&" is a chain
     boundary while "&>" stays one redirect token; ">" / ">>" are the
@@ -188,8 +180,7 @@ def chain_segments(tokens):
     token. "&&" surfaces as two "&" tokens, both boundaries, dropping the
     empty segment between them; "&>" stays a single redirect token and
     never splits. Quoted boundaries never reach here (the tokenizer keeps
-    them inside words). SCR-055 R7 public (predicate-family consumer;
-    SCR-056 R1b merged that family back into this module).
+    them inside words).
     """
     segments = []
     cur = []
@@ -205,7 +196,7 @@ def chain_segments(tokens):
     return segments
 
 
-# --- Command-target extraction shapes (SCR-044 R1, spec 5.10) -----------
+# --- Command-target extraction shapes (spec 5.10) -----------------------
 # Declarative shapes consumed by _WRITE_SPECS. Each shape is a pure
 # function (seg, redirect_idx) -> literal target tokens. All shapes share
 # the same filtering: operator tokens, flag tokens (leading "-"), redirect
@@ -246,7 +237,7 @@ def _flag_value(*flags):
     """Shape factory: the literal value following one of `flags`.
 
     Exact flag-token match only (combined short flags and equals-attached
-    forms never match). Registered for curl -o / wget -O (SCR-044 R4).
+    forms never match). Registered for curl -o / wget -O.
     """
     wanted = frozenset(flags)
 
@@ -272,12 +263,10 @@ def _flag_value(*flags):
     return extract
 
 
-# Block-tier command specs (5.10): command -> (shape, rule_key). SCR-044
-# R4 registered mkdir / curl / wget (terminal-mkdir / terminal-download);
-# their extracted targets classify through the same T0-T4 chain as the
-# write tools. Non-literal targets are never extracted and fall to the
-# uncertain tier; the blanket uncertain signal for curl / wget
-# (is_terminal_uncertain) stays untouched for
+# Block-tier command specs (5.10): command -> (shape, rule_key). mkdir /
+# curl / wget targets classify through the same T0-T4 chain as the write
+# tools. Non-literal targets are never extracted and fall to the uncertain
+# tier; the blanket uncertain signal for curl / wget stays untouched for
 # non-extracted forms.
 _WRITE_SPECS = {
     "touch": (_all_literal_args, RULE_KEY_TERMINAL_TOUCH),
@@ -322,7 +311,7 @@ def _segment_block_targets(seg):
 
 
 def terminal_block_targets(tokens):
-    """Block-tier write targets (spec 5.10), chain-aware (SCR-033).
+    """Block-tier write targets (spec 5.10, chain-aware).
 
     Tokens are first split into command segments at chain boundaries
     (5.10: `&&` / `;` / `|` / newline / lone `&`); redirect targets and
@@ -340,15 +329,15 @@ def terminal_block_targets(tokens):
     return out
 
 
-# ---------------------------------------------------------------- Terminal decision layer (SCR-056 R1b: merged back; the SCR-055 R6/R7 split reverted)
+# ---------------------------------------------------------------- Terminal decision layer
 
 
 def _terminal_base(args, task_id, working_dir_root):
     """Resolve the terminal relative-target base (spec 5.3 step 4).
 
     Chain: args["workdir"] -> get_session_cwd(task_id) -> working_dir_root.
-    Never os.getcwd(). SCR-052 G2: the resolved base carries the
-    working_dir_root name (the effective root for THIS terminal call).
+    Never os.getcwd(). The resolved base carries the working_dir_root name
+    (the effective root for THIS terminal call).
     """
     working_dir_root = (
         (args.get("workdir") if isinstance(args, dict) else None)
@@ -360,20 +349,16 @@ def _terminal_base(args, task_id, working_dir_root):
 
 def guard_terminal(args, task_id, working_dir_root, allowlist,
                    is_subagent=False, session_id=None):
-    """Terminal write interception (spec 5.10 coarse tiers, v2.6 B2).
+    """Terminal write interception (spec 5.10 coarse tiers).
 
-    - Always on (5.10 v2.8 R7: the terminal_guard config key is removed;
-      enforcement is unconditional, no switch).
-    - Heredoc (`<<`) blanket demotion (4.4): the WHOLE command is judged
-      uncertain (allow + log), no body parsing, no block extraction.
-    - Block tier: redirect / touch / cp-mv targets classify through the
-      shared chain, per command segment (4.1); a target that is a device
-      path (4.3) is exempt BEFORE normalization and emits nothing.
-    - Uncertain tier: nested shells, python/node/sed/tee/curl/wget/dd,
-      dynamic paths, `=`-residue tokens -> ALLOW + LOG (rule_key
-      terminal-write-uncertain), NO approval gate.
-    - Read-only / unparseable -> allow (no verdict event).
-    - Any exception -> None (fail-open).
+    Always on, no config switch. Heredoc (`<<`) -> the WHOLE command is
+    uncertain (allow + log, no body parsing, no block extraction). Block
+    tier: redirect / touch / cp-mv targets classify through the shared
+    chain per segment; device paths are exempt BEFORE normalization and
+    emit nothing. Uncertain tier: nested shells, python/node/sed/tee/
+    curl/wget/dd, dynamic paths, `=`-residue -> ALLOW + LOG (rule_key
+    terminal-write-uncertain), NO approval gate. Read-only / unparseable
+    -> allow (no verdict event). Any exception -> None (fail-open).
     """
     try:
         command = args.get("command") if isinstance(args, dict) else None
@@ -387,18 +372,17 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
             args, task_id, working_dir_root
         )
 
-        # SCR-044 R5 (spec 5.19): session-dir script gate BEFORE the
-        # heredoc blanket demotion -- a second create_session_dir.py
-        # attempt is blocked even in heredoc form (BLK-3); a first
-        # attempt arms the pending_create marker that the audit
-        # post-diff observer consumes (OB-1/OB-2).
+        # Session-dir script gate BEFORE the heredoc blanket demotion --
+        # a second create_session_dir.py attempt is blocked even in
+        # heredoc form (BLK-3); a first attempt arms the pending_create
+        # marker that the audit post-diff observer consumes (OB-1/OB-2).
         act = session_dirs.guard_script(
             tokens, working_dir_root, session_id, is_subagent,
         )
         if act:
             return act
 
-        # 4.4 heredoc blanket demotion: never parse the body, never block.
+        # Heredoc blanket demotion: never parse the body, never block.
         if "<<" in command:
             emit(
                 "allow", "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
@@ -428,7 +412,7 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
         return None
 
 
-# ---------------------------------------------------------------- Terminal decision predicates (SCR-055 R7; homed with the lexer again at SCR-056 R1b)
+# ---------------------------------------------------------------- Terminal decision predicates
 
 # Uncertain-tier inputs (spec 5.10): nested shells, scripting interpreters /
 # download tools, dynamic ($ / `) paths, `=`-residue tokens -> ALLOW + LOG.
@@ -437,12 +421,12 @@ _UNCERTAIN_COMMANDS = frozenset(
     ("python", "python3", "py", "node", "sed", "tee", "curl", "wget", "dd")
 )
 
-# 4.3 (SCR-033): device paths exempt BEFORE normalization -- they never
-# enter the classification chain and produce no verdict/stats event (no
+# 4.3 device paths are exempt BEFORE normalization -- they never enter
+# the classification chain and produce no verdict/stats event (no
 # drive-inherited E:\dev\null fabrication on Windows).
 _DEVICE_PATHS = frozenset(("/dev/null", "/dev/stdout", "/dev/stderr"))
 
-# SCR-044 R1 (5.19): inputs of the is_session_dir_script predicate.
+# Inputs of the is_session_dir_script predicate (spec 5.19).
 _SESSION_SCRIPT_INTERPRETERS = frozenset(("python", "python3", "py"))
 _SESSION_SCRIPT_NAME = "create_session_dir.py"
 
@@ -453,8 +437,8 @@ def is_terminal_uncertain(tokens):
     Any chain segment whose first token is python/node/sed/tee/curl/wget/
     dd, any nested-shell invocation (bash -c / sh -c / powershell
     -Command), any non-literal ($ or `) token, or any token starting with
-    "=" (residue of an unquoted `>=` comparison split by a > redirect,
-    spec 5.10 / 4.2) -> True.
+    "=" (residue of an unquoted `>=` comparison split by a > redirect)
+    -> True.
     """
     if not tokens:
         return False
@@ -480,19 +464,17 @@ def _script_basename(tok):
 
 
 def is_session_dir_script(tokens):
-    """Pure predicate (SCR-044 R1, spec 5.19): does the command invoke
-    the session-dir creation script under a Python interpreter?
+    """Does the command invoke the session-dir creation script under a
+    Python interpreter? (spec 5.19)
 
-    Per-segment judgment: a chain segment triggers True only if it
-    simultaneously contains an interpreter token (python / python3 / py)
-    AND a token whose final path component is create_session_dir.py
-    (relative or absolute, quoted or not, forward or backslash paths).
-    Quoted nested-shell bodies stay inside a single token, so every token
-    is also split on whitespace to keep the inner command visible
-    (bash -c "python ... create_session_dir.py ..." -> True). An
-    interpreter and the script name in DIFFERENT segments -> False;
-    `cat` / `echo` mentions without an interpreter, `python -V` and the
-    module form `python -m create_session_dir` (basename without .py)
+    Per-segment judgment: a segment triggers True only if it contains an
+    interpreter token (python / python3 / py) AND a token whose final
+    path component is create_session_dir.py (relative or absolute,
+    quoted or not). Quoted nested-shell bodies stay inside one token, so
+    every token is also split on whitespace (bash -c "python ...
+    create_session_dir.py ..." -> True). Interpreter and script name in
+    DIFFERENT segments -> False; `cat` / `echo` mentions without an
+    interpreter, `python -V`, and the module form (basename without .py)
     -> False.
     """
     if not tokens:
@@ -509,17 +491,16 @@ def is_session_dir_script(tokens):
 
 
 def terminal_cp_mv_src(tokens, dst):
-    """Pure helper (SCR-044 R5 form b, spec 5.19): the literal source
-    token of the mv/cp command segment whose destination is `dst`.
+    """The literal source token of the mv/cp segment whose destination
+    equals `dst` (spec 5.19).
 
-    Scans chain segments; a segment qualifies when its command token is
-    mv/cp and its LAST literal arg (the _last_literal_arg destination
-    shape, same filtering as target extraction: operator tokens, flags,
-    redirect target slots and non-literal residues skipped) equals `dst`
-    exactly. Returns the literal arg immediately before that
-    destination, or None. The guard's session-dir creation gate
-    consults this to distinguish a rename OF the bound directory (claim
-    transfer, MV-1) from a second creation via mv (BLK-5).
+    A segment qualifies when its command token is mv/cp and its LAST
+    literal arg equals `dst` exactly (same filtering as target
+    extraction: operators, flags, redirect slots and non-literal
+    residues skipped). Returns the literal arg immediately before that
+    destination, or None. The guard's session-dir creation gate consults
+    this to distinguish a rename OF the bound directory (claim transfer)
+    from a second creation via mv.
     """
     for seg in chain_segments(tokens):
         if len(seg) < 3 or seg[0] not in ("mv", "cp"):
@@ -544,12 +525,11 @@ def terminal_cp_mv_src(tokens, dst):
 
 
 def is_device_path(target):
-    """True when the token is an exempt device path (4.3, SCR-033).
+    """True when the token is an exempt device path (4.3).
 
-    SCR-050 v3 R6.1: public predicate over the frozen _DEVICE_PATHS set
-    (deep-module preference: hide the data, expose the judgment; the
-    cross-module consumer (classify) must not reach the private set).
-    SCR-055 R7: homed here with the predicate family.
+    Public predicate over the frozen _DEVICE_PATHS set (hide the data,
+    expose the judgment; the classify consumer must not reach the
+    private set).
     """
     return target in _DEVICE_PATHS
 

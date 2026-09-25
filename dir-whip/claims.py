@@ -1,9 +1,14 @@
-"""Session-Directory claim store: in-memory owner -> bound-dir maps + write-through session-claims.json sidecar (SCR-044 R5, SCR-048 R1, spec 5.19; split out of session_dirs.py at SCR-055 R5).
+"""Session-Directory claim store: in-memory owner -> bound-dir maps + write-through session-claims.json sidecar (spec 5.19).
 
-The claims home: owner resolution (subagent -> parent attribution), bind / mv-transfer / release / heal operations, the slot-occupied determination and the CLR-1/CLR-2 lifecycle (restore at register, keep a restored live claim at top-level session start, clear via state.reset_all). Claims are write-through mirrored to session-claims.json in the profile-independent default dir-whip home (atomic tmp+replace, fail-open, 64-entry ts-LRU); the script-vector binding observer (observe_added) consumes the pending marker and binds the first compliant added dir. Pure decision layer (state / paths / subagents only; no host imports, ADR-0007); the creation gates that consume this API live in session_dirs.py (dependency direction: session_dirs -> claims, never the reverse).
+The claims home: owner resolution, bind / mv-transfer / release / heal,
+slot determination and the CLR-1/CLR-2 lifecycle (restore at register,
+resume-keep at top-level session start, clear via state.reset_all).
+Write-through mirrored to session-claims.json in the default dir-whip
+home (atomic tmp+replace, fail-open, 64-entry ts-LRU); creation gates
+live in session_dirs.py (direction: session_dirs -> claims only).
 
 Layer: core
-Refs: spec 5.19, SCR-044 R5, SCR-048 R1, SCR-048 R2, SCR-055 R5, ADR-0006, ADR-0007, ADR-0015
+Refs: spec 5.19, SCR-044, SCR-048
 Key exports:
   - load_claims / clear_claims_store -- restore the store at register() / CLR-2 delete (state.reset_all hook).
   - claim_of / claim_of_owner -- owner-resolved bound dir name (public read) / raw owner-level read.
@@ -27,7 +32,7 @@ from .subagents import owner_session
 
 logger = logging.getLogger("dir-whip")
 
-# Spec 5.19 (SCR-048 R1): persistent claims store constants.
+# Persistent claims store constants (spec 5.19).
 CLAIMS_STORE_NAME = "session-claims.json"
 CLAIMS_STORE_VERSION = 1
 CLAIMS_STORE_CAP = 64  # ts-LRU entry cap
@@ -36,7 +41,7 @@ CLAIMS_STORE_CAP = 64  # ts-LRU entry cap
 # ---------------------------------------------------------------- Claims persistence
 
 def _claims_store_path():
-    """Persistent claims store path (spec 5.19).
+    """Persistent claims store path.
 
     PROFILE-INDEPENDENT by design: dirwhip_home(None), the default home
     segment -- after a host restart on_session_start has not fired, so
@@ -47,7 +52,7 @@ def _claims_store_path():
 
 
 def _make_meta(name, working_dir_root):
-    """Persistence sidecar for one claim (spec 5.19 entry fields)."""
+    """Persistence sidecar for one claim."""
     return {
         "root": str(working_dir_root) if working_dir_root else None,
         "dir": str(name),
@@ -109,8 +114,7 @@ def persist_locked(keep_owner=None):
     """Write the claims store atomically (caller holds the lock).
 
     Fail-open: any IO/encoding error is logged at DEBUG only and ignored
-    -- the in-memory container stays authoritative (5.8, the
-    stats._append_stats_event tolerance pattern).
+    -- the in-memory container stays authoritative.
     """
     try:
         payload = _build_claims_payload(keep_owner)
@@ -133,13 +137,13 @@ def persist_locked(keep_owner=None):
 
 
 def load_claims():
-    """Restore the persistent claims at register() (spec 5.19).
+    """Restore the persistent claims at register().
 
     Restores only entries whose `root/dir` is still a directory on disk;
     every other entry is dropped. Restored entries are marked
     `restored=True` in the sidecar metadata so on_session_start can tell
     a resume from a fresh bind. Fail-open: missing file / corrupt JSON /
-    IO errors restore nothing and log DEBUG only (5.8).
+    IO errors restore nothing and log DEBUG only.
     """
     try:
         path = _claims_store_path()
@@ -175,7 +179,7 @@ def load_claims():
 
 
 def clear_claims_store():
-    """Delete the persistent claims store (CLR-2 revision, spec 5.19).
+    """Delete the persistent claims store (spec 5.19).
 
     Called by state.reset_all through a function-local import (a
     module-level state -> claims edge would be a cycle). Fail-open:
@@ -199,7 +203,7 @@ def owner_of(session_id):
 
 
 def claim_of_owner(owner):
-    """Raw owner-level claim read (SCR-055 R5 public; gate consumer)."""
+    """Raw owner-level claim read (gate consumer)."""
     with state.session_dirs.lock:
         return state.session_dirs.claims.get(owner)
 
@@ -215,7 +219,7 @@ def claim_of(session_id):
 def bind(owner, name, working_dir_root=None):
     """First bind (idempotent: an existing claim is never overwritten).
 
-    Write-through (spec 5.19): a new claim persists synchronously; the
+    Write-through: a new claim persists synchronously; the
     freshly bound entry is exempt from the dead-directory GC because the
     create action has not run yet at guard time (pending creation).
     """
@@ -259,15 +263,15 @@ def is_slot_occupied(owner):
 
 
 def heal_missing_claim(owner, working_dir_root):
-    """Release a claim whose bound directory vanished (spec 5.19, SCR-048 R2).
+    """Release a claim whose bound directory vanished (spec 5.19).
 
     A claim exists but `working_dir_root/<claim>` is no longer a directory
-    on disk -> pop the claim + its sidecar metadata and persist (write-through
-    deletion). Called ahead of the occupied determination in guard_create
-    and guard_script (ahead of the MV-1 rename branch -- a vanished
-    directory cannot be an mv source); after healing the normal free-slot
-    flow rebinds. Fail-open: returns True when a claim was released,
-    False otherwise; never raises.
+    on disk -> pop the claim + its sidecar metadata and persist
+    (write-through deletion). Called ahead of the occupied determination
+    in guard_create and guard_script, before the mv-rename branch (a
+    vanished directory cannot be an mv source); after healing the normal
+    free-slot flow rebinds. Fail-open: True when a claim was released;
+    never raises.
     """
     try:
         with state.session_dirs.lock:
@@ -288,12 +292,8 @@ def heal_missing_claim(owner, working_dir_root):
 # ---------------------------------------------------------------- Name helpers
 
 def same_name(a, b):
-    """Session-dir name comparison: Windows casefold (BND-7).
-
-    One-line delegate to paths.paths_equal (SCR-045 R7 single source);
-    the None-guard stays (two Nones are NOT equal names).
-    SCR-055 R5 public (cross-module consumer: session_dirs.guard_create).
-    """
+    """Session-dir name comparison: Windows casefold; two Nones are NOT
+    equal names. Delegates to paths.paths_equal."""
     if a is None or b is None:
         return False
     return paths_equal(a, b)
@@ -301,11 +301,7 @@ def same_name(a, b):
 
 def is_compliant(working_dir_root, name):
     """Compliant session-dir name check through the config kernel
-    (ADR-0006: SESSION_DIR_RE is never duplicated here).
-
-    SCR-055 R5 public (cross-module consumers: session_dirs.is_creation_signal
-    + claims.observe_added).
-    """
+    (SESSION_DIR_RE is never duplicated here)."""
     return is_inside_session_dir(
         os.path.join(str(working_dir_root), name), working_dir_root
     )
@@ -314,15 +310,14 @@ def is_compliant(working_dir_root, name):
 # ---------------------------------------------------------------- Claim lifecycle
 
 def observe_added(working_dir_root, session_id=None, added=()):
-    """Script-vector binding observer (spec 5.19), called from the
-    audit post-diff path (audit.audit_post_check) after an allowed
-    terminal command.
+    """Script-vector binding observer, called from the audit post-diff
+    path after an allowed terminal command.
 
-    Consumes the owner's pending_create marker UNCONDITIONALLY (OB-2:
-    a failed script leaves no ghost slot) and binds the FIRST new
-    compliant session dir among `added` (the audit diff passes
-    name-sorted additions; OB-3 first-bind, OB-4 non-compliant never
-    binds). Returns the bound name or None. Fail-open: never raises.
+    Consumes the owner's pending_create marker UNCONDITIONALLY (a failed
+    script leaves no ghost slot) and binds the FIRST new compliant
+    session dir among `added` (the audit diff passes name-sorted
+    additions; non-compliant names never bind). Returns the bound name
+    or None. Fail-open: never raises.
     """
     try:
         owner = owner_of(session_id)
@@ -343,11 +338,11 @@ def observe_added(working_dir_root, session_id=None, added=()):
 
 def on_session_start(session_id):
     """Top-level session start: clear the session's claim + pending
-    marker (CLR-1) with the v2.16 resume exception (spec 5.19).
+    marker, with the resume exception.
 
-    Resume (ADR-0015 D2): when a RESTORED claim (loaded at register()
-    into the in-memory sidecar; write-through keeps the store consistent,
-    so no second file read happens here) still holds this session AND
+    Resume: when a RESTORED claim (loaded at register() into the
+    in-memory sidecar; write-through keeps the store consistent, so no
+    second file read happens here) still holds this session AND
     `root/dir` is still a directory on disk, the claim is KEPT. Every
     other case pops the claim + pending marker and persists the deletion.
     Called from the session-start chain AFTER the child-session skip, so

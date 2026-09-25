@@ -1,9 +1,15 @@
-"""dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (SCR-035, ADR-0007).
+"""dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (ADR-0007).
 
-Three guarded host imports (absence -> None -> documented fallback): hermes_cli.tools.terminal_tool.get_session_cwd and agent.runtime_cwd.resolve_agent_cwd fill the CWD injection slots (missing accessor -> on_start always injects); hermes_cli.projects_db.connect_closing / get_active_id fill the project-active probe slot (missing -> no SCR-039 R7 project-mode exemption). Single fail-open try/except layer for hook dispatch: any registration error logs a warning and Hermes continues normally. SCR-050 v3 R6.2 (spec 5.1 v2.19): every hook adapter is a THIN dispatch -- the session-start decision chain lives in session_start.py, the guard chain in dirwhip.guard, the observers in subagents/audit/events.
+Three guarded host imports (absence -> None -> documented fallback):
+get_session_cwd / resolve_agent_cwd fill the CWD injection slots (missing
+accessor -> on_start always injects); projects_db.connect_closing /
+get_active_id fill the project-active probe slot (missing -> no
+project-mode exemption). Single fail-open try/except layer for hook
+dispatch: every hook adapter is a THIN dispatch; any registration error
+logs a warning and Hermes continues normally.
 
 Layer: assembly
-Refs: spec 3.1, spec 5.4, spec 5.7, spec 5.8, spec 5.11, spec 5.13, spec 5.14, spec 5.15, spec 5.17, spec 5.18, spec 5.19, SCR-035, SCR-039, SCR-040, SCR-041, SCR-044, SCR-045, SCR-048, SCR-050, SCR-055 R7, ADR-0007
+Refs: spec 5.7, spec 5.8, ADR-0007
 Key exports:
   - register -- register the host hooks, the dir_whip_allow_path tool, the /dir-whip command, the bundled skill and the event bus (single fail-open layer).
   - _guard_hook, on_start, on_post_tool_call, on_post_approval_response, on_pre_command, on_subagent_start, on_subagent_stop, on_transform_tool_result, on_pre_verify -- the thin host-hook adapters; each fail-open, never raises.
@@ -25,7 +31,7 @@ try:
 except ImportError:
     _resolve_agent_cwd = None
 
-# R7 project-mode exemption (spike 39.R4.0): projects_db imported ONLY here.
+# Project-mode exemption: projects_db imported ONLY here.
 try:
     from hermes_cli.projects_db import (
         connect_closing as _projects_connect_closing,
@@ -44,7 +50,7 @@ from .events import (
 
 logger = logging.getLogger("dir-whip")
 
-# Spec 5.11 runtime allowlist surface: see runtime_allowlist.py (SCR-055 R7).
+# Runtime allowlist surface: see runtime_allowlist.py.
 from .runtime_allowlist import (
     ALLOW_PATH_TOOL_SCHEMA,
     ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,
@@ -54,7 +60,7 @@ from .runtime_allowlist import (
 )
 from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
 
-# Spec 3.1 (v2.15 DF-13): bundled skill description; E1/E2 converged sentence.
+# Bundled skill description (spec 3.1; converged sentence).
 SKILL_DESCRIPTION = (
     "Use when creating, saving, writing, moving, or deleting files, "
     "organizing deliverables, designing workspace layout, auditing "
@@ -65,7 +71,7 @@ SKILL_DESCRIPTION = (
 
 
 def _project_active_probe():
-    """Host projects.db probe (R7): (active_id, [folder paths]) or None.
+    """Host projects.db probe: (active_id, [folder paths]) or None.
 
     Reads the ACTIVE project via get_active_id, then its folder paths
     from project_folders (primary_path + folders; the folder set is what
@@ -91,17 +97,17 @@ def _project_active_probe():
 
 
 def register(ctx):
-    """Register dir-whip hooks, tool and event bus (5.7/5.8/5.14).
+    """Register dir-whip hooks, tool, command, skill and event bus.
 
     Hooks: pre_tool_call / on_session_start / post_tool_call /
     post_approval_response / pre_command / subagent_start / subagent_stop /
-    transform_tool_result (5.18 L1 notice) / pre_verify (5.18 R5
-    continuation fallback). Tool: dir_whip_allow_path (the ONLY eager
-    tool; dir_whip_settle registers lazily on the first L1 notice fire).
+    transform_tool_result (L1 notice) / pre_verify (continuation
+    fallback). Tool: dir_whip_allow_path (the ONLY eager tool;
+    dir_whip_settle registers lazily on the first L1 notice fire).
     Event bus: hasattr(ctx, "emit") -> silent degradation when absent.
     Fail-open: any registration error logs a warning; the plugin is
-    disabled but Hermes continues normally. SCR-055 R7: three stage calls
-    (state wiring / hooks / tool+command+skill).
+    disabled but Hermes continues normally. Three stage calls (state
+    wiring / hooks / tool+command+skill).
     """
     try:
         _wire_register_state(ctx)
@@ -115,10 +121,10 @@ def register(ctx):
 def _wire_register_state(ctx):
     """Register-time state wiring (single fail-open layer in register)."""
     state.session.registered_ctx = ctx
-    # SCR-040 R5: attach the diagnostic log FIRST (fail-open).
+    # Attach the diagnostic log FIRST (fail-open).
     logsetup.setup()
-    # P6 (31.13): precompute plugin paths/version once (message building
-    # and report rendering read state, never __file__).
+    # Precompute plugin paths/version once (message building and report
+    # rendering read state, never __file__).
     plugin_dir = str(Path(__file__).resolve().parent)
     state.session.plugin_dir = plugin_dir
     state.session.script_resolver_path = os.path.normpath(
@@ -132,15 +138,15 @@ def _wire_register_state(ctx):
     # classifiers BEFORE any hook can fire (inject-don't-import).
     audit.set_classifier(classify.classify_target)
     session_dirs.set_classifier(classify.classify_target)
-    # SCR-048 R1 (spec 5.19): restore the write-through claims store
-    # BEFORE any hook fires (fail-open, validation drops dead entries).
+    # Restore the write-through claims store BEFORE any hook fires
+    # (fail-open, validation drops dead entries).
     claims.load_claims()
     # Host API injection slots (ADR-0007): absent host API -> None ->
     # on_start always injects.
     state.session.session_cwd_fn = _get_session_cwd
     state.session.agent_cwd_fn = _resolve_agent_cwd
-    # R7 project probe slot: filled only when the host module imported
-    # (same shape as the CWD slots); the probe itself runs per session.
+    # Project probe slot: filled only when the host module imported (same
+    # shape as the CWD slots); the probe itself runs per session.
     state.session.project_active_fn = (
         _project_active_probe
         if (
@@ -158,7 +164,7 @@ def _wire_register_state(ctx):
 
 
 def _register_hooks(ctx):
-    """Register the nine host hooks (5.7/5.8/5.14)."""
+    """Register the nine host hooks."""
     ctx.register_hook("pre_tool_call", _guard_hook)
     ctx.register_hook("on_session_start", on_start)
     ctx.register_hook("post_tool_call", on_post_tool_call)
@@ -167,13 +173,13 @@ def _register_hooks(ctx):
     ctx.register_hook("subagent_start", on_subagent_start)
     ctx.register_hook("subagent_stop", on_subagent_stop)
     ctx.register_hook("transform_tool_result", on_transform_tool_result)
-    # 5.18 R5 / v2.8 R2: pre_verify continuation fallback; plugin-side nudge
-    # budget = SESSION-CUMULATIVE cap=3 (audit_prompts.PRE_VERIFY_NUDGE_CAP).
+    # pre_verify continuation fallback; nudge budget = session-cumulative
+    # cap=3 (audit_prompts.PRE_VERIFY_NUDGE_CAP).
     ctx.register_hook("pre_verify", on_pre_verify)
 
 
 def _register_tool_command_skill(ctx):
-    """Eager tool + /dir-whip command + bundled skill (5.7/5.17)."""
+    """Eager tool + /dir-whip command + bundled skill."""
     if hasattr(ctx, "register_tool"):
         try:
             ctx.register_tool(
@@ -184,10 +190,10 @@ def _register_tool_command_skill(ctx):
             )
         except Exception as exc:
             logger.warning("dir-whip: register_tool failed: %s", exc)
-    # Spec 5.7 command (/dir-whip merged report) lives in report.py.
+    # The /dir-whip command (merged report) lives in report.py.
     report.register_dir_whip_commands(ctx)
-    # Spec 5.17: bundled skill (opt-in, qualified name); the
-    # once-per-session discipline block replaced the always-on prompt.
+    # Bundled skill (opt-in, qualified name); the once-per-session
+    # discipline block replaced the always-on prompt.
     try:
         skill_md = Path(state.session.skill_md_path)
         if skill_md.is_file() and hasattr(ctx, "register_skill"):
@@ -204,16 +210,16 @@ def _register_tool_command_skill(ctx):
 
 
 def _guard_hook(tool_name, args, task_id=None, **kwargs):
-    """Pre-tool-call hook adapter (5.8: never raises; fail-open -> None).
+    """Pre-tool-call hook adapter (never raises; fail-open -> None).
 
-    SCR-048 R6: lazy stats session-field backfill after a host restart --
-    the first session_id-carrying call restores attribution (idempotent;
-    profile / started_at stay unknown).
+    Lazy stats session-field backfill after a host restart -- the first
+    session_id-carrying call restores attribution (idempotent; profile /
+    started_at stay unknown).
     """
     try:
         session_id = kwargs.get("session_id")
         if session_id and not state.stats.session.get("session_id"):
-            # Lock-held check-and-set (SCR-048 R6); unlocked read = fast path.
+            # Lock-held check-and-set; unlocked read = fast path.
             stats.stats_backfill_session(session_id)
         return guard.guard(tool_name, args, task_id, **kwargs)
     except Exception as exc:
@@ -222,11 +228,10 @@ def _guard_hook(tool_name, args, task_id=None, **kwargs):
 
 
 def on_start(session_id, model=None, platform=None, **kwargs):
-    """on_session_start hook adapter (5.4): thin fail-open dispatch.
+    """on_session_start hook adapter: thin fail-open dispatch.
 
-    SCR-050 v3 R6.2: the session-start decision chain lives in
-    session_start.py (see its module header); this adapter dispatches and
-    swallows failures (5.8 fail-open single layer).
+    The session-start decision chain lives in session_start.py (see its
+    module header); this adapter dispatches and swallows failures.
     """
     try:
         session_start.session_start(session_id, state.session.registered_ctx)
@@ -236,16 +241,16 @@ def on_start(session_id, model=None, platform=None, **kwargs):
 
 def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
                       session_id=None, status=None, **kwargs):
-    """post_tool_call observer adapter (5.13 D2): records write_file / patch /
+    """post_tool_call observer adapter: records write_file / patch /
     terminal completions (rule_key ``landed:<tool>``); other tools ignored."""
     try:
         if tool_name not in ("write_file", "patch", "terminal"):
             return
-        # Seed the config cache / session root (SCR-045 R2: side-effect call).
+        # Seed the config cache / session root (side-effect call).
         config.ensure_session_root()
         targets = guard.extract_target_paths(tool_name, args) if isinstance(args, dict) else []
         target = targets[0] if targets else None
-        # 5.18: terminal re-scan -> diff -> violation classification; runs
+        # Terminal re-scan -> diff -> violation classification; runs
         # alongside (never instead of) the landed: observation below.
         if tool_name == "terminal":
             audit.audit_post_check(
@@ -262,7 +267,7 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
 
 def on_post_approval_response(choice=None, session_key=None, surface=None,
                               command=None, pattern_key=None, **kwargs):
-    """post_approval_response observer adapter (5.13 D2) + approval events (5.14).
+    """post_approval_response observer adapter + approval events.
 
     Granted/denied mapped from the host choice vocabulary; approval-resolved
     always emitted, approval-requested only with a request/entry state in
@@ -294,11 +299,11 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
 
 def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
                    session_key=None, platform=None, **kwargs):
-    """pre_command observer adapter (5.15): record only, never block (host
+    """pre_command observer adapter: record only, never block (host
     ignores the return; always None). Records surface / command / alias_used
     + args_raw / session_key / platform, rule_key ``pre-command:<command>``."""
     try:
-        # Seed the config cache / session root (SCR-045 R2: side-effect call).
+        # Seed the config cache / session root (side-effect call).
         config.ensure_session_root()
         detail = {"surface": surface, "alias_used": alias_used}
         if args_raw is not None:
@@ -319,7 +324,7 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
 def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
                       parent_session_id=None, parent_turn_id=None,
                       parent_subagent_id=None, child_subagent_id=None, **kwargs):
-    """subagent_start hook adapter (5.4): dispatch to subagents."""
+    """subagent_start hook adapter: dispatch to subagents."""
     try:
         return subagents.subagent_start(
             child_session_id, child_role, child_goal,
@@ -334,7 +339,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
 def on_subagent_stop(child_session_id=None, child_subagent_id=None,
                      child_role=None, child_status=None, duration_ms=None,
                      **kwargs):
-    """subagent_stop hook adapter (5.4): dispatch to subagents."""
+    """subagent_stop hook adapter: dispatch to subagents."""
     try:
         return subagents.subagent_stop(
             child_session_id, child_subagent_id,
@@ -347,11 +352,11 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
 
 def on_transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
-    """transform_tool_result hook adapter (5.18 L1 notice + 5.17 fallback).
+    """transform_tool_result hook adapter (L1 notice + fallback).
 
-    SCR-050 v3 R6.2: audit_prompts first, then the one-shot REMINDER
-    fallback note (session_start.append_reminder_fallback) on the result
-    when an unavailable start armed it.
+    audit_prompts first, then the one-shot REMINDER fallback note
+    (session_start.append_reminder_fallback) on the result when an
+    unavailable start armed it.
     """
     try:
         adjusted = audit_prompts.transform_tool_result(
@@ -366,7 +371,7 @@ def on_transform_tool_result(tool_name=None, args=None, result=None,
 
 
 def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
-    """pre_verify hook adapter (5.18 R5 continuation fallback): dispatch to
+    """pre_verify hook adapter (continuation fallback): dispatch to
     audit_prompts; {"action": "continue", "message": ...} when this turn
     mutated files AND unresolved violations remain, else None (fail-open)."""
     try:
@@ -379,10 +384,10 @@ def on_pre_verify(session_id=None, changed_paths=None, **kwargs):
 
 
 def _allow_path_handler(args, **kwargs):
-    """Thin adapter over runtime_allowlist.handle (SCR-045 R4).
+    """Thin adapter over runtime_allowlist.handle.
 
-    Entry-gating lives in runtime_allowlist.py (SCR-055 R7); the name
-    stays for tests + ctx.register_tool; fail-open layer lives here.
+    Entry-gating lives in runtime_allowlist.py; the name stays for tests +
+    ctx.register_tool; fail-open layer lives here.
     """
     try:
         return runtime_allowlist.handle(args, **kwargs)
@@ -391,7 +396,7 @@ def _allow_path_handler(args, **kwargs):
         return None
 
 
-# Declared surface (SCR-052 R1 G10.7): register + the thin hook adapters.
+# Declared surface: register + the thin hook adapters.
 __all__ = [
     "register", "_guard_hook", "on_start", "on_post_tool_call",
     "on_post_approval_response", "on_pre_command", "on_subagent_start",

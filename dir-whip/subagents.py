@@ -1,16 +1,19 @@
 """Child-session (subagent) tracking + audit parent links: child_session_ids / session_parents / top_session topology in state.session (spec 5.4, spec 5.16, spec 5.18).
 
-Tracks subagent sessions so on_session_start skips them and verdicts split as subagent; opens/closes the child stats session context and records child -> parent pending-set inheritance with the top-level-session fallback (owner_session promoted from audit._audit_owner_session, SCR-044 R3). No host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.11).
+Tracks subagent sessions so on_session_start skips them and verdicts
+split as subagent; opens/closes the child stats context and records
+child -> parent pending-set inheritance with the top-level-session
+fallback. No host imports (core discipline).
 
 Layer: core
-Refs: spec 5.4, spec 5.16, spec 5.18, SCR-035, SCR-044 R3, ADR-0007
+Refs: spec 5.4, spec 5.16, spec 5.18
 Key exports:
-  - _is_subagent_session -- True when session_id is a live child (subagent) session (SCR-052 G6: the former is_child public alias is deleted; single authoritative name).
+  - _is_subagent_session -- True when session_id is a live child (subagent) session (single authoritative name).
   - owner_session -- pending-set owner: child -> explicit parent or top_session fallback; None when unknown.
   - register_child -- record a child's parent link for pending-set inheritance.
   - subagent_start -- subagent_start observer: track the child + open the child stats context.
   - subagent_stop -- subagent_stop observer: untrack the child + close the child stats context.
-  - record_top_session -- record the current top-level session id (child-inheritance fallback; SCR-050 v3 R6.1 public).
+  - record_top_session -- record the current top-level session id (child-inheritance fallback).
 """
 
 import json
@@ -61,13 +64,11 @@ def _record_top_session(session_id):
 def owner_session(session_id):
     """Resolve the pending-set owner for a session (5.18 session scoping).
 
-    Child sessions (child_session_ids gate, 5.4) write into the PARENT's
-    pending set: the explicit parent link recorded by subagent_start wins;
-    otherwise the most recent top-level session (the parent in the common
-    sequential layout). Returns None when unknown -- callers fall back to
-    the session id itself. SCR-044 R3: promoted from
-    audit._audit_owner_session -- owner resolution reads the session
-    topology, so it lives with it.
+    Child sessions (child_session_ids gate) write into the PARENT's
+    pending set: the explicit parent link recorded by subagent_start
+    wins; otherwise the most recent top-level session (the parent in the
+    common sequential layout). Returns None when unknown -- callers fall
+    back to the session id itself.
     """
     if session_id and _is_subagent_session(session_id):
         with state.session.lock:
@@ -81,7 +82,7 @@ def owner_session(session_id):
 def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
                       parent_session_id=None, parent_turn_id=None,
                       parent_subagent_id=None, child_subagent_id=None, **kwargs):
-    """subagent_start observer (5.16): track the child session.
+    """subagent_start observer: track the child session.
 
     Adds child_session_id to child_session_ids (so on_session_start skips
     it and verdicts split as subagent) and opens the child stats session
@@ -91,7 +92,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         if child_session_id:
             with state.session.lock:
                 state.session.child_session_ids.add(child_session_id)
-            # 5.18: record the parent link so the child's audit detections
+            # Record the parent link so the child's audit detections
             # resolve into the parent's pending-violation set.
             _audit_register_child(child_session_id, parent_session_id)
         stats_set_session(is_subagent=True)
@@ -108,9 +109,8 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         ):
             if value is not None:
                 detail[key] = value
-        # Config-cache side effect (was _resolved_config() in dir_whip.py):
-        # seeds the cache / session root / registered ctx when not yet
-        # initialized; the result is unused since the seven-param emit.
+        # Config-cache side effect: seeds the cache / session root /
+        # registered ctx when not yet initialized; result unused.
         get_cached_config(state.session.registered_ctx)
         emit(
             "allow", "subagent", RULE_KEY_SUBAGENT_START, None,
@@ -123,7 +123,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
 def on_subagent_stop(child_session_id=None, child_subagent_id=None,
                      child_role=None, child_status=None, duration_ms=None,
                      **kwargs):
-    """subagent_stop observer (5.16): untrack the child session.
+    """subagent_stop observer: untrack the child session.
 
     Removes child_session_id from child_session_ids and closes the child
     stats session context.
@@ -144,9 +144,8 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         }
         if duration_ms is not None:
             detail["duration_ms"] = duration_ms
-        # Config-cache side effect (was _resolved_config() in dir_whip.py):
-        # seeds the cache / session root / registered ctx when not yet
-        # initialized; the result is unused since the seven-param emit.
+        # Config-cache side effect: seeds the cache / session root /
+        # registered ctx when not yet initialized; result unused.
         get_cached_config(state.session.registered_ctx)
         emit(
             "allow", "subagent", RULE_KEY_SUBAGENT_STOP, None,
@@ -156,17 +155,11 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         logger.debug("dir-whip: subagent_stop hook error: %s", exc)
 
 
-# Public thin aliases (SCR-035 interface convergence point).
-# SCR-052 G6: the former is_child = _is_child_session alias is deleted --
-# _is_subagent_session is the single authoritative name (the cross-module
-# consumers read it as a subagents-module attribute; SCR-050 v3 R6.1 TS-1
-# bans module-level private imports, attribute access is the sanctioned
-# form).
+# Public thin aliases (interface convergence point); cross-module
+# consumers read them as module attributes (seam discipline, spec 5.1).
 register_child = _audit_register_child
 subagent_start = on_subagent_start
 subagent_stop = on_subagent_stop
-# SCR-050 v3 R6.1: cross-module consumer (audit_prompts on_session_start) uses the
-# declared public name (seam discipline, spec 5.1 v2.19).
 record_top_session = _record_top_session
 
 __all__ = ["_is_subagent_session", "owner_session", "register_child", "subagent_start", "subagent_stop", "record_top_session"]

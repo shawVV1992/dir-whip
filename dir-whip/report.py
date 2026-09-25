@@ -1,16 +1,21 @@
-"""/dir-whip merged report rendering + the /dir-whip slash-command family in one module (spec 5.7, spec v2.8 R6; unified at SCR-056 R1a).
+"""/dir-whip merged report rendering + the /dir-whip slash-command family in one module (spec 5.7).
 
-Renders the merged report in fixed field order -- version, State enabled/disabled, Working Directory + resolution source, Allowlist block, anomaly-only WARNING, Stats File, Debug Log, Health last -- and owns the whole /dir-whip command surface: the ctx slot captured by register_dir_whip_commands (render reads it; paths.config_file_path probes _get_cmd_ctx), allow|remove|list management of the structured allowlist via row-level edits preserving comments (single-key model per spec v2.6 B2; command shape per SCR-037, spec v2.5; input layer v2.1 confirm-create protocol), plus the two-section formatters and load_allowlist_state (flat values fail-closed via parse_allowlist). Depends on the config resolution/stats surface; extracted from config.py (task 31.8); commands.py merged back at SCR-056 R1a (the SCR-055 R3 line-cap split is reverted -- one feature, one module).
+Renders the merged report in fixed field order -- version, State
+enabled/disabled, Working Directory + resolution source, Allowlist block,
+anomaly-only WARNING, Stats File, Debug Log, Health last -- and owns the
+/dir-whip command surface: the captured ctx slot, allow|remove|list
+management of the structured allowlist (row-level edits preserving
+comments) and the two-section formatters + load_allowlist_state.
 
 Layer: core+registration-helper
-Refs: spec 5.5, spec 5.6, spec 5.7, spec v2.5, spec v2.6 B2, spec v2.7 R9, spec v2.8 R6, SCR-029, SCR-035, SCR-037, SCR-043 R5, SCR-045 R5, SCR-046 R1, SCR-050 v3 R6.1, SCR-055 R3, SCR-056 R1a
+Refs: spec 5.5, spec 5.6, spec 5.7
 Key exports:
   - render -- render the merged /dir-whip report.
-  - plugin_version -- plugin.yaml version probe (SCR-050 v3 R6.1 public; consumer: assembly register-time precompute).
+  - plugin_version -- plugin.yaml version probe (consumer: assembly register-time precompute).
   - load_allowlist_state -- current structured allowlist + ignored-legacy count.
   - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
   - _dir_whip_cmd -- the registered dispatcher (report + allow|remove|list); never raises.
-  - relativize_input / render_two_sections / render_current_state -- command-output helpers (SCR-055 R3).
+  - relativize_input / render_two_sections / render_current_state -- command-output helpers.
 """
 
 import logging
@@ -32,18 +37,17 @@ from .config import (
 from .paths import dirwhip_home, get_hermes_home, is_absolute_any, paths_equal
 from .stats import stats_jsonl_path
 
-# Diagnostic log path (v2.8 R6): single source of truth from logsetup.
+# Diagnostic log path: single source of truth from logsetup.
 from . import logsetup
 
-# Unified allowlist core (v2.7 R9 structured mapping; validate_dir_entry
-# backs the command-side input layer).
+# Unified allowlist core (validate_dir_entry backs the command-side input
+# layer).
 from .allowlist import parse_allowlist, validate_dir_entry
 
 logger = logging.getLogger("dir-whip")
 
-# The ctx captured by register_dir_whip_commands (SCR-056 R1a: module-
-# internal now that the command family lives here; render() and the
-# allow|remove|list handlers resolve profiles through this slot and
+# The ctx captured by register_dir_whip_commands (module-internal: render()
+# and the allow|remove|list handlers resolve profiles through this slot;
 # register_dir_whip_commands is the only writer).
 _cmd_ctx = None
 
@@ -62,7 +66,7 @@ def _set_cmd_ctx(ctx):
 
 
 def _resolution_source(ctx):
-    """The resolution-chain step that produces working_dir_root (5.5).
+    """The resolution-chain step that produces working_dir_root (spec 5.5).
 
     Mirrors resolve_working_dir_root's order: dir-whip-config override ->
     profile terminal.cwd -> fail-open. Source strings match the chain's
@@ -77,9 +81,7 @@ def _resolution_source(ctx):
         profile = getattr(ctx, "profile_name", None)
         if profile:
             hermes_home = get_hermes_home()
-            # SCR-045 R5: reuse the layout-aware resolver (both home
-            # layouts; the former hand-built profiles/<name>/ probe
-            # missed the profile-dir layout and mislabeled fail-open).
+            # Reuse the layout-aware resolver (both home layouts).
             if parse_terminal_cwd(profile_config_path(hermes_home, profile)):
                 return "profile-config"
     except Exception:
@@ -108,17 +110,17 @@ def _stats_writable():
                 pass
 
 
-# Report display labels for the resolution-chain sources (SCR-029): the
-# dir-whip-config source renders as "guard-config" per the report contract;
-# profile-config / fail-open render as-is.
+# Report display labels for the resolution-chain sources: the
+# dir-whip-config source renders as "guard-config"; profile-config /
+# fail-open render as-is.
 _SOURCE_LABELS = {"dir-whip-config": "guard-config"}
 
 
 def plugin_version(path=None):
     """The plugin version from the sibling plugin.yaml (the single version
-    source, SCR-029). Simple text parse, NO PyYAML: the first `version:`
-    line. On ANY failure (missing/unreadable file, no match) -> 'unknown';
-    never raises. P6 (31.13): the register-time precomputed value in
+    source). Simple text parse, NO PyYAML: the first `version:` line. On
+    ANY failure (missing/unreadable file, no match) -> 'unknown'; never
+    raises. The register-time precomputed value in
     state.session.plugin_version wins when present.
     """
     if path is None and state.session.plugin_version:
@@ -137,7 +139,7 @@ def plugin_version(path=None):
 
 
 def _render_working_dir_line(ctx, working_dir_root):
-    """Line 3: Working Directory + resolving source (5.5 chain)."""
+    """Line 3: Working Directory + resolving source (spec 5.5 chain)."""
     if not working_dir_root:
         return "Working Directory: (unresolved)"
     source = _resolution_source(ctx)
@@ -146,7 +148,7 @@ def _render_working_dir_line(ctx, working_dir_root):
 
 
 def _render_allowlist_lines(state_map, legacy_n):
-    """Line 4 (v2.8): the allowlist multi-line block.
+    """Line 4: the allowlist multi-line block.
 
     Header + one line each for Files/Dirs (indented 2 spaces); with NO
     entries at all (no files/dirs/legacy) the strict-empty single line is
@@ -166,7 +168,7 @@ def _render_allowlist_lines(state_map, legacy_n):
 
 
 def _render_warning_line(cfg, ctx):
-    """Anomaly-only WARNING line (Q6 footgun) or None.
+    """Anomaly-only WARNING line (config-vs-profile footgun) or None.
 
     Explicit dir-whip-config override differs from the profile
     terminal.cwd (doctor logic retained).
@@ -184,7 +186,7 @@ def _render_warning_line(cfg, ctx):
 
 
 def _render_debug_log_line():
-    """Debug Log line (v2.8): absolute path + suffix.
+    """Debug Log line: absolute path + suffix.
 
     (no records yet) when the file does not exist yet; (unavailable) when
     log setup failed (log_handler_installed False wins over a stale file).
@@ -200,7 +202,7 @@ def _render_debug_log_line():
 
 
 def _render_health_lines(working_dir_root):
-    """Health lines (v2.8, LAST): single Good, or a brief issue list."""
+    """Health lines (LAST): single Good, or a brief issue list."""
     problems = []
     if not working_dir_root:
         problems.append("resolution: FAIL-OPEN")
@@ -215,7 +217,7 @@ def _render_health_lines(working_dir_root):
 
 
 def render():
-    """Render the merged /dir-whip report (spec 5.7 v2.8 R6).
+    """Render the merged /dir-whip report (spec 5.7).
 
     Fixed field order: version, State (enabled/disabled), Working
     Directory + source, Allowlist (multi-line block; strict-empty keeps
@@ -233,31 +235,30 @@ def render():
         # Line 1: version (plugin.yaml, unknown fallback).
         lines.append("[dir-whip] v%s" % plugin_version())
 
-        # Line 2: state (v2.8: ACTIVE/FAIL-OPEN -> enabled/disabled).
+        # Line 2: state (enabled/disabled).
         lines.append("State: enabled" if working_dir_root else "State: disabled")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
         lines.append(_render_working_dir_line(ctx, working_dir_root))
 
-        # Line 4 (v2.8): allowlist multi-line block (formatter above).
+        # Line 4: allowlist multi-line block (formatter above).
         state_map, legacy_n = load_allowlist_state()
         lines.extend(_render_allowlist_lines(state_map, legacy_n))
 
-        # Anomaly-only WARNING: Q6 footgun (formatter above).
+        # Anomaly-only WARNING (formatter above).
         warning = _render_warning_line(cfg, ctx)
         if warning:
             lines.append(warning)
 
         # Stats File (always): stats.jsonl absolute path (session profile
-        # home, 5.13/SCR-027), placed before Debug Log.
+        # home), placed before Debug Log.
         lines.append("Stats File: %s" % stats_jsonl_path())
 
-        # Debug Log (v2.8, second-to-last): absolute path from logsetup
-        # (single source of truth).
+        # Debug Log (second-to-last): absolute path from logsetup.
         lines.append(_render_debug_log_line())
 
-        # Health (v2.8, LAST): single Good when clean; with problems a
-        # brief issue list (one indented line per problem).
+        # Health (LAST): single Good when clean; with problems a brief
+        # issue list (one indented line per problem).
         lines.extend(_render_health_lines(working_dir_root))
 
         return "\n".join(lines)
@@ -265,7 +266,7 @@ def render():
         return "[dir-whip] report failed: %s" % exc
 
 
-# ---------------------------------------------------------------- Allowlist read state + two-section rendering (v2.7 R9)
+# ---------------------------------------------------------------- Allowlist read state + two-section rendering
 
 def load_allowlist_state():
     """Current structured allowlist + ignored legacy count.
@@ -291,7 +292,7 @@ def load_allowlist_state():
 
 
 def relativize_input(token, working_dir_root):
-    """Relativize an input token against working_dir_root (5.6 input layer).
+    """Relativize an input token against working_dir_root (input layer).
 
     Returns (rel_or_None, reason_clause). rel keeps forward slashes and a
     possible trailing slash (the --create form signal); None means guided
@@ -310,9 +311,9 @@ def relativize_input(token, working_dir_root):
 
 
 def render_two_sections(files, dirs, header=None, tail=None):
-    """Files:/Dirs: two-section listing with ONE continuous numbering
-    (R1); empty sections render (none); both-empty renders the compact
-    single-line empty state (R6)."""
+    """Files:/Dirs: two-section listing with ONE continuous numbering;
+    empty sections render (none); both-empty renders the compact
+    single-line empty state."""
     files = list(files or [])
     dirs = list(dirs or [])
     if not files and not dirs:
@@ -342,28 +343,22 @@ def render_two_sections(files, dirs, header=None, tail=None):
 
 
 def render_current_state():
-    """The trailing two-section current-state block (R3/R5 feedback)."""
+    """The trailing two-section current-state block (command feedback)."""
     state_map, _legacy = load_allowlist_state()
     return render_two_sections(state_map["files"], state_map["dirs"])
 
 
-# SCR-052 R1: the former _case_eq thin delegate of paths.paths_equal
-# (SCR-045 R7 single source) is deleted; all call sites use
-# paths.paths_equal directly (imported above).
-
-
 # ---------------------------------------------------------------- /dir-whip slash-command family
-# (SCR-056 R1a: merged back from commands.py -- registration + dispatch +
-# the allow|remove|list handlers; the /dir-whip family is one feature.)
+# (registration + dispatch + the allow|remove|list handlers.)
 
 def _list_candidates():
-    """Scan working_dir_root for allow candidates (R2).
+    """Scan working_dir_root for allow candidates.
 
     Returns ((file_candidates, dir_candidates), error_string). Files =
     top-level files minus already-listed files entries; Dirs = top-level
-    directories minus session-format dirs and subtrees already
-    covered by a dirs entry (a leftover .hermes/ is enumerated like any
-    other non-session dir, SCR-046 R1). Sorted for determinism.
+    directories minus session-format dirs and subtrees already covered by
+    a dirs entry (a leftover .hermes/ is enumerated like any other
+    non-session dir). Sorted for determinism.
     """
     ctx = _get_cmd_ctx()
     working_dir_root = effective_working_dir_root(ctx)
@@ -386,10 +381,8 @@ def _list_candidates():
                         name = entry.name
                         if SESSION_DIR_RE.match(name):
                             continue
-                        # SCR-046 R1 (v2.14): the .hermes skip is removed --
-                        # a leftover root .hermes/ (pre-v0.6.3 quarantine
-                        # residue) is enumerated like any other non-session
-                        # directory (the SCR-043 R5 four-way consistency).
+                        # A leftover root .hermes/ (quarantine residue) is
+                        # enumerated like any other non-session directory.
                         if any(paths_equal(name, seg) for seg in dir_first_segments):
                             continue
                         dir_cands.append(name)
@@ -474,7 +467,7 @@ def _allow_parse_token(tok, fc, dc, numbered, working_dir_root,
         return "'%s' does not exist -- run: /dir-whip allow %s --create" % (
             tok, tok,
         ), None, None
-    # Form decides the created artifact (input layer v2.1).
+    # Form decides the created artifact.
     if had_trailing_slash or "/" in rel:
         try:
             os.makedirs(full, exist_ok=True)
@@ -519,7 +512,7 @@ def _allow_commit(adds_files, adds_dirs):
 
 
 def _handle_allow(rest):
-    """/dir-whip allow (v2.7 R2/R3 + input layer v2.1).
+    """/dir-whip allow.
 
     Bare -> candidate enumeration; args -> digit/path tokens per
     _allow_parse_token, all-or-nothing (first invalid token rejects).
@@ -575,7 +568,7 @@ def _handle_allow(rest):
 
 
 def _handle_remove(rest):
-    """/dir-whip remove (v2.7 R4/R5).
+    """/dir-whip remove.
 
     Bare -> enumerate CURRENT entries (two-section numbered + Remove
     hint); strict-empty hint when nothing is listed. Args -> digit
@@ -653,11 +646,10 @@ def _handle_remove(rest):
 
 
 def _handle_list(rest):
-    """/dir-whip list (v2.7 R6): the same two-section numbered format as
-    remove (numbers align so a listed number can be copied directly),
-    plus the ignored-legacy hint when a flat value was ignored. SCR-043
-    R5: appends the current audit-quarantine path line (discoverability
-    after the relocation out of the workspace root)."""
+    """/dir-whip list: the same two-section numbered format as remove
+    (numbers align so a listed number can be copied directly), plus the
+    ignored-legacy hint when a flat value was ignored, and the current
+    audit-quarantine path line."""
     if (rest or "").strip():
         return "Usage: /dir-whip [allow|remove|list]"
     state_map, legacy = load_allowlist_state()
@@ -670,11 +662,11 @@ def _handle_list(rest):
 
 
 def _dir_whip_cmd(raw_args):
-    """/dir-whip dispatcher (spec 5.7, SCR-037 B2): report + allowlist management.
+    """/dir-whip dispatcher (spec 5.7): report + allowlist management.
 
     Bare /dir-whip renders the merged report; allow|remove|list manage the
-    persistent allowlist via row-level edit preserving
-    comments. Unknown subcommand renders the Usage line. Never raises.
+    persistent allowlist via row-level edit preserving comments. Unknown
+    subcommand renders the Usage line. Never raises.
     """
     try:
         arg = (raw_args or "").strip()
@@ -718,9 +710,8 @@ def register_dir_whip_commands(ctx):
         logger.warning("dir-whip: register_command failed: %s", exc)
 
 
-# Declared surface (SCR-056 R1a): render + version probe + the command
-# family entry points + the shared read-side accessors and command-output
-# helpers (commands.py's declared surface merged in).
+# Declared surface: render + version probe + the command family entry
+# points + the shared read-side accessors and command-output helpers.
 __all__ = [
     "_dir_whip_cmd",
     "load_allowlist_state",

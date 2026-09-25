@@ -1,29 +1,22 @@
 """Root write audit core + L4 settlement family: snapshot/diff/classify kernels, pending-violation store, pre/post pairing, dir_whip_settle quarantine surface (spec 5.18).
 
-Detection backbone shared by the L1/L3 conversation surface
-(audit_prompts.py) and the L4 settlement family homed here again
-(SCR-056 R1c reverts the SCR-055 R4 split; the L1/L3/nudge surface
-stays in audit_prompts.py): pre/post snapshot pairing, the
-session-scoped pending-violation store, the settlement judgment re-scan,
-the terminal post-check and the dir_whip_settle tool (all-or-nothing
-quarantine moves + lazy registration). The classification chain is
-INJECTED via set_classifier (ADR-0007) to break the audit<->guard
-cycle; pure decision layer, no host imports, no audit_prompts import
-(SCR-035, ADR-0007); extracted from dir_whip.py (task 31.12).
+Detection backbone for the L1/L3 conversation surface
+(audit_prompts.py): pre/post snapshot pairing, the session-scoped
+pending-violation store, the settlement judgment re-scan, the terminal
+post-check and the dir_whip_settle tool. The classification chain is
+INJECTED via set_classifier to break the audit<->guard cycle. Pure
+decision layer: no host imports, no audit_prompts import.
 
 Layer: core
-Refs: spec 5.18, spec v2.6 B2, spec v2.7 R4, spec v2.8 R1, SCR-035, SCR-040 R4, SCR-043 R5, SCR-044 R5, SCR-045 R6, SCR-050 v3 R6.1, SCR-055 R4, SCR-056 R1c, ADR-0007
+Refs: spec 5.18, SCR-043, ADR-0007
 Key exports:
   - set_classifier -- wire the classification chain (assembly-layer injection).
-  - snapshot -- read-only top-level root snapshot; None on OSError (fail-open).
-  - classify_diff -- four-state snapshot diff -> {violations, recorded}; deletions record-only.
-  - audit_norm_path -- deterministic pending-set key (absolute + native-normalized; consumers: tests + the L4 settlement family).
+  - snapshot / diff_snapshots -- read-only root snapshot + four-state diff.
+  - classify_diff -- four-state diff -> {violations, recorded}; deletions record-only.
+  - audit_norm_path -- deterministic pending-set key (absolute + native-normalized).
   - pending_violation_snapshot / pending_violation_paths -- read-only pending-set views (L3 gate input / settlement judgment).
-  - pre_snapshot -- pre snapshot for an allowed terminal call (cap-guarded).
-  - audit_post_check -- terminal re-scan/diff/violation post-check (SCR-050 v3 R6.1 public; consumer: the assembly post_tool_call observer).
-  - SETTLE_TOOL_SCHEMA -- dir_whip_settle OpenAI function schema (lazy-registration payload).
-  - settle_paths -- dir_whip_settle core: quarantine pending root writes, settling the L3 latch.
-  - lazy_register_settle_tool -- register dir_whip_settle on the first L1 notice fire (idempotent, fail-open).
+  - pre_snapshot / audit_post_check -- allowed-terminal pre snapshot (cap-guarded) + terminal re-scan/diff violation post-check.
+  - SETTLE_TOOL_SCHEMA / settle_paths / lazy_register_settle_tool -- dir_whip_settle schema, quarantine core and lazy registration.
 """
 
 import datetime
@@ -45,8 +38,7 @@ from .events import (
     emit,
 )
 
-# Message templates: centralized in the core leaf module messages.py
-# (spec 5.20, SCR-047 R1, ADR-0014).
+# Message templates live in the core leaf messages.py.
 from .messages import (
     SETTLE_TOOL_DESCRIPTION,
     SETTLE_TOOL_PATHS_DESCRIPTION,
@@ -62,27 +54,23 @@ from .stats import stats_record
 
 from .subagents import owner_session
 
-# SCR-044 R5 (spec 5.19): the script-vector binding observer lives in
-# claims; the audit -> claims direction is sanctioned (the reverse
-# import would be a cycle and does not exist).
+# The script-vector binding observer lives in claims; the audit -> claims
+# direction is sanctioned (the reverse import would be a cycle).
 from . import claims
 
-# SCR-055 R4: the subagent gate reads the subagents-module attribute
-# (SCR-050 v3 R6.1 TS-1 bans module-level private imports; attribute
-# access is the sanctioned form).
+# The subagent gate reads the subagents-module attribute (module-level
+# private imports are banned; attribute access is the sanctioned form).
 from . import subagents
 
 logger = logging.getLogger("dir-whip")
 
-# Audit entry guardrail (spec 5.6/5.18 v2.8 R7 de-configuration): the DoS
-# cap is an internal audit-owned constant (SCR-045 R2 moved it home from
-# the config shim); no config key adjusts it.
+# Audit entry guardrail: the DoS cap is an internal audit-owned constant
+# (de-configured); no config key adjusts it.
 WRITE_AUDIT_ENTRY_CAP = 2000
 
-# Classification chain, injected by the assembly layer (register() now;
-# __init__.py at 31.13). Unwired -> RuntimeError (production-unreachable:
-# register() wires before any hook runs; the fail-open hook adapter
-# catches it).
+# Classification chain, injected by the assembly layer at register().
+# Unwired -> RuntimeError (production-unreachable: register() wires before
+# any hook runs; the fail-open hook adapter catches it).
 _classify_fn = None
 
 
@@ -137,7 +125,7 @@ def diff_snapshots(before, after):
 
 def classify_diff(diff, before, after, working_dir_root, allowlist,
                         is_subagent=False):
-    """Classify a snapshot diff into violations (spec 5.18, v2.6 B2).
+    """Classify a snapshot diff into violations (spec 5.18).
 
     Only FILE entries are judged (is_dir -> never a violation; directory
     mtimes -- session dirs, `.git/` -- are ignored). A
@@ -170,8 +158,7 @@ def classify_diff(diff, before, after, working_dir_root, allowlist,
             continue
         deleted.append(os.path.join(working_dir_root, name))
     # Return keys are the frozen classify_diff contract ("violations" /
-    # "recorded"); the locals carry the SCR-052 G3 semantics
-    # (pending_violations / deleted record-only bookkeeping).
+    # "recorded"); the locals carry the pending / deleted bookkeeping.
     return {
         "violations": sorted(pending_violations),
         "recorded": sorted(deleted),
@@ -181,8 +168,8 @@ def classify_diff(diff, before, after, working_dir_root, allowlist,
 def audit_norm_path(path):
     """Deterministic pending-set key: absolute + native-normalized.
 
-    SCR-055 R4 public (consumers: tests + the L4 settlement family); the
-    audit-internal callers use the same single normalization point.
+    Single normalization point for audit-internal callers and the L4
+    settlement family.
     """
     return os.path.normpath(str(path))
 
@@ -190,11 +177,6 @@ def audit_norm_path(path):
 def _audit_now():
     """ISO-8601 timestamp (seconds precision) for first_seen."""
     return datetime.datetime.now().isoformat(timespec="seconds")
-
-
-# SCR-052 R1: the former _audit_owner_session thin delegate (a call-site
-# preservation shim for subagents.owner_session, SCR-044 R3) is inlined --
-# owner resolution is called directly as owner_session(session_id).
 
 
 def pending_violation_snapshot(session_id=None):
@@ -249,19 +231,18 @@ def mark_announced(session_id, path):
 
 
 def pending_violation_paths(session_id, working_dir_root=None, allowlist=None):
-    """Settlement judgment for the L3 gate (the gate's unresolved input):
-    re-scan the
-    root and return the pending paths that STILL violate (file present and
-    still classifying as an unprotected root-level file). A pending path
-    is settled when it is gone, moved outside the root, or legalized
-    (allowlist file / prefix / session dir). Fail-open: a failed re-scan keeps
-    the full pending set (the gate stays latched).
+    """Settlement judgment for the L3 gate: re-scan the root and return
+    the pending paths that STILL violate (file present and still
+    classifying as an unprotected root-level file). A pending path is
+    settled when it is gone, moved outside the root, or legalized
+    (allowlist file / dir entry / session dir). Fail-open: a failed
+    re-scan keeps the full pending set (the gate stays latched).
 
-    SCR-041 R1 (spec 5.18 v2.9): the classification here is CONFIG-only
-    (honor_runtime_allowlist=False) -- a runtime-allowlist entry is
+    The classification here is CONFIG-only
+    (honor_runtime_allowlist=False): a runtime-allowlist entry is
     prospective-only and never settles a recorded violation; config
-    allowlist files/dirs entries and session-dir containment still
-    settle. Shared by the L3 gate and the continuation nudge.
+    allowlist entries and session-dir containment still settle. Shared
+    by the L3 gate and the continuation nudge.
     """
     try:
         pending = pending_violation_snapshot(session_id)
@@ -297,14 +278,13 @@ def pending_violation_paths(session_id, working_dir_root=None, allowlist=None):
 
 
 def pre_snapshot(session_id, task_id, working_dir_root, allowlist):
-    """Take the pre snapshot for an ALLOWED terminal call (5.18).
+    """Take the pre snapshot for an ALLOWED terminal call.
 
-    allowlist is the PARSED {files, dirs} mapping (SCR-045 R7: the
-    caller parses at the call site; the 1-tuple transport hack is gone
-    and the value is stored as-is). Root entry count above
+    allowlist is the PARSED {files, dirs} mapping (the caller parses at
+    the call site; the value is stored as-is). Root entry count above
     WRITE_AUDIT_ENTRY_CAP -> round skipped + ONE WARNING per session
-    (not repeated). Scan OSError -> fail-open (no snapshot stored, so
-    the post skips). Any exception -> nothing (fail-open, 5.8).
+    (not repeated). Scan OSError -> no snapshot stored (the post skips).
+    Any exception -> fail-open.
     """
     try:
         snap = snapshot(working_dir_root)
@@ -328,16 +308,15 @@ def pre_snapshot(session_id, task_id, working_dir_root, allowlist):
 
 
 def audit_post_check(session_id, task_id, is_subagent=False):
-    """Post terminal re-scan: diff the pre snapshot and classify (5.18, v2.6 B2).
+    """Post terminal re-scan: diff the pre snapshot and classify.
 
     Pops the (session_id, task_id) pairing; no pairing (blocked-at-pre,
     cap skip, disabled, scan failure) -> nothing. Each violation joins the
     session's pending set and emits ONE write-audit-violation verdict
-    event (tool="audit", relative target, 5.13 privacy; bus_event=False)
-    plus the 5.14 write-audit-violation bus sidecar with a relative path,
-    the session-scope flag and first_seen. Deletions are record-only,
-    never events. The L1 notice is NOT an event (5.18). Fail-open: never
-    raises.
+    event (tool="audit", relative target, privacy; bus_event=False) plus
+    the write-audit-violation bus sidecar with a relative path, the
+    session-scope flag and first_seen. Deletions are record-only, never
+    events; the L1 notice is NOT an event. Fail-open: never raises.
     """
     try:
         with state.audit.lock:
@@ -349,10 +328,10 @@ def audit_post_check(session_id, task_id, is_subagent=False):
         if after is None:
             return
         diff = diff_snapshots(before, after)
-        # SCR-044 R5 (spec 5.19): script-vector creation observer.
-        # Fires only when a pending_create marker exists; binds the
-        # FIRST new compliant session dir under the root and ALWAYS
-        # consumes the marker (a failed script leaves no ghost slot).
+        # Script-vector creation observer: fires only when a
+        # pending_create marker exists, binds the FIRST new compliant
+        # session dir under the root and ALWAYS consumes the marker (a
+        # failed script leaves no ghost slot).
         if state.session_dirs.pending_create:
             claims.observe_added(
                 working_dir_root, session_id, diff.get("added", []),
@@ -381,16 +360,16 @@ def audit_post_check(session_id, task_id, is_subagent=False):
         logger.debug("dir-whip: audit post check error (fail-open): %s", exc)
 
 
-# ---------------------------------------------------------------- L4 settlement family (SCR-056 R1c: merged back; the SCR-055 R4 split reverted)
+# ---------------------------------------------------------------- L4 settlement family
 
 
-# ---------------------------------------------------------------- dir_whip_settle tool surface (5.18 v2.7 R4)
+# ---------------------------------------------------------------- dir_whip_settle tool surface
 
 # dir_whip_settle tool schema (OpenAI function-call format, same contract
 # as ALLOW_PATH_TOOL_SCHEMA). Defined HERE (not __init__.py) because the
 # lazy registration fires from transform_tool_result without register()
 # having run (test contract: first notice fire registers the tool).
-# Description texts live in messages.py (spec 5.20, SCR-047 R1).
+# Description texts live in messages.py.
 SETTLE_TOOL_SCHEMA = {
     "name": "dir_whip_settle",
     "description": SETTLE_TOOL_DESCRIPTION,
@@ -409,7 +388,7 @@ SETTLE_TOOL_SCHEMA = {
 
 
 def _settle_tool_handler(args, **kwargs):
-    """Registered dir_whip_settle handler: JSON-string tool result (R4)."""
+    """Registered dir_whip_settle handler: JSON-string tool result."""
     try:
         paths = args.get("paths") if isinstance(args, dict) else args
         return json.dumps(
@@ -421,15 +400,14 @@ def _settle_tool_handler(args, **kwargs):
 
 
 def lazy_register_settle_tool():
-    """Register dir_whip_settle on the FIRST L1 notice fire (R4).
+    """Register dir_whip_settle on the FIRST L1 notice fire.
 
-    SCR-056 R1c public (cross-module consumer: audit_prompts.transform_tool_result,
-    function-local import). The registry has no timing constraint (verified:
-    the host rebuilds the per-turn tool list), so a late registration is
+    Cross-module consumer: audit_prompts.transform_tool_result
+    (function-local import). The registry has no timing constraint (the
+    host rebuilds the per-turn tool list), so a late registration is
     visible from the next turn on. Idempotent by nature (re-register
-    overwrites); attempted once per notice fire (fire-once per violation
-    batch keeps this rare). Fail-open: any error is logged and never
-    blocks the notice.
+    overwrites); attempted once per notice fire. Fail-open: any error is
+    logged and never blocks the notice.
     """
     try:
         ctx = state.session.registered_ctx
@@ -445,20 +423,20 @@ def lazy_register_settle_tool():
 
 
 def _pending_violation_remove(session_id, key):
-    """Drop one settled path from the owner's pending set (R4)."""
+    """Drop one settled path from the owner's pending set."""
     owner = owner_session(session_id) or session_id
     with state.audit.lock:
         state.audit.pending_violations.get(owner, {}).pop(key, None)
 
 
 def _record_settle_stats(working_dir_root):
-    """Record one settle action (plan R4): stats + log only, NO bus event
-    (the 5.14 emit surface stays at 7 events).
+    """Record one settle action: stats + log only, NO bus event (the emit
+    surface stays at 7 events).
 
     Two counter shapes are maintained: the standard nested verdict counter
-    via stats.record (which also appends the stats.jsonl line, 5.13 D3)
-    AND the flat ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE) tuple key that
-    the v0.5.0 acceptance test reads from stats_snapshot().
+    via stats.record (which also appends the stats.jsonl line) AND the
+    flat ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE) tuple key that
+    stats_snapshot() exposes.
     """
     try:
         stats_record(
@@ -476,15 +454,14 @@ def _record_settle_stats(working_dir_root):
 
 
 def _record_settle_rejected(reason, is_subagent=False):
-    """Record one settle rejection/failure (SCR-040 R4, 5.13 v2.8): stats
-    row + WARNING log only, NO bus event (the 5.14 emit surface stays at
-    7 events).
+    """Record one settle rejection/failure: stats row + WARNING log only,
+    NO bus event (the emit surface stays at 7 events).
 
     reason is a category code -- subagent-rejected / invalid-paths /
-    not-in-pending / move-failed; raw paths are never carried (5.13
-    privacy). The block outcome cannot ride events.emit (it would fan
-    out a generic blocked bus event), so it uses the stats channel
-    directly. Fail-open: never raises.
+    not-in-pending / move-failed; raw paths are never carried (privacy).
+    The block outcome cannot ride events.emit (it would fan out a generic
+    blocked bus event), so it uses the stats channel directly. Fail-open:
+    never raises.
     """
     try:
         stats_record(
@@ -524,11 +501,11 @@ def _resolve_settle_keys(paths, working_dir_root, pending):
 
 
 def _settle_move_one(session_id, key, working_dir_root, quarantine_dir):
-    """Move one accepted pending key into the quarantine (R4).
+    """Move one accepted pending key into the quarantine.
 
     A key that no longer exists is an idempotent successful no-op
-    settlement (2026-08-26 ruling; matches the latch's lexists
-    semantics). Returns the root-relative display path.
+    settlement (matches the latch's lexists semantics). Returns the
+    root-relative display path.
     """
     if not os.path.lexists(key):
         # Idempotent no-op: user already removed/moved it.
@@ -547,8 +524,8 @@ def _settle_move_one(session_id, key, working_dir_root, quarantine_dir):
 
 
 def settle_paths(session_id, paths):
-    """dir_whip_settle core (5.18 R4): move pending root writes into the
-    audit quarantine, settling the L3 latch.
+    """dir_whip_settle core: move pending root writes into the audit
+    quarantine, settling the L3 latch.
 
     Hard constraints: subagent sessions rejected (remediation is the
     parent's job); ONLY paths currently in this session's pending set are
@@ -556,16 +533,14 @@ def settle_paths(session_id, paths):
     rejected before any filesystem action, all-or-nothing); relative args
     are resolved against working_dir_root then matched against the
     normalized pending keys. Each accepted path is shutil.move'd into
-    <dir-whip home>/audit-quarantine/<YYYYMMDD_HHMMSS>/ (SCR-043 R5:
-    layout-aware profile home, the stats.jsonl family -- relocated out
-    of the workspace root; legacy <root>/.hermes/ quarantine data is
-    NOT migrated; audit-safe: the snapshot only judges root-top-level
-    FILE entries) and dropped from the pending set. A pending path that
-    no longer exists is an idempotent successful no-op settlement
-    (2026-08-26 ruling; matches the latch's lexists semantics). Returns
-    {"settled": [<root-relative paths>]} on success (relative for
-    privacy) or {"error": "<reason>"} on rejection/failure -- fail-open:
-    a move error leaves the latch latched.
+    <dir-whip home>/audit-quarantine/<YYYYMMDD_HHMMSS>/ (layout-aware
+    profile home, the stats.jsonl family -- out of the workspace root;
+    legacy <root>/.hermes/ quarantine data is NOT migrated) and dropped
+    from the pending set; a path that no longer exists is an idempotent
+    successful no-op settlement. Returns {"settled": [<root-relative
+    paths>]} (relative for privacy) or {"error": "<reason>"} on
+    rejection/failure -- fail-open: a move error leaves the latch
+    latched.
     """
     try:
         if session_id and subagents._is_subagent_session(session_id):
@@ -589,10 +564,10 @@ def settle_paths(session_id, paths):
         keys, error = _resolve_settle_keys(paths, working_dir_root, pending)
         if error:
             return error
-        # SCR-043 R5: the quarantine lives under the dir-whip home
-        # (<profile home>/dir-whip/audit-quarantine/<ts>/), layout-aware
-        # via paths.profile_home -- the stats.jsonl / dir-whip.log
-        # family. Out of the workspace root; no legacy data migration.
+        # The quarantine lives under the dir-whip home (<profile
+        # home>/dir-whip/audit-quarantine/<ts>/), layout-aware via
+        # paths.profile_home -- the stats.jsonl / dir-whip.log family.
+        # Out of the workspace root; no legacy data migration.
         home = dirwhip_home(state.session.session_profile)
         quarantine_dir = os.path.join(
             str(home), "audit-quarantine",
@@ -609,11 +584,6 @@ def settle_paths(session_id, paths):
         logger.debug("dir-whip: settle_paths error (fail-open): %s", exc)
         return {"error": "settle failed: %s" % exc}
 
-
-# Single authoritative names (SCR-052 R1 alias convergence; SCR-055 R4: the
-# L1/L3/nudge surface moved to audit_prompts.py; SCR-056 R1c merged the L4
-# settlement family back home -- the defs above carry this module's public
-# names directly).
 
 __all__ = [
     "set_classifier",

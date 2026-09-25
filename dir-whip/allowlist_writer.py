@@ -1,9 +1,14 @@
-"""Allowlist config writer: row-level YAML edit preserving comments, strict validation, narrow cache refresh -- structured ``{files, dirs}`` mapping (spec v2.7 R9, SCR-039 R9).
+"""Allowlist config writer: row-level YAML edit preserving comments -- structured ``{files, dirs}`` mapping (spec 5.6).
 
-Structured mapping (spec v2.7 R9, BREAKING clean break of the v2.6 flat tagged list): ``files`` = root-level file basenames, ``dirs`` = root-relative recursive subtree. Each key stays a single flow-style line (``files: ["a", "b"]``); the whole ``allowlist`` block is replaced line-level with comments above the key preserved, and block-style ``- item`` lists are never produced. Pure stdlib + pyyaml, no host imports (ADR-0007), line scan + regex per report.py precedent; path resolution is single-sourced in paths.config_file_path (SCR-052 R1) at HERMES_HOME/dir-whip/dir-whip-config.yaml.
+``files`` = root-level file basenames, ``dirs`` = root-relative recursive
+subtree. Each key stays a single flow-style line (``files: ["a", "b"]``);
+the ``allowlist`` block is replaced line-level with comments above the key
+preserved -- block-style ``- item`` lists are never produced. Pure stdlib
++ pyyaml, no host imports; path resolution is single-sourced in
+paths.config_file_path.
 
 Layer: core
-Refs: spec v2.7 R9, SCR-039 R9, SCR-052 R1, SCR-055 R7, ADR-0007
+Refs: spec 5.6, SCR-039, ADR-0007
 Key exports:
   - load_config -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
   - load_allowlist_legacy_count -- count of ignored legacy flat entries (clean-break visibility signal).
@@ -61,21 +66,16 @@ def _format_mapping(parsed):
 
 # ---------------------------------------------------------------- Path resolution
 
-# SCR-052 R1: the config-path source is paths.config_file_path() (the
-# former private _get_config_path is merged away; profile-aware chain
-# identical, single source with config.py).
-
 
 # ---------------------------------------------------------------- Load
 
 def load_config():
     """Read the current allowlist as the structured mapping.
 
-    Returns {"files": [sorted...], "dirs": [sorted...]} — validated,
-    normalized, deduped via allowlist parse/format. Missing key / legacy
-    flat value / unreadable file -> empty mapping (fail-closed, clean
-    break: legacy flat values are IGNORED, surfaced as legacy hints by
-    the command layer).
+    Returns {"files": [sorted...], "dirs": [sorted...]} -- validated,
+    normalized, deduped. Missing key / legacy flat value / unreadable
+    file -> empty mapping (fail-closed; legacy flat values are IGNORED
+    and surfaced as hints by the command layer).
     """
     path = config_file_path()
     if not path.is_file():
@@ -93,8 +93,8 @@ def load_config():
 def load_allowlist_legacy_count():
     """Number of ignored legacy flat entries under the allowlist key.
 
-    Non-zero only when the raw value is a LIST (v2.6 flat format) with
-    string entries — the clean-break visibility signal for /dir-whip list.
+    Non-zero only when the raw value is a LIST with string entries --
+    the clean-break visibility signal for /dir-whip list.
     """
     path = config_file_path()
     if not path.is_file():
@@ -133,12 +133,12 @@ _PAT_LEGACY = re.compile(r"^\s*(?:exempt_paths|allowed_root_files)\s*:")
 def write_config(mapping):
     """Row-level edit writing the two-key flow block, preserving comments.
 
-    - If an ``allowlist`` key exists, replace it AND every following
+    - Existing ``allowlist`` key: replace it AND every following
       more-indented line (old flat ``- item`` continuations, old/new
       ``files:/dirs:`` sub-lines) with the canonical three-line block.
-    - If absent, strip legacy exempt_paths/allowed_root_files keys then
+    - Absent: strip legacy exempt_paths/allowed_root_files keys, then
       append the block at the end.
-    - Creates parent dir if missing, utf-8. Refreshes the config cache
+    - Creates parent dir if missing, utf-8; refreshes the config cache
       narrowly so the next classify sees the new allowlist.
     """
     path = config_file_path()
@@ -194,13 +194,11 @@ def write_config(mapping):
 
 
 def _refresh_cache():
-    """Narrow cache refresh so next classify.classify_target sees new allowlist.
+    """Narrow cache refresh so the next classify sees the new allowlist.
 
-    The allowlist is read via load_guard_config() each time (no cache in
-    allowlist_writer itself, but config.py caches via get_cached_config), so
-    a narrow refresh is required. This hook calls
-    runtime_allowlist.refresh_allowlist_cache (SCR-055 R7: the refresh
-    surface moved with the runtime-allowlist family).
+    The allowlist is read via load_guard_config() each time, but config.py
+    caches via get_cached_config, so a refresh is required; delegates to
+    runtime_allowlist.refresh_allowlist_cache (fail-open).
     """
     try:
         from . import runtime_allowlist as _ra

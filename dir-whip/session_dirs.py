@@ -1,9 +1,15 @@
-"""Per-session unique Session Directory gates: creation gating + advisory orphan scan + script message builders (SCR-044 R5/R6/R7, spec 5.19; the claim store split out to claims.py at SCR-055 R5).
+"""Per-session unique Session Directory gates: creation gating + advisory orphan scan + script message builders (spec 5.19).
 
-Enforcement side of one Session Directory per conversation: a session-dir ALLOW whose first segment does not exist binds through claims.bind (creation signal), a second creation blocks rule_key session-dir-limit (blocks emit through events: stats accumulate + generic blocked bus fanout; session-dir-limit deliberately NOT in events._BUS_SKIP_RULE_KEYS, the 7-emits manifest surface unchanged), an mv rename of the bound dir transfers the claim (MV-1), and the R7 orphan scan consumes the injected classify chain (set_classifier, ADR-0007) advisory-only. The claim store itself (bind/rebind/heal/read + persistence + lifecycle) lives in claims.py (dependency direction: session_dirs -> claims only); this module never imports the guard module or audit. Pure decision layer: state / claims / events / messages / paths, plus the SCR-056 R1b function-local terminal predicate imports (is_session_dir_script / terminal_cp_mv_src -- cycle break, terminal statically consumes guard_script / guard_create); no host imports (ADR-0007).
+Enforcement side of one Session Directory per conversation: a session-dir
+ALLOW whose first segment does not exist binds through claims.bind
+(creation signal); a second creation blocks rule_key session-dir-limit
+(the block emits through events: stats + generic blocked bus fanout);
+an mv rename of the bound dir transfers the claim; the orphan scan
+consumes the injected classify chain (ADR-0007), advisory-only. Claim
+store lives in claims.py (direction: session_dirs -> claims only).
 
 Layer: core
-Refs: spec 5.19, SCR-044 R5, SCR-044 R6, SCR-044 R7, SCR-048 R1, SCR-048 R2, SCR-055 R5, SCR-055 R7, ADR-0006, ADR-0007, ADR-0015
+Refs: spec 5.19, SCR-044, SCR-048
 Key exports:
   - guard_create -- session-dir creation gate: bind / mv-transfer / session-dir-limit block (single enforcement point).
   - guard_script -- create_session_dir.py script gate: arm the pending marker or block.
@@ -25,9 +31,9 @@ from .claims import (
 
 from .events import RULE_KEY_SESSION_DIR, SESSION_DIR_LIMIT_RULE_KEY, emit
 
-# Message templates: centralized in the core leaf module messages.py
-# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
-# session_dirs.* call site, __all__ entry and test import path unchanged.
+# Message templates live in the core leaf messages.py; same-name aliases
+# keep session_dirs.* call sites, __all__ entries and test import paths
+# unchanged.
 from .messages import (
     ORPHAN_NOTICE_CREATE_RELOCATE_LINE,
     ORPHAN_NOTICE_HEADER,
@@ -41,13 +47,9 @@ from .paths import is_absolute_any
 
 logger = logging.getLogger("dir-whip")
 
-# Spec 5.19: the per-session uniqueness rule_key is defined in events.py
-# (SCR-052 R1 single definition point) and re-exported here under the
-# retained historical name (consumer/test import paths unchanged).
-
-# Spec 5.19 message templates live in messages.py (spec 5.20, SCR-047
-# R1); the same-name imports above are the aliases (<root>/<claim> are
-# substituted at build time by _limit_block, forward-slash rendering).
+# The session-dir-limit rule_key is defined in events.py (single
+# definition point); this module re-exports it for consumer/test import
+# paths. <root>/<claim> are substituted at build time by _limit_block.
 
 
 # ---------------------------------------------------------------- Path predicates
@@ -74,22 +76,17 @@ def _token_first_segment(token, working_dir_root):
 
 
 def is_creation_signal(target, working_dir_root, verdict=None):
-    """Unified creation-signal predicate (v2.12 concept, SCR-052 4.5
-    naming): TRUE when this action WILL CREATE a Session Directory --
-    the target classifies T3 session-dir ALLOW and its first-segment
-    directory does not yet exist on disk (mkdir, implicit write_file
-    parent creation and terminal touch/redirect alike).
+    """Unified creation-signal predicate: TRUE when this action WILL
+    CREATE a Session Directory -- the target classifies T3 session-dir
+    ALLOW and its first-segment directory does not yet exist on disk
+    (mkdir, implicit write_file parent creation, terminal touch/redirect).
 
-    verdict is the caller-held classify-chain result for the target (the
-    shared-chain dict guard_create receives from classify.evaluate_target);
-    the T3 ALLOW half reads it -- re-running the chain here would need the
-    allowlist guard_create does not carry and could diverge from the real
-    verdict. verdict=None falls back to the config-kernel compliant-name
-    check (is_compliant, ADR-0006) -- the same T3-shape half the
-    post-diff observer applies to script-created dirs, whose existence
-    half rides the armed pending_create marker instead of a disk probe.
-
-    Fail-open: any error -> False (never raises).
+    verdict is the caller-held classify-chain result; the T3 ALLOW half
+    reads it (re-running the chain would need the allowlist guard_create
+    does not carry and could diverge). verdict=None falls back to the
+    compliant-name check (is_compliant) -- the same T3-shape half the
+    post-diff observer applies to script-created dirs. Fail-open: any
+    error -> False (never raises).
     """
     try:
         first_seg = _first_segment(target, working_dir_root)
@@ -135,9 +132,9 @@ def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
 # ---------------------------------------------------------------- Message builders
 
 def scripts_path():
-    """Resolved skills scripts directory (SCR-044 R6: single source).
+    """Resolved skills scripts directory (single source).
 
-    D11 precomputed slot (state.session.script_resolver_path, set at
+    The precomputed slot (state.session.script_resolver_path, set at
     register) when present; __file__-based derivation for unregistered
     direct calls. Forward-slash rendering (message convention).
     """
@@ -153,32 +150,28 @@ def scripts_path():
 
 
 def script_invocation_line(task, working_dir_root):
-    """create_session_dir.py command line (SCR-044 R6, MB-1/MB-2).
+    """create_session_dir.py command line.
 
-    The SINGLE source for the invocation shape -- consumed by the
-    verdict fix_line, the conditional orphan move line (verdict) and
-    the R7 orphan-notice cleanup hint. `<task>` may stay a placeholder
-    (verdict passes "<task_name>").
+    The SINGLE source for the invocation shape -- consumed by the verdict
+    fix_line, the conditional orphan move line and the orphan-notice
+    cleanup hint. `<task>` may stay a placeholder (verdict passes
+    "<task_name>").
     """
     return "python %s/create_session_dir.py %s --workspace %s" % (
         scripts_path(), task, str(working_dir_root).replace("\\", "/"),
     )
 
 
-# ---------------------------------------------------------------- Orphan scan (R7)
+# ---------------------------------------------------------------- Orphan scan
 
-# Classification chain, injected by the assembly layer (SCR-044 R7;
-# ADR-0007 inject-don't-import, mirroring audit.set_classifier -- the
-# verdict chain (classify) imports this one, so a static import back
-# is a cycle). Unwired -> scan_orphans fails open to None
-# (production-unreachable: register() wires before any hook runs).
+# Classification chain, injected by the assembly layer (inject-don't-
+# import, mirroring audit.set_classifier -- classify statically imports
+# this module, so a static import back is a cycle). Unwired ->
+# scan_orphans fails open to None (register() wires before any hook).
 _classify_fn = None
 
-# R7 advisory notice verbatim locks (testing-standards 7.14.7 O-1:
-# header/tail pinned) live in messages.py (spec 5.20, SCR-047 R1); the
-# same-name imports above are the aliases. ADVISE-ONLY: the notice is
-# plain TEXT -- it never blocks, never deletes, and lands at most once
-# per top-level session start (fire-once by construction).
+# The advisory notice lines live in messages.py. ADVISE-ONLY: plain TEXT,
+# never blocks, never deletes, at most once per top-level session start.
 
 
 def set_classifier(fn):
@@ -188,10 +181,9 @@ def set_classifier(fn):
 
 
 def _orphan_notice(working_dir_root, names):
-    """Build the advisory notice (O-1 shape): verbatim header, one
-    listed entry per orphan, cleanup guidance -- the create + relocate
-    path via the shared R6 builder (MB-2 single source) -- then the
-    allowlist registration alternative (verbatim tail)."""
+    """Build the advisory notice: header, one listed entry per orphan,
+    cleanup guidance (the create + relocate path via the shared builder),
+    then the allowlist registration alternative (tail)."""
     lines = [ORPHAN_NOTICE_HEADER]
     lines.extend("  - %s" % name for name in names)
     lines.append(ORPHAN_NOTICE_CREATE_RELOCATE_LINE)
@@ -204,23 +196,17 @@ def _orphan_notice(working_dir_root, names):
 
 
 def scan_orphans(working_dir_root, allowlist=None):
-    """Advisory orphan scan at top-level session start (SCR-044 R7,
-    spec 5.4). Returns ONE compact notice string, or None.
+    """Advisory orphan scan at top-level session start (spec 5.4);
+    returns ONE compact notice string, or None.
 
-    Filter: every TOP-LEVEL entry of the root passes through the
-    injected classify_target -- a T4 block verdict = orphan candidate;
-    T0-T3 (external / runtime allowlist / config allowlist / valid
-    session dir) are auto-exempt. No hand-written exclusion list and
-    no second session-dir regex (ADR-0006: no new vector). The
-    session's own bound dir is compliant by definition (T3), so it can
-    never appear (O-8).
-
-    Semantics: advise-only (never a block dict, never a deletion,
-    O-6); called once per top-level session start so the notice is
-    fire-once by construction; unresolved/missing root -> None without
-    raising (O-7); the CWD-outside-root and child-session skips live
-    upstream in the assembly flow (O-4 / O-5). Fail-open: any error
-    -> None, session start is never broken (5.8).
+    Filter: every TOP-LEVEL entry of the root passes through the injected
+    classify_target -- a T4 block verdict = orphan candidate; T0-T3
+    (external / runtime allowlist / config allowlist / valid session dir)
+    are auto-exempt (no hand-written exclusion list; no second
+    session-dir regex). Advise-only: never a block dict, never a
+    deletion; fire-once by construction; unresolved/missing root -> None;
+    CWD-outside-root and child-session skips live upstream in the
+    assembly flow. Fail-open: any error -> None.
     """
     try:
         root = str(working_dir_root) if working_dir_root else None
@@ -254,27 +240,26 @@ def scan_orphans(working_dir_root, allowlist=None):
 
 def guard_create(verdict, normalized, working_dir_root, session_id=None,
                  is_subagent=False, tool_name=None, target=None, tokens=None):
-    """Session-dir creation gate (spec 5.19) -- the SINGLE enforcement
-    point, mounted from classify.evaluate_target right after classify.
+    """Session-dir creation gate -- the SINGLE enforcement point, mounted
+    from classify.evaluate_target right after classify.
 
     A no-op (returns None) for every verdict whose rule_key is not
-    session-dir: T1 runtime / T2 config allowlist allows are exempt by
-    structure (EX-1 / EX-2). On the session-dir branch:
+    session-dir (T1 runtime / T2 config allowlist allows are exempt by
+    structure). On the session-dir branch:
 
-    - the bound dir itself (Windows casefold): allow (BND-6 / BND-7);
+    - the bound dir itself (Windows casefold): allow;
     - free slot + first-segment dir absent (creation signal): BIND and
-      allow (BND-1..4);
-    - occupied slot whose claimed dir vanished (SCR-048 R2): the claim is
-      released (pop + persist) and the normal free-slot flow applies --
-      no phantom block, no mv-from-a-deleted-dir;
-    - occupied slot + first-segment dir absent: an mv rename OF the
-      bound dir (terminal_cp_mv_src over tokens) transfers the claim
-      and allows (MV-1); anything else blocks session-dir-limit
-      (BLK-1/2/5);
+      allow;
+    - occupied slot whose claimed dir vanished: the claim is released
+      (pop + persist) and the normal free-slot flow applies -- no
+      phantom block, no mv-from-a-deleted-dir;
+    - occupied slot + first-segment dir absent: an mv rename OF the bound
+      dir (terminal_cp_mv_src over tokens) transfers the claim and
+      allows; anything else blocks session-dir-limit;
     - first-segment dir EXISTS: allow, no bind, no slot consumed
-      (creation-count semantics, BND-5).
+      (creation-count semantics).
 
-    Fail-open: any error allows (5.8). Returns the block dict or None.
+    Fail-open: any error allows. Returns the block dict or None.
     """
     try:
         if (
@@ -289,19 +274,18 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
             return None
         claim = claim_of_owner(owner)
         if claim is not None and same_name(claim, first_seg):
-            return None  # the bound dir itself (BND-6 / BND-7)
+            return None  # the bound dir itself
         exists = os.path.isdir(os.path.join(str(working_dir_root), first_seg))
         if claim is None and not is_slot_occupied(owner):
-            # SCR-052 4.5: the named creation-signal predicate (T3 ALLOW
-            # via the caller-held chain verdict + first-segment absent).
+            # The named creation-signal predicate (T3 ALLOW via the
+            # caller-held chain verdict + first-segment absent).
             if is_creation_signal(normalized, working_dir_root, verdict=verdict):
                 bind(owner, first_seg, working_dir_root)
             return None
         if exists:
-            return None  # existing other session dir: no bind (BND-5)
-        # SCR-048 R2 (spec 5.19): heal a vanished claimed dir ahead of the
-        # occupied determination / MV-1 branch; after healing the normal
-        # free-slot binding flow applies.
+            return None  # existing other session dir: no bind
+        # Heal a vanished claimed dir ahead of the occupied determination
+        # / mv branch; after healing the normal free-slot flow applies.
         if heal_missing_claim(owner, working_dir_root):
             claim = claim_of_owner(owner)
         if claim is None and not is_slot_occupied(owner):
@@ -309,9 +293,8 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
                 bind(owner, first_seg, working_dir_root)
             return None
         if tokens and target is not None:
-            # SCR-056 R1b: function-local import = documented cycle break
-            # (the terminal predicate family lives in terminal, which
-            # statically consumes this gate surface).
+            # Function-local import = cycle break (terminal statically
+            # consumes this gate surface).
             from .terminal import terminal_cp_mv_src
             src = terminal_cp_mv_src(tokens, target)
             if src is not None and same_name(
@@ -333,27 +316,25 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
 def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
                  tool_name="terminal"):
     """Session-dir creation SCRIPT gate (spec 5.19), consulted by
-    terminal.guard_terminal BEFORE the heredoc blanket demotion (BLK-3:
-    the heredoc form stays gated).
+    terminal.guard_terminal BEFORE the heredoc blanket demotion (the
+    heredoc form stays gated).
 
     is_session_dir_script(tokens) False -> None (no interference). A
-    vanished claimed dir is released first (SCR-048 R2: no phantom
-    block); with the slot still occupied (claim OR pending marker) ->
-    session-dir-limit block. Otherwise the pending_create marker is
-    armed for the audit post-diff binding observer and the command
-    proceeds (the normal uncertain-tier allow+log still fires downstream,
-    OB-5).
+    vanished claimed dir is released first (no phantom block); with the
+    slot still occupied (claim OR pending marker) -> session-dir-limit
+    block. Otherwise the pending_create marker is armed for the audit
+    post-diff binding observer and the command proceeds (the normal
+    uncertain-tier allow + log still fires downstream).
     """
     try:
-        # SCR-056 R1b: function-local import = documented cycle break (the
-        # terminal predicate family lives in terminal, which statically
+        # Function-local import = cycle break (terminal statically
         # consumes this gate surface).
         from .terminal import is_session_dir_script
         if not is_session_dir_script(tokens):
             return None
         owner = owner_of(session_id)
-        # SCR-048 R2 (spec 5.19): heal before the occupied determination;
-        # a released claim frees the slot, a pending marker still blocks.
+        # Heal before the occupied determination; a released claim frees
+        # the slot, a pending marker still blocks.
         heal_missing_claim(owner, working_dir_root)
         if is_slot_occupied(owner):
             return _limit_block(

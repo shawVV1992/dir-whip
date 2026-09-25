@@ -1,18 +1,21 @@
 """Path normalization / resolution / containment under working_dir_root -- pure functions.
 
-Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance, cross-platform Windows-style handling), resolves relative targets, and decides containment; unclassifiable Windows paths fail open (warn + treat as external, never raise). Pure functions plus ONE state-reading helper: config_file_path() (SCR-052 R1 single source) reads state.session for the profile-aware dir-whip-config.yaml location, fail-open guarded (SCR-035 core module discipline, ADR-0007); extracted from dir_whip.py and config.py (task 31.6). SCR-050 v3 R6.3 (spec 5.9): SESSION_DIR_RE + is_inside_session_dir homed here from config.py (pure pattern containment; config keeps the same-name re-export alias).
+Normalizes targets (MSYS/Cygwin drive mapping, drive inheritance,
+cross-platform Windows-style handling), resolves relative targets, and
+decides containment; unclassifiable Windows paths fail open (warn +
+treat as external, never raise). Pure functions plus ONE state-reading
+helper: config_file_path() (profile-aware, fail-open guarded).
 
 Layer: core
-Refs: spec 5.3, spec 5.5, spec 5.9, spec 5.13, SCR-006, SCR-026, SCR-027, SCR-035, SCR-042, SCR-044, SCR-045, SCR-050, SCR-052 R1, ADR-0007
+Refs: spec 5.3, spec 5.5, spec 5.9
 Key exports:
   - normalize_target -- normalize a target path before classification (chain step 0).
   - within_working_dir -- containment of target under working_dir_root (spec 5.3 step 6).
   - relativize_target -- privacy relativization; external paths -> ``h:<sha256-prefix>``.
   - is_absolute_any -- rooted on the local OS, Windows-drive-rooted, or backslash-rooted.
-  - is_inside_session_dir -- True when the path sits under working_dir_root/<session_dir>/... (spec 5.9; SCR-050 v3 R6.3 homing).
-  - dirwhip_home -- profile-aware dir-whip home (stats.jsonl / dir-whip.log / audit-quarantine family).
-  - config_file_path -- profile-aware dir-whip-config.yaml location (SCR-052 R1 single source).
-  - get_hermes_home, profile_home, paths_equal -- public home resolution + path equality helpers.
+  - is_inside_session_dir -- True when the path sits under working_dir_root/<session_dir>/... (spec 5.9).
+  - dirwhip_home / config_file_path -- profile-aware dir-whip home + dir-whip-config.yaml location.
+  - get_hermes_home / profile_home / paths_equal -- home resolution + path equality helpers.
 """
 
 import datetime
@@ -27,15 +30,15 @@ from . import state
 
 logger = logging.getLogger("dir-whip")
 
-# MSYS-style forward-slash drive forms (SCR-006, task 9.9).
-# Matches /c/..., //c/... (single drive letter) but NOT UNC \\server\share.
+# MSYS-style forward-slash drive forms: matches /c/..., //c/... (single
+# drive letter) but NOT UNC \\server\share.
 _MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
 _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 
 _DRIVE_ROOTED_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
-# Session-directory name pattern (spec 5.9; SCR-050 v3 R6.3: homed from
-# config.py -- session dirs exist only at the Working Directory root).
+# Session-directory name pattern (spec 5.9; session dirs exist only at the
+# Working Directory root).
 SESSION_DIR_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 
 
@@ -59,10 +62,9 @@ def get_hermes_home():
     """Return the Hermes home directory path (D5).
 
     HERMES_HOME environment override FIRST, then the platform default:
-    Windows LOCALAPPDATA/hermes -- with a Path.home()/"hermes" fallback
-    when LOCALAPPDATA is unset/blank so the home is NEVER a relative
-    path resolvable against the CWD (SCR-044 R8, script-side SCR-042 N7
-    parity) --, POSIX ~/.hermes.
+    Windows LOCALAPPDATA/hermes (Path.home()/"hermes" fallback when
+    LOCALAPPDATA is unset/blank, so the home is NEVER a relative path
+    resolvable against the CWD), POSIX ~/.hermes.
     """
     env_home = os.environ.get("HERMES_HOME")
     if env_home:
@@ -71,12 +73,12 @@ def get_hermes_home():
         local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
         if local_app_data:
             return Path(local_app_data) / "hermes"
-        return Path.home() / "hermes"   # R8: unset/blank fallback (script-side N7 parity)
+        return Path.home() / "hermes"   # unset/blank fallback
     return Path.home() / ".hermes"
 
 
 def profile_home(hermes_home, profile):
-    """The profile's home directory, aware of both layouts (SCR-026/027).
+    """The profile's home directory, aware of both layouts.
 
     profile default: home-shaped (parent named "profiles", i.e. HERMES_HOME
     IS a named profile's dir) -> hermes_home.parent.parent (the default
@@ -109,20 +111,17 @@ def is_absolute_any(target):
     return target.startswith("\\") and not target.startswith("\\\\")
 
 
-# ---------------------------------------------------------------- Path normalization (SCR-006)
+# ---------------------------------------------------------------- Path normalization
 
 def _normalize_windows(path, working_dir_root):
     """Normalize a target path on Windows (MSYS mapping + drive inheritance).
 
-    1. Map MSYS forward-slash forms to drive-qualified paths:
-       /c/..., //c/... -> C:/<rest>; /cygdrive/c/... -> C:/<rest>.
-       UNC paths (//server/share) do not match these regexes.
-    2. os.path.normpath (separator and dot-segment normalization).
-    3. Drive inheritance: rooted paths that still lack a drive get the
-       drive of working_dir_root; skipped if working_dir_root has no drive.
-    4. Fail-open: a path that STILL has no drive after inheritance is
-       unclassifiable on Windows; log a warning and return it unchanged
-       (never raise -- the caller classifies it as external and allows).
+    Map MSYS forms (/c/..., //c/..., /cygdrive/c/...) to drive-qualified
+    paths (UNC //server/share does not match), run os.path.normpath, then
+    inherit the working_dir_root drive for rooted paths that still lack
+    one. Fail-open: a path STILL drive-less after inheritance is
+    unclassifiable -- warn and return it unchanged (never raise; the
+    caller classifies it as external and allows).
     """
     match = _MSYS_DRIVE_RE.match(path)
     if match:
@@ -160,7 +159,7 @@ def _normalize_posix(path):
 
 
 def _looks_windowsy(path):
-    """Windows-style target on ANY host (SCR-006 cross-platform).
+    """Windows-style target on ANY host.
 
     MSYS/Cygwin forms, drive-rooted paths, and single-backslash-rooted
     paths follow Windows normalization even on POSIX hosts (a WSL/Git-Bash
@@ -187,9 +186,8 @@ def within_working_dir(target, working_dir_root):
     """Containment of target under working_dir_root (5.3 step 6).
 
     Windows-style (drive-rooted) pairs are compared case-insensitively on
-    ANY host — Windows paths follow Windows matching rules even on POSIX
-    (SCR-006; e.g. a WSL session carrying a Windows-style root). Native
-    paths use os.path.relpath (case-sensitive on POSIX).
+    ANY host (a WSL session can carry a Windows-style root); native paths
+    use os.path.relpath (case-sensitive on POSIX).
     """
     target_fwd = str(target).replace("\\", "/")
     root_fwd = str(working_dir_root).replace("\\", "/")
@@ -211,7 +209,7 @@ def within_working_dir(target, working_dir_root):
 # ---------------------------------------------------------------- Privacy relativization (spec 5.13)
 
 def _hash_prefix(value):
-    """Deterministic privacy-preserving prefix for external paths (5.13)."""
+    """Deterministic privacy-preserving prefix for external paths."""
     return "h:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
@@ -220,7 +218,7 @@ def relativize_target(target, working_dir_root):
 
     None target stays None (omitted). External paths (outside the root,
     different drive, or unrelatable) become a 'h:<sha256-prefix>' hash so
-    no absolute external path ever lands in stats.jsonl (5.13 privacy).
+    no absolute external path ever lands in stats.jsonl (privacy).
     """
     if target is None:
         return None
@@ -246,14 +244,12 @@ def paths_equal(a, b):
 
 
 def dirwhip_home(profile=None):
-    """The profile-aware dir-whip home directory (SCR-045 R7 single source).
+    """The profile-aware dir-whip home directory.
 
     Pure function: profile comes from the caller (usually
     state.session.session_profile); None -> HERMES_HOME directly
     (register-time / no session profile). Returns <home>/dir-whip --
-    the stats.jsonl / dir-whip.log / audit-quarantine family home. The
-    five former hand-rolled get_hermes_home + profile dance sites
-    (stats / logsetup / audit x2 / report) all call this now.
+    the stats.jsonl / dir-whip.log / audit-quarantine family home.
     """
     home = get_hermes_home()
     if profile:
@@ -262,19 +258,14 @@ def dirwhip_home(profile=None):
 
 
 def config_file_path():
-    """The profile-aware dir-whip-config.yaml location (SCR-052 R1 single
-    source; merges the former config._get_guard_config_path and
-    allowlist_writer._get_config_path).
+    """The profile-aware dir-whip-config.yaml location.
 
-    Resolution (superset of the two merged chains; in production the
-    registered ctx and the report command ctx are the same object):
-    state.session.session_profile -> registered_ctx.profile_name ->
-    report command ctx.profile_name (function-local import: the
-    documented cycle-break idiom -- report imports config which imports
-    paths). Falls back to HERMES_HOME/dir-whip/... when no profile is
-    findable (default tests). Built on dirwhip_home() so the config file
-    lands in the same profile-aware dir-whip home family as stats.jsonl /
-    dir-whip.log / audit-quarantine. Fail-open on any state read error.
+    Resolution chain: state.session.session_profile ->
+    registered_ctx.profile_name -> report command ctx.profile_name
+    (function-local import: the documented cycle-break idiom -- report
+    imports config which imports paths). Falls back to HERMES_HOME/
+    dir-whip/... when no profile is findable (default tests). Built on
+    dirwhip_home(); fail-open on any state read error.
     """
     profile = None
     try:
@@ -299,10 +290,6 @@ def config_file_path():
             pass
     return dirwhip_home(profile) / "dir-whip-config.yaml"
 
-
-# Single authoritative names (SCR-052 R1 alias convergence: the former
-# module-tail get_hermes_home/profile_home/paths_equal alias lines are
-# gone; the defs above carry the public names).
 
 __all__ = [
     "normalize_target",

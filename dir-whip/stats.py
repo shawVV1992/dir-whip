@@ -1,9 +1,10 @@
-"""Statistics: in-memory counters, session context, stats.jsonl persistence + 5MB rollover (spec 5.13).
+"""Statistics: in-memory counters, session context, stats.jsonl persistence + 5 MiB rollover (spec 5.13).
 
-Counters keyed outcome x tool x rule_key x is_subagent; the stats state lives in state.stats; no host imports (SCR-035 core discipline, ADR-0007); extracted in task 31.7 (previously part of the config module).
+Counters keyed outcome x tool x rule_key x is_subagent; the stats state
+lives in state.stats; no host imports (core discipline).
 
 Layer: core
-Refs: spec 5.13, SCR-027, SCR-035, SCR-045 R6, SCR-048 R6, ADR-0007
+Refs: spec 5.13, SCR-027, SCR-035
 Key exports:
   - stats_record -- bump counters + append one stats.jsonl event line; never raises.
   - stats_set_session -- attach provided session context fields to persisted events.
@@ -35,7 +36,7 @@ def stats_reset():
     """Clear in-memory stats (counters + session context).
 
     Called at register/re-register so no counters or session fields leak
-    into the next session (5.13 D2).
+    into the next session.
     """
     with state.stats.lock:
         state.stats.counters.clear()
@@ -55,14 +56,14 @@ def stats_end_session():
 
     Clears the session fields (profile / session_id / is_subagent /
     started_at) so a closed child session's context never leaks into
-    later events; in-memory counters are untouched (5.13 D2/D3).
+    later events; in-memory counters are untouched.
     """
     with state.stats.lock:
         _reset_stats_session_locked()
 
 
 def stats_set_session(profile=None, session_id=None, is_subagent=None, started_at=None):
-    """Attach session context to persisted stats events (5.13 session fields).
+    """Attach session context to persisted stats events.
 
     Only the provided fields are updated (None leaves a field unchanged);
     the full reset is stats_reset().
@@ -79,13 +80,12 @@ def stats_set_session(profile=None, session_id=None, is_subagent=None, started_a
 
 
 def stats_backfill_session(session_id):
-    """Set the stats session_id only when it is currently empty (5.13 R6).
+    """Set the stats session_id only when it is currently empty.
 
-    SCR-048 R6 follow-up: the lazy backfill must not race a concurrent
-    first call into an overwrite -- the check-and-set runs entirely under
-    state.stats.lock (stats_set_session cannot be reused here: its own
-    lock acquisition is not reentrant). Only the session_id field is
-    touched; profile / started_at stay unknown when unset.
+    The check-and-set runs entirely under state.stats.lock so a
+    concurrent first call cannot be overwritten (stats_set_session
+    cannot be reused here: its lock acquisition is not reentrant). Only
+    session_id is touched; profile / started_at stay unknown when unset.
     """
     if not session_id:
         return
@@ -108,11 +108,10 @@ def _now_iso():
 def stats_jsonl_path():
     """stats.jsonl location: the session profile's home dir-whip dir.
 
-    SCR-027: the path follows the SESSION profile (set at on_session_start),
-    so a default-profile session's events land in the ROOT home's
-    dir-whip dir, not the register-time active profile's. When no
-    session profile is set yet, use HERMES_HOME directly (register-time
-    behavior).
+    The path follows the SESSION profile (set at on_session_start), so a
+    default-profile session's events land in the ROOT home's dir-whip
+    dir, not the register-time active profile's. No session profile set
+    yet -> HERMES_HOME directly (register-time behavior).
     """
     return dirwhip_home(state.session.session_profile) / STATS_JSONL_NAME
 
@@ -150,10 +149,9 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
                  is_subagent=None, working_dir_root=None):
     """Record one guard verdict: bump counters + append one stats.jsonl line.
 
-    outcome x tool x rule_key counters are split by is_subagent (5.13 D2);
-    each event persists session + event fields (D3). Never raises: a failed
-    stats write is logged and does NOT affect the verdict (5.8 fail-open
-    logging).
+    outcome x tool x rule_key counters are split by is_subagent; each
+    event persists session + event fields. Never raises: a failed stats
+    write is logged and does NOT affect the verdict (fail-open logging).
     """
     if is_subagent is None:
         is_subagent = state.stats.session.get("is_subagent", False)
@@ -179,11 +177,6 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
         except Exception as exc:
             logger.debug("dir-whip: stats write failed (ignored): %s", exc)
 
-
-# Single authoritative names (SCR-052 R1 alias convergence: the former
-# module-tail record/set_session/backfill_session/snapshot/end_session/reset
-# bare aliases are gone; the descriptive stats_* defs are the public surface;
-# stats_jsonl_path is the def itself now).
 
 __all__ = [
     "stats_record",

@@ -1,11 +1,15 @@
-"""Verdict emission deep module: stats counters + stats.jsonl + leveled log + 5.14 bus fanout in one emit (spec 5.13, spec 5.14).
+"""Verdict emission deep module: stats counters + stats.jsonl + leveled log + bus fanout in one emit (spec 5.13, spec 5.14).
 
-Records one single-line verdict event per guard decision and fans out verdict-derived bus events (blocked / external-write) under a geometric outside-root basis; working_dir_root and profile resolve from state here while session_id / is_subagent stay explicit emit params (Ruling 4). No host imports (SCR-035 core discipline, ADR-0007); extracted from dir_whip.py (task 31.10). SCR-052 R1: the package-wide RULE_KEY_* constant home -- every static rule_key (Part 3 B/C/D tables) is defined here once and referenced by the emission sites; values are frozen verbatim (AC-2).
+Records one single-line verdict event per guard decision and fans out
+verdict-derived bus events (blocked / external-write) under a geometric
+outside-root basis; working_dir_root and profile resolve from state,
+session_id / is_subagent stay explicit params. No host imports; single
+definition point for every static RULE_KEY_* (values frozen).
 
 Layer: core
-Refs: spec 5.13, spec 5.14, SCR-035, SCR-041 R2, SCR-043 R2, SCR-043 R3, SCR-045 R6, SCR-052 R1, ADR-0007
+Refs: spec 5.13, spec 5.14, SCR-052
 Key exports:
-  - RULE_KEY_* -- the frozen static rule_key constants (single definition point; SCR-052 R1).
+  - RULE_KEY_* -- the frozen static rule_key constants (single definition point).
   - emit -- emit ONE verdict event (stats + jsonl + leveled log + bus sidecar); never raises.
   - bus_emit -- bare-name dir-whip bus event emit; silent degradation when the bus is absent.
 """
@@ -22,13 +26,12 @@ from .stats import stats_record
 
 logger = logging.getLogger("dir-whip")
 
-# ---------------------------------------------------------------- Frozen rule_key constants (SCR-052 R1; AC-2)
-# Single definition point for every static rule_key (Part 3 B/C/D tables in
-# internal/CONTEXT.md). VALUES ARE FROZEN: byte-identical to the former
-# inline literals (pure refactor red line). The dynamic prefixes
-# pre-command:<command> / landed:<tool> stay built at their emission sites.
+# ---------------------------------------------------------------- Frozen rule_key constants
+# Single definition point for every static rule_key; VALUES ARE FROZEN.
+# The dynamic prefixes pre-command:<command> / landed:<tool> stay built
+# at their emission sites.
 
-# Guard verdict rule_keys (B table).
+# Guard verdict rule_keys.
 RULE_KEY_EXTERNAL_WRITE = "external-write"
 RULE_KEY_RUNTIME_ALLOWLIST = "runtime-allowlist"
 RULE_KEY_TIER0_ALLOWLIST = "tier0-allowlist"
@@ -39,16 +42,14 @@ RULE_KEY_NON_SESSION_DIR = "non-session-dir"
 RULE_KEY_FAIL_OPEN = "fail-open"
 RULE_KEY_TERMINAL_WRITE_UNCERTAIN = "terminal-write-uncertain"
 
-# Terminal interception rule_keys (C table).
+# Terminal interception rule_keys.
 RULE_KEY_TERMINAL_REDIRECT = "terminal-redirect"
 RULE_KEY_TERMINAL_TOUCH = "terminal-touch"
 RULE_KEY_TERMINAL_CP_MV = "terminal-cp-mv"
 RULE_KEY_TERMINAL_MKDIR = "terminal-mkdir"
 RULE_KEY_TERMINAL_DOWNLOAD = "terminal-download"
 
-# Audit / session / observe rule_keys (D table static keys). The retained
-# historical name carries the session-dir-limit value (migrated from
-# session_dirs.py, name kept per SCR-052 R1).
+# Audit / session / observe rule_keys.
 SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"
 RULE_KEY_WRITE_AUDIT_VIOLATION = "write-audit-violation"
 RULE_KEY_WRITE_AUDIT_GATE_BLOCK = "write-audit-gate-block"
@@ -68,11 +69,9 @@ RULE_KEY_APPROVAL_GRANTED = "approval:granted"
 RULE_KEY_APPROVAL_DENIED = "approval:denied"
 RULE_KEY_APPROVAL_REQUESTED = "approval-requested"
 
-# Verdict rule_keys that never fan out to the bus (5.14): their callers
-# emit their own bus events (approval verdicts, the audit gate block, the
-# audit violation verdict) or are allow_path entry-gating rejections
-# (SCR-041 R2 + SCR-043 R3, 5.11 -- stats row only, no generic blocked
-# fanout).
+# Verdict rule_keys that never fan out to the bus: their callers emit
+# their own bus events (approval verdicts, audit gate block, audit
+# violation) or are allow_path entry-gating rejections (stats row only).
 _BUS_SKIP_RULE_KEYS = frozenset((
     RULE_KEY_APPROVAL_GRANTED,
     RULE_KEY_APPROVAL_DENIED,
@@ -92,21 +91,17 @@ def _verdict_reason(outcome):
 
 
 def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
-    """Emit ONE single-line structured verdict event (5.13 logging part).
+    """Emit ONE single-line structured verdict event.
 
-    Levels (SCR-043 R2): block / fail-open -> WARNING; a GEOMETRICALLY
-    outside-root target (same normalize_target + within_working_dir
-    domain as the classify chain) or the external-write outcome string
-    (fallback: root unresolved / target None fail-open shapes) -> INFO;
-    other allows -> DEBUG. Also records the verdict via stats (counters +
-    stats.jsonl append). Verdict-derived bus events (blocked /
-    external-write, 5.14) use the same geometric basis and are emitted
-    unless the rule_key is in _BUS_SKIP_RULE_KEYS (callers that handle
-    their own events, e.g. approval). working_dir_root and profile
-    resolve from state (state.session.working_dir_root /
-    state.session.session_profile); session_id / is_subagent describe
-    the judged call's session and are explicit params. Never raises
-    (fail-open, 5.8).
+    Levels: block / fail-open -> WARNING; a GEOMETRICALLY outside-root
+    target (same normalize_target + within_working_dir domain as the
+    classify chain) or the external-write outcome string (fail-open
+    fallback shapes) -> INFO; other allows -> DEBUG. Also records the
+    verdict via stats (counters + stats.jsonl). Verdict-derived bus
+    events (blocked / external-write) use the same geometric basis and
+    skip _BUS_SKIP_RULE_KEYS. working_dir_root / profile resolve from
+    state; session_id / is_subagent describe the judged call. Never
+    raises (fail-open).
     """
     try:
         working_dir_root = state.session.working_dir_root
@@ -115,9 +110,9 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
         )
         rel_target = relativize_target(target, working_dir_root)
-        # SCR-043 R2: the log/bus routing basis is GEOMETRIC (computed
-        # fresh, chain-homologous); the outcome string stays as the
-        # fallback so fail-open shapes keep their levels.
+        # The log/bus routing basis is GEOMETRIC (computed fresh,
+        # chain-homologous); the outcome string stays as fallback so
+        # fail-open shapes keep their levels.
         outside = (
             bool(target) and bool(working_dir_root)
             and not within_working_dir(
@@ -141,9 +136,8 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             logger.info("dir-whip: verdict %s", line)
         else:
             logger.debug("dir-whip: verdict %s", line)
-        # 5.14: verdict-derived bus events (privacy-shaped relative target),
-        # same geometric basis as the log routing; _BUS_SKIP_RULE_KEYS
-        # respected unchanged.
+        # Verdict-derived bus events (privacy-shaped relative target),
+        # same geometric basis as the log routing.
         if outcome == "block" and rule_key not in _BUS_SKIP_RULE_KEYS:
             bus_emit("blocked", {
                 "outcome": outcome,
@@ -164,12 +158,12 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
 
 
 def bus_emit(event_name, payload):
-    """Emit a bare-name dir-whip event (5.14); silent degradation.
+    """Emit a bare-name dir-whip event; silent degradation.
 
     Bus absent (capability flag off, no ctx, or ctx.emit missing) or emit
-    raising -> exactly ONE DEBUG log line per emission attempt, no error.
-    The host forces the ``dir-whip:`` namespace, so only the bare
-    name is passed (a namespaced name raises ValueError, fail-closed).
+    raising -> exactly ONE DEBUG log line per attempt, no error. The host
+    forces the ``dir-whip:`` namespace, so only the bare name is passed
+    (a namespaced name raises ValueError, fail-closed).
     """
     try:
         if not state.session.emit_enabled:
@@ -192,10 +186,6 @@ def bus_emit(event_name, payload):
             event_name, exc,
         )
 
-
-# Single authoritative names (SCR-052 R1 alias convergence: the former
-# module-tail emit = _emit_verdict / bus_emit = _bus_emit aliases are gone;
-# emit() calls bus_emit() directly).
 
 __all__ = [
     "emit",

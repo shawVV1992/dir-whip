@@ -1,17 +1,21 @@
-"""Guard entry: pre-tool-call decision chain + write-path dispatch + discipline/approval/observability surface (spec 5.3, spec 5.12; the classify chain split to classify.py and terminal interception homed in terminal.py -- SCR-055 R6, terminal module split reverted at SCR-056 R1b).
+"""Guard entry: pre-tool-call decision chain + write-path dispatch (spec 5.3, spec 5.12).
 
-Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers state/config/events/messages plus the sanctioned import-back of subagents/audit/audit_prompts; the verdict chain lives in classify.py (classify_target / evaluate_target) and the terminal loop in terminal.py (guard_terminal). Extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
+Pure decision layer: no host imports, no hook registration (the assembly
+layer owns hooks and fail-open); depends on the lower layers
+state/config/events/messages plus the sanctioned import-back of
+subagents/audit/audit_prompts. The verdict chain lives in classify.py
+and terminal handling in terminal.py.
 
 Layer: core
-Refs: spec 5.3, spec 5.4, spec 5.12, spec 5.13, spec 5.18, spec v2.6 B2, SCR-050, SCR-055 R6
+Refs: spec 5.3, spec 5.4, spec 5.12
 Key exports:
   - guard -- pre-tool-call decision chain; None = allow, a block dict = block.
-  - discipline_applies -- delegation alias (canonical home session_start.py, SCR-050 v3 R6.2); True = inject the session-start reminder.
-  - project_exemption_applies -- delegation alias (canonical home session_start.py, SCR-050 v3 R6.2); True = CWD under an active host project folder.
+  - discipline_applies -- delegation alias (canonical home session_start.py); True = inject the session-start reminder.
+  - project_exemption_applies -- delegation alias (canonical home session_start.py); True = CWD under an active host project folder.
   - extract_target_paths -- write_file / patch target path(s); empty list when absent.
   - reset_fail_open_flag -- reset the one-time fail-open warning flag.
   - resolved_config -- cached (working_dir_root, allowlist); (None, []) on failure.
-  - approval_granted -- host approval choice -> granted/denied (SCR-050 v3 R6.1 public; consumer: the assembly approval observer).
+  - approval_granted -- host approval choice -> granted/denied (consumer: the assembly approval observer).
 """
 
 import re
@@ -27,9 +31,8 @@ from .config import get_cached_config
 
 from .events import RULE_KEY_FAIL_OPEN, emit
 
-# Message templates: centralized in the core leaf module messages.py
-# (spec 5.20, SCR-047 R1, ADR-0014); same-name aliases keep every
-# guard.* call site and test import path unchanged.
+# Message templates live in the core leaf messages.py; same-name aliases
+# keep guard.* call sites and test import paths unchanged.
 from .messages import FAIL_OPEN_WARNING_MESSAGE
 
 from . import subagents
@@ -39,35 +42,31 @@ from .terminal import guard_terminal
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
 
-# Spec 5.12 / 5.4 message constants live in messages.py (spec 5.20,
-# SCR-047 R1); the same-name imports above are the aliases.
 
 def discipline_applies(cwd, working_dir_root):
-    """Conditional-injection predicate (spec 5.4, v2.7 R2).
+    """Conditional-injection predicate (spec 5.4).
 
-    SCR-050 v3 R6.2 (spec 5.1 v2.19): the canonical home is
-    session_start.py (single-consumer move); this same-name delegation
-    alias keeps guard.* / test import paths unchanged. Lazy import =
-    the documented cycle-break idiom (state.py precedent): guard has
-    NO module-level session_start edge (session_start imports guard for
-    reset_fail_open_flag / resolved_config).
+    Delegation alias with canonical home session_start.py; the same
+    name keeps guard.* / test import paths unchanged. Lazy import
+    breaks the cycle: guard has NO module-level session_start edge
+    (session_start imports guard for reset_fail_open_flag /
+    resolved_config).
     """
     from .session_start import discipline_applies as _canonical
     return _canonical(cwd, working_dir_root)
 
 
 def project_exemption_applies(cwd, folders):
-    """Project-mode injection exemption predicate (R7, spec 3.2 Layer 0).
+    """Project-mode injection exemption predicate (spec 3.2 Layer 0).
 
-    SCR-050 v3 R6.2 (spec 5.1 v2.19): delegation alias -- canonical home
-    session_start.py; same fail-open semantics (missing cwd / folders / any
-    error -> False = no exemption).
+    Delegation alias with canonical home session_start.py; fail-open
+    semantics (missing cwd / folders or any error -> False = no
+    exemption).
     """
     from .session_start import project_exemption_applies as _canonical
     return _canonical(cwd, folders)
 
-# Spec 5.13 D2: host approval choices that count as granted (verified
-# against the local hermes-agent approval.py choice vocabulary).
+# Host approval choices that count as granted (host approval.py vocabulary).
 _APPROVAL_GRANTED_CHOICES = frozenset(
     ("approve", "always", "session", "granted", "allow", "smart_approve")
 )
@@ -84,23 +83,23 @@ def guard(tool_name, args, task_id=None, **kwargs):
 
     is_subagent = bool(kwargs.get("is_subagent", False))
     session_id = kwargs.get("session_id")
-    # 5.13: verdicts split by is_subagent -child membership in the
-    # child_session_ids set (5.4) implies a subagent write.
+    # Verdicts split by is_subagent: membership in the child_session_ids
+    # set implies a subagent write.
     if not is_subagent and session_id and subagents._is_subagent_session(session_id):
         is_subagent = True
     ctx = _get_ctx()
     working_dir_root, allowlist = get_cached_config(ctx)
 
-    # Guard-disabled shortcut (5.3 step 2): one-time warning + allow.
+    # Guard-disabled shortcut: one-time warning + allow.
     if working_dir_root is None:
         _warn_fail_open_once(ctx, tool_name, session_id, is_subagent)
         return None
 
-    # L3 settlement gate (5.18): an unresolved pending violation latches
-    # the NEXT write-class call until remediation. Runs BEFORE target
+    # L3 settlement gate: an unresolved pending violation latches the
+    # NEXT write-class call until remediation. Runs BEFORE target
     # extraction / classification / the audit pre snapshot; a gated call
     # never snapshots (the command did not run). Fail-open: a gate-side
-    # error allows the call (5.8), a failed re-scan keeps the latch.
+    # error allows the call, a failed re-scan keeps the latch.
     unresolved = gate_unresolved(session_id, working_dir_root,
                                         allowlist)
     if unresolved:
@@ -111,8 +110,8 @@ def guard(tool_name, args, task_id=None, **kwargs):
         result = guard_terminal(
             args, task_id, working_dir_root, allowlist, is_subagent, session_id
         )
-        # 5.18 audit pre-snapshot runs ONLY when the front layer decided
-        # to allow -- this covers every command-will-execute path (heredoc
+        # Audit pre-snapshot runs ONLY when the front layer decided to
+        # allow -- this covers every command-will-execute path (heredoc
         # demotion, guard-disabled, device exemption, uncertain tier);
         # blocked calls never snapshot (nothing to pair at post).
         if result is None:
@@ -164,8 +163,8 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
 
 
 def reset_fail_open_flag():
-    """Reset the one-time fail-open warning flag (26.7's on_session_start
-    calls this; tests use it too)."""
+    """Reset the one-time fail-open warning flag (on_session_start and
+    tests call this)."""
     state.session.fail_open_warned = False
 
 
@@ -180,7 +179,7 @@ def resolved_config():
 
 
 def approval_granted(choice):
-    """Map host approval choices to granted/denied (5.13 D2)."""
+    """Map host approval choices to granted/denied."""
     return str(choice or "").strip().lower() in _APPROVAL_GRANTED_CHOICES
 
 
@@ -206,10 +205,6 @@ def extract_target_paths(tool_name, args):
 
     return []
 
-
-# Single authoritative names (SCR-052 R1 alias convergence; SCR-055 R6: the
-# classify chain moved to classify.py and terminal interception to
-# terminal.py -- the defs above carry this module's public names).
 
 __all__ = [
     "guard",
