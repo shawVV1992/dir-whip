@@ -160,8 +160,9 @@ def transform_tool_result(tool_name=None, args=None, result=None,
         # FIRST notice fire (not at register() -- the eager tool surface is
         # pinned to dir_whip_allow_path alone). The L4 family lives in
         # audit.py, reached via a function-local import (call-site
-        # laziness; cycle-break precedent). Registration failure must never
-        # eat the notice (fail-open inside the helper).
+        # laziness only -- audit is already module-level imported; not a
+        # cycle break). Registration failure must never eat the notice
+        # (fail-open inside the helper).
         from . import audit as _audit
         _audit.lazy_register_settle_tool()
         return result + "\n\n" + _audit_notice_message(unannounced)

@@ -291,9 +291,11 @@ def evaluate_target(target, tool_name, working_dir_root, allowlist,
     terminal=True exempts device paths BEFORE normalization, emits the
     extracted rule_key (terminal-touch / -redirect / -cp-mv), resolves
     through the terminal working_dir_root (workdir arg -> session CWD ->
-    working_dir_root) and rides the raw command tokens for the mv-source
-    lookup; terminal=False (write_file / patch) emits the classify
-    rule_key through the session CWD chain.
+    working_dir_root; the parameter name distinguishes THIS terminal
+    call's effective root from the config-resolved working_dir_root) and
+    rides the raw command tokens for the mv-source lookup;
+    terminal=False (write_file / patch) emits the classify rule_key
+    through the session CWD chain.
 
     The SINGLE session-dir-limit enforcement point sits between classify
     and emit: session_dirs.guard_create no-ops for non-session-dir
