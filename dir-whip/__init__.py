@@ -35,7 +35,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, audit_prompts, claims, classify, commands, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents, terminal_guard
+from . import allowlist_writer, audit, audit_prompts, claims, classify, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents, terminal_guard
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -184,8 +184,8 @@ def _register_tool_command_skill(ctx):
             )
         except Exception as exc:
             logger.warning("dir-whip: register_tool failed: %s", exc)
-    # Spec 5.7 command (/dir-whip merged report) lives in commands.py.
-    commands.register_dir_whip_commands(ctx)
+    # Spec 5.7 command (/dir-whip merged report) lives in report.py.
+    report.register_dir_whip_commands(ctx)
     # Spec 5.17: bundled skill (opt-in, qualified name); the
     # once-per-session discipline block replaced the always-on prompt.
     try:
