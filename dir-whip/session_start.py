@@ -21,7 +21,7 @@ import logging
 
 from . import audit_prompts, claims, config, events, runtime_allowlist, subagents, session_dirs, state, stats
 
-from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
+from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_ORPHAN_NOTICE_FALLBACK, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
 from .messages import DISCIPLINE_BLOCK_MESSAGE
 
@@ -48,15 +48,29 @@ def _record_session_reminder(session_id, status):
     )
 
 
-def _record_orphan_notice(session_id):
-    """One orphan-notice stats row when the advisory notice is delivered
-    at session start (same non-verdict advisory convention as
-    _record_session_reminder; allow outcome -> no bus fanout). Top-level
+def _record_orphan_notice(session_id, reason):
+    """One orphan-notice stats row -- delivered OR suppressed (v2.25
+    SCR-057: a falsy injection is never silent; reason carries the
+    delivery state). Same non-verdict advisory convention as
+    _record_session_reminder (allow outcome -> no bus fanout). Top-level
     path only, so is_subagent is False by construction. Fail-open:
     events.emit never raises."""
     events.emit(
         "allow", "session", RULE_KEY_ORPHAN_NOTICE, None,
-        "orphan scan notice at session start", session_id, False,
+        reason, session_id, False,
+    )
+
+
+def _record_orphan_notice_fallback(session_id):
+    """One orphan-notice-fallback stats row (v2.25 SCR-057): the
+    suppressed notice was re-delivered on the first eligible tool result
+    (5.17 pending-notes queue). Stats-only allow row, target None, no bus
+    event. Fail-open: events.emit never raises."""
+    events.emit(
+        "allow", "session", RULE_KEY_ORPHAN_NOTICE_FALLBACK, None,
+        "suppressed orphan notice re-delivered on the first eligible "
+        "tool result",
+        session_id, False,
     )
 
 
@@ -118,19 +132,25 @@ def _is_error_json_result(result):
 
 
 def _append_reminder_fallback(audited_result, original_result, session_id):
-    """One-shot REMINDER tail note after an unavailable session start.
+    """One-shot pending-notes tail after an unavailable session start
+    (v2.25 SCR-057: generalized queue -- reminder note + suppressed
+    orphan notice ride the SAME first eligible call, single-tail
+    concatenation; each note keeps its own fire-once flag and stats row).
 
-    Eligibility: top-level session only, flag armed by the unavailable
-    branch of _inject_reminder, and the result must be a string (error
-    JSON results are NOT decorated). A non-eligible call does NOT consume
-    the flag -- the note waits for the next eligible call. The base text
-    is the audit-adjusted return when there is one (the note lands after
-    it, tail append), else the original result. Fire-once: on firing the
-    flag is cleared and the session-reminder-fallback stats row is
-    recorded. Never raises; on any failure the audited result is returned
+    Eligibility: top-level session only, at least one flag armed
+    (reminder unavailable branch / suppressed orphan notice), and the
+    result must be a string (error JSON results are NOT decorated). A
+    non-eligible call does NOT consume the flags -- the notes wait for
+    the next eligible call. The base text is the audit-adjusted return
+    when there is one (the notes land after it, tail append), else the
+    original result. Fire-once per note: on firing each flag is cleared
+    and its stats row recorded (two rows on one physical delivery).
+    Never raises; on any failure the audited result is returned
     untouched (fail-open)."""
     try:
-        if not state.session.reminder_pending_fallback:
+        pending_reminder = state.session.reminder_pending_fallback
+        pending_orphan = state.session.orphan_pending_fallback
+        if not pending_reminder and not pending_orphan:
             return audited_result
         if subagents._is_subagent_session(session_id):
             return audited_result
@@ -142,9 +162,19 @@ def _append_reminder_fallback(audited_result, original_result, session_id):
             return audited_result
         if _is_error_json_result(text):
             return audited_result
-        state.session.reminder_pending_fallback = False
-        _record_reminder_fallback(session_id)
-        return text + "\n\n" + DISCIPLINE_BLOCK_MESSAGE
+        parts = []
+        if pending_reminder:
+            state.session.reminder_pending_fallback = False
+            _record_reminder_fallback(session_id)
+            parts.append(DISCIPLINE_BLOCK_MESSAGE)
+        if pending_orphan:
+            state.session.orphan_pending_fallback = False
+            _record_orphan_notice_fallback(session_id)
+            notice = state.session.orphan_notice_text
+            state.session.orphan_notice_text = None
+            if notice:
+                parts.append(notice)
+        return text + "\n\n" + "\n\n".join(parts)
     except Exception as exc:
         logger.debug("dir-whip: reminder fallback failed (fail-open): %s", exc)
         return audited_result
@@ -200,6 +230,8 @@ def _reset_session_scope(session_id):
     top-level lifecycle; the fail-open warning flag is reset.
     """
     state.session.reminder_pending_fallback = False
+    state.session.orphan_pending_fallback = False
+    state.session.orphan_notice_text = None
     audit_prompts.on_session_start(session_id)
     claims.on_session_start(session_id)
     runtime_allowlist.runtime_allowlist_clear()
@@ -265,11 +297,31 @@ def _deliver_orphan_notice(working_dir_root, allowlist, session_id, ctx):
     injection (child sessions returned at the top, so subagents never
     scan; CWD-outside sessions returned at the skipped-outside branch).
     Decision logic lives in session_dirs; advise-only TEXT, never a block
-    action. The stats row lands when the notice is delivered."""
+    action. Delivery is three-stated (v2.25 SCR-057, mirroring the 5.17
+    reminder diagnostics): delivered (stats row) | suppressed:<no-ctx |
+    no-method | falsy-return> (stats row + the notice text cached for the
+    pending-notes fallback -- a suppressed delivery is never silent) |
+    no notice (scan clean / fail-open: unchanged silence)."""
     notice = session_dirs.scan_orphans(working_dir_root, allowlist)
-    if notice and ctx is not None and hasattr(ctx, "inject_message"):
-        if ctx.inject_message(notice):
-            _record_orphan_notice(session_id)
+    if not notice:
+        return
+    has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
+    if has_method and ctx.inject_message(notice):
+        _record_orphan_notice(session_id, "orphan scan notice at session start")
+        return
+    if not ctx:
+        sub = "no-ctx"
+    elif not has_method:
+        sub = "no-method"
+    else:
+        sub = "falsy-return"
+    state.session.orphan_pending_fallback = True
+    state.session.orphan_notice_text = notice
+    _record_orphan_notice(session_id, "suppressed:" + sub)
+    logger.debug(
+        "dir-whip: orphan notice suppressed:%s (inject_message present=%s); "
+        "fallback armed", sub, has_method,
+    )
 
 
 def session_start(session_id, ctx):

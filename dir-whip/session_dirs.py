@@ -181,11 +181,16 @@ def set_classifier(fn):
 
 
 def _orphan_notice(working_dir_root, names):
-    """Build the advisory notice: header, one listed entry per orphan,
-    cleanup guidance (the create + relocate path via the shared builder),
-    then the allowlist registration alternative (tail)."""
+    """Build the advisory notice: header, one listed entry per orphan
+    (newest-first is not meaningful here -- name-sorted; capped at 3
+    entries with a "(+N more)" overflow line, v2.25 SCR-057, mirroring
+    the create_session_dir.py same-day advisory cap), cleanup guidance
+    (the create + relocate path via the shared builder), then the
+    allowlist registration alternative (tail)."""
     lines = [ORPHAN_NOTICE_HEADER]
-    lines.extend("  - %s" % name for name in names)
+    lines.extend("  - %s" % name for name in names[:3])
+    if len(names) > 3:
+        lines.append("  (+%d more)" % (len(names) - 3))
     lines.append(ORPHAN_NOTICE_CREATE_RELOCATE_LINE)
     lines.append(
         "  %s" % script_invocation_line("<task_name>", working_dir_root)

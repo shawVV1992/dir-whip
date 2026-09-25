@@ -41,6 +41,8 @@ class _SessionState:
         self.project_active_fn = None    # host API injection slot (ADR-0007; project-exemption probe, called at on_start)
         self.reminder_status = None      # injected|skipped-outside|skipped-child|unavailable
         self.reminder_pending_fallback = False  # unavailable reminder -> one-shot transform_tool_result fallback armed
+        self.orphan_pending_fallback = False    # suppressed orphan notice -> same pending-notes fallback armed
+        self.orphan_notice_text = None   # cached orphan notice text for the fallback tail
         self.log_handler_installed = False  # dir-whip.log attach idempotence flag
         self.confirmation_issued = set()  # allow_path two-step confirmation issued set (guarded by self.lock)
         self.child_session_ids = set()   # guarded by self.lock
