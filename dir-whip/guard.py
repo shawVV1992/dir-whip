@@ -39,7 +39,13 @@ from . import subagents
 
 from .terminal import guard_terminal
 
-INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
+# Write-class tool set (v2.25 SCR-057): the four write-capable tools.
+# Defined HERE at ONE point; the post_tool_call adapter consumes the same
+# constant (no second literal list -- the drift surface that let
+# execute_code escape every defence). INTERCEPTED_TOOLS stays as the
+# compatibility alias for earlier call sites/tests.
+WRITE_CLASS_TOOLS = ("write_file", "patch", "terminal", "execute_code")
+INTERCEPTED_TOOLS = WRITE_CLASS_TOOLS
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
 
 
@@ -75,10 +81,14 @@ def guard(tool_name, args, task_id=None, **kwargs):
     """Pre-tool-call decision chain (spec 5.3).
 
     Returns None (allow) or a block dict {"action": "block", "message"}.
-    Intercepts ONLY write_file / patch / terminal; the guard-disabled
-    shortcut (working_dir_root None) runs BEFORE path extraction.
+    Intercepts ONLY the write-class tool set (write_file / patch /
+    terminal / execute_code); the guard-disabled shortcut
+    (working_dir_root None) runs BEFORE path extraction. execute_code
+    (v2.25 SCR-057) is a snapshot-only member: after the latch check it
+    takes the 5.18 pre snapshot and allows -- its targets are statically
+    unparseable, so it is never target-classified.
     """
-    if tool_name not in INTERCEPTED_TOOLS:
+    if tool_name not in WRITE_CLASS_TOOLS:
         return None
 
     is_subagent = bool(kwargs.get("is_subagent", False))
@@ -120,6 +130,17 @@ def guard(tool_name, args, task_id=None, **kwargs):
                 parsed_allowlist_raw(allowlist),
             )
         return result
+
+    if tool_name == "execute_code":
+        # v2.25 (SCR-057): statically unparseable targets -- no extraction,
+        # no classification. The latch (above) and the fail-open shortcut
+        # (above) already applied; pair the 5.18 pre snapshot
+        # (cap-guarded) and allow.
+        pre_snapshot(
+            session_id, task_id, working_dir_root,
+            parsed_allowlist_raw(allowlist),
+        )
+        return None
 
     target_paths = extract_target_paths(tool_name, args)
     if not target_paths:
