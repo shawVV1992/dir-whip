@@ -1,6 +1,6 @@
-"""Guard entry: pre-tool-call decision chain + write-path dispatch + discipline/approval/observability surface (spec 5.3, spec 5.12; the classify chain split to classify.py and terminal interception to the terminal_guard module at SCR-055 R6).
+"""Guard entry: pre-tool-call decision chain + write-path dispatch + discipline/approval/observability surface (spec 5.3, spec 5.12; the classify chain split to classify.py and terminal interception homed in terminal.py -- SCR-055 R6, terminal module split reverted at SCR-056 R1b).
 
-Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers state/config/events/messages plus the sanctioned import-back of subagents/audit/audit_prompts; the verdict chain lives in classify.py (classify_target / evaluate_target) and the terminal loop in the terminal_guard module (guard_terminal). Extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
+Pure decision layer: no host imports, no hook registration (the __init__.py assembly layer owns hooks and fail-open); depends on the lower layers state/config/events/messages plus the sanctioned import-back of subagents/audit/audit_prompts; the verdict chain lives in classify.py (classify_target / evaluate_target) and the terminal loop in terminal.py (guard_terminal). Extracted from dir_whip.py (task 31.13). Unified allowlist model per spec v2.6 B2.
 
 Layer: core
 Refs: spec 5.3, spec 5.4, spec 5.12, spec 5.13, spec 5.18, spec v2.6 B2, SCR-050, SCR-055 R6
@@ -34,7 +34,7 @@ from .messages import FAIL_OPEN_WARNING_MESSAGE
 
 from . import subagents
 
-from .terminal_guard import guard_terminal
+from .terminal import guard_terminal
 
 INTERCEPTED_TOOLS = ("write_file", "patch", "terminal")
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
@@ -209,7 +209,7 @@ def extract_target_paths(tool_name, args):
 
 # Single authoritative names (SCR-052 R1 alias convergence; SCR-055 R6: the
 # classify chain moved to classify.py and terminal interception to
-# the terminal_guard module -- the defs above carry this module's public names).
+# terminal.py -- the defs above carry this module's public names).
 
 __all__ = [
     "guard",

@@ -1,13 +1,13 @@
 """Unified verdict chain: T0-T4 classify_target + the shared target evaluation wrapper + block-message assembly (spec 5.3, spec 5.18; split out of the guard module at SCR-055 R6).
 
-THE single classification definition: the guard front layer, the audit diff and the session-dir gates all consume classify_target through set_classifier injection (ADR-0007) -- scope-first semantics (T0 out-of-root is ALWAYS external-write), then T1 runtime allowlist > T2 config allowlist (dirs subtree / root-level file, dual rule_keys) > T3 valid Session Directory > T4 block (the root itself included); no approve tier. evaluate_target is the shared resolve -> normalize -> classify -> session-dir gate -> emit -> block wrapper driving both the guard write loop and the terminal block-target loop (the session-dir-limit enforcement point is mounted inside it). Pure decision layer: paths/allowlist/runtime_allowlist/events/messages/session_dirs/state only (SCR-055 R7: the is_device_path predicate is a function-local import from terminal_guard -- cycle break, terminal_guard statically consumes this chain); no host imports, no guard-module imports (ADR-0007); extracted from dir_whip.py (task 31.13).
+THE single classification definition: the guard front layer, the audit diff and the session-dir gates all consume classify_target through set_classifier injection (ADR-0007) -- scope-first semantics (T0 out-of-root is ALWAYS external-write), then T1 runtime allowlist > T2 config allowlist (dirs subtree / root-level file, dual rule_keys) > T3 valid Session Directory > T4 block (the root itself included); no approve tier. evaluate_target is the shared resolve -> normalize -> classify -> session-dir gate -> emit -> block wrapper driving both the guard write loop and the terminal block-target loop (the session-dir-limit enforcement point is mounted inside it). Pure decision layer: paths/allowlist/runtime_allowlist/events/messages/session_dirs/state only (SCR-056 R1b: the is_device_path predicate is a function-local import from terminal -- cycle break, terminal statically consumes this chain); no host imports, no guard-module imports (ADR-0007); extracted from dir_whip.py (task 31.13).
 
 Layer: core
 Refs: spec 5.3, spec 5.10, spec 5.18, spec v2.6 B2, spec v2.7 R9, spec v2.11, SCR-041 R1, SCR-043 R1, SCR-044 R2, SCR-044 R5, SCR-050 v3 R6.1, SCR-052, SCR-055 R6, SCR-055 R7, ADR-0006, ADR-0007, ADR-0014
 Key exports:
   - classify_target -- unified T0-T4 verdict chain (single definition; front + audit layers share).
   - evaluate_target -- shared target evaluation: resolve -> normalize -> classify -> session-dir gate -> emit -> block.
-  - session_cwd -- session CWD accessor for relative-target resolution (terminal_guard consumer).
+  - session_cwd -- session CWD accessor for relative-target resolution (terminal consumer).
   - parsed_allowlist_raw -- fail-closed raw-allowlist parser (guard consumer).
 """
 
@@ -64,7 +64,7 @@ logger = logging.getLogger("dir-whip")
 def session_cwd(task_id):
     """Session CWD for relative-target resolution (guarded; None when
     unavailable). Tests inject a fake via state.session.session_cwd_fn.
-    SCR-055 R6 public (cross-module consumer: terminal_guard._terminal_base).
+    SCR-055 R6 public (cross-module consumer: terminal._terminal_base).
     """
     if callable(state.session.session_cwd_fn):
         try:
@@ -324,10 +324,10 @@ def evaluate_target(target, tool_name, working_dir_root, allowlist,
     if is_terminal:
         # 4.3 device paths are exempt BEFORE normalization: no
         # verdict/stats event, no drive-inherited path fabrication.
-        # SCR-055 R7: function-local import = documented cycle break
-        # (terminal_guard owns the predicate family and statically
+        # SCR-056 R1b: function-local import = documented cycle break
+        # (terminal owns the predicate family and statically
         # consumes this chain).
-        from .terminal_guard import is_device_path
+        from .terminal import is_device_path
         if is_device_path(target):
             return None
         abs_target = _resolve_terminal_target(

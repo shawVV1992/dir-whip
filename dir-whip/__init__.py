@@ -35,7 +35,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, audit_prompts, claims, classify, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents, terminal_guard
+from . import allowlist_writer, audit, audit_prompts, claims, classify, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, settle, state, stats, subagents, terminal
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
