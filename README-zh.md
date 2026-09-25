@@ -25,7 +25,7 @@
 ## 核心能力
 
 1. **教罚结合：** skill 教纪律、plugin 强制执行，默认工作区管理纪律有效稳定，文件管理不再混乱。
-2. **双层检测+兜底工具：** 在插件中，前置层在落地前拦截白名单与会话目录之外的写入（含根级文件与非会话子目录）并附修正指引；审计层对放行的终端命令做快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
+2. **双层检测+兜底工具：** 在插件中，前置层在落地前拦截白名单与会话目录之外的写入（含根级文件与非会话子目录）并附修正指引；审计层对放行的写类调用（`terminal` / `execute_code`）做快照 diff 事后兜底——并配同轮自愈（`dir_whip_settle`）与 dir-whip 续推兜底。
 3. **可观测：** 7 类 `dir-whip:*` 事件发总线；每次判定落一行 stats.jsonl（5 MB 滚动），可观测溯源。
 4. **定时治理：** 针对 cron 任务采用纯审计 + 两态唤醒（`{"wakeAgent": bool, "violations": N}`），全插件零自动删除；静默 tick 不打断执行，有违规才唤醒 agent 清偿。
 5. **跨会话复用检索：** `search_workspace.py` 按元数据定位历史会话目录中的
@@ -138,12 +138,14 @@ hermes plugins disable dir-whip
 
 ![dir-whip 运行时链路——写类调用的一生，从拦截到清偿](assert/image/runtime-flow.svg)
 
-`write_file` / `patch` 按目标路径判定；终端命令在 shell 层做词法分层判定。
+`write_file` / `patch` 按目标路径判定；终端命令在 shell 层做词法分层判定；
+`execute_code` 的写入目标不可静态解析——不参与事前目标判定，仅由审计层
+快照配对与闩锁覆盖。
 两层各司其职——前置层管落地前，审计层管落地后：
 
 **前置层（拦截，宽容快速）** —— 设计原则是**允许误放、绝不误拦**：
 
-- 拦截对象仅三种写类工具：`write_file` / `patch` / `terminal`；其余工具与只读命令不进入判定。
+- 写类工具集四种：`write_file` / `patch` / `terminal` / `execute_code`；前三者按目标判定，`execute_code` 目标不可静态解析——不做事前目标拦截，仅由审计层快照配对覆盖；其余工具与只读命令不进入判定。
 - **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地 / 可解析的 `mkdir`、`curl -o`、`wget -O` 目标——rule_key `terminal-mkdir` / `terminal-download`）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
 - **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头的重定向目标排除（仅限重定向槽位——`touch` / `mkdir` / `cp`·`mv` 字面参数形状不过滤）。
 - **统一分类链**（与审计层共用，判定永不矛盾），定稿 T0-T4、范围置首：
@@ -160,7 +162,7 @@ hermes plugins disable dir-whip
 
 **审计层（兜底，四级阶梯）** —— 只观察放行的终端命令实际落盘了什么：
 
-- **快照 diff**：仅为放行的终端命令拍根目录前后快照；只判根级**文件**条目，目录变动永不判违规，删除仅记账。
+- **快照 diff**：仅为放行的写类调用（`terminal` / `execute_code`）拍根目录前后快照；只判根级**文件**条目，目录变动永不判违规，删除仅记账。
 - **待清偿违规集合**：会话作用域，子代理违规挂到父集合——闩锁由父代清偿。
 - 四级阶梯（定义见上表）在审计层的表现：
 
@@ -193,6 +195,9 @@ hermes plugins disable dir-whip
   再搬迁条目（`mv "<root>/<entry>" "<session_dir>/Outputs/"`）。
 - **fail-open**：扫描出错一律静默跳过；stats 记 `orphan-notice` 规则键，
   不发总线事件（7 事件发射面不变）。
+- **送达三态**：注入成功记 `delivered`；通道不可用按
+  `suppressed:no-ctx` / `no-method` / `falsy-return` 落统计行（绝不静默），
+  并在首个合格工具结果尾部兜底送达（`orphan-notice-fallback`）。
 
 ## 命令
 
@@ -370,7 +375,7 @@ python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task
 滚动为 `stats.jsonl.1`）。记录范围：拦截判定、运行时豁免、审批观察，以及
 写入审计的违规与闸门拦截（`write-audit-violation` /
 `write-audit-gate-block`），按子代理切分；observe-only 行
-（`session-reminder`、`orphan-notice`、`pre-verify-nudge`、
+（`session-reminder`、`orphan-notice` / `-fallback`、`pre-verify-nudge`、
 `write-audit-settle` / `-rejected`、`subagent-start` / `subagent-stop`、
 `pre-command:*`）一并记录。每行字段分两组：
 
@@ -383,7 +388,7 @@ python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task
 | `ts` | 事件时间戳 | ISO 格式，判定发生时刻 |
 | `outcome` | 判定结果 | `block` / `allow` / `external-write` / `fail-open` 等 |
 | `reason` | 结果原因 | 短语说明，如根外写入记 `target outside working_dir_root` |
-| `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `allow-path` 等 |
+| `tool` | 触发工具 | `write_file` / `patch` / `terminal` / `execute_code` / `allow-path` 等 |
 | `rule_key` | 判定规则键 | 如 `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | 目标路径 | 一律相对 Working Directory；外部路径哈希前缀或省略 |
 
@@ -404,17 +409,17 @@ python <plugin>/skills/workspace-organization/scripts/search_workspace.py --task
 
 ## 安全与风险
 
-dir-whip 是**行为监控与软性管理**，**不是安全边界**：它经由宿主工具层观察并纠正文件行为，无法防御绕开工具层的通道（如代码执行内核内的文件 I/O）。
+dir-whip 是**行为监控与软性管理**，**不是安全边界**：它经由宿主工具层与审计层观察并纠正文件行为；代码执行内核的根级落盘已纳入审计快照配对，但审计范围仅限根顶层条目，工具层之外的通道仍不在防御面内。
 
 **管。**
 
-1. **写类工具拦截**——`write_file` / `patch` / `terminal` 中，工作目录内白名单与会话目录之外的写入在落地前拦截（含根级文件与非会话子目录，`root-file` / `non-session-dir`），block 消息自带修正指引。
-2. **根级写入事后审计与清偿闸门**——放行的终端命令经快照 diff 捕获漏网违规，走 L1–L4 阶梯直至清偿（见执行策略）。
+1. **写类工具拦截**——`write_file` / `patch` / `terminal` 的可解析写入目标在工作目录内白名单与会话目录之外时落地前拦截（含根级文件与非会话子目录，`root-file` / `non-session-dir`），block 消息自带修正指引；`execute_code` 目标不可静态解析，不进入事前拦截面（由审计层快照配对覆盖）。
+2. **根级写入事后审计与清偿闸门**——放行的写类调用（`terminal` / `execute_code`）经快照 diff 捕获漏网违规，走 L1–L4 阶梯直至清偿（见执行策略）。
 3. **会话目录结构合规**——`audit_workspace.py` 检查 Outputs/ 与 .tmp/ 结构合规，过期 `.tmp` 条目以只读提案列出（cron 定时治理的入口——零自动删除）。
 
 **不管。**
 
-1. **任意代码执行**——`execute_code` 等执行内核内的文件 I/O 完全绕过守卫、审计与闸门，是最大的盲区。
+1. **任意代码执行**——`execute_code` 等执行内核可执行任意 I/O；其根级落盘现由审计层快照配对覆盖（L1–L4 阶梯适用），但内核内的非落盘行为与深层目录内容不在观察范围。
 2. **不确定写入意图**——解释器脚本、嵌套 shell、变量路径、heredoc：放行 + 记日志，可能漏网（审计层兜底）。
 3. **白名单与豁免范围**——`allowlist` files / dirs、运行时白名单、会话目录内的写入：一律放行。
 4. **工作目录之外的一切**——放行 + 记日志。

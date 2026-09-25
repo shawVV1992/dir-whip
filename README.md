@@ -34,7 +34,8 @@ reminder is skipped — in-Working-Directory interception still applies.
 2. **Dual-layer detection + backstop tools.** The front layer blocks,
    before they land, writes outside the allowlist and Session Directories
    (root-level files and non-session subdirectories alike) with a fix-it
-   message; the audit layer snapshot-diffs allowed terminal commands to
+   message; the audit layer snapshot-diffs allowed write-class calls
+   (`terminal` / `execute_code`) to
    catch what slips past — with same-turn self-heal (`dir_whip_settle`)
    and a dir-whip continuation nudge.
 3. **Observable.** 7 `dir-whip:*` bus events, plus one stats.jsonl line
@@ -165,14 +166,19 @@ The runtime flow is built on the four-level audit ladder of spec §5.18:
 ![dir-whip runtime flow — the life of a write-class call, from interception to settlement](assert/image/runtime-flow-en.svg)
 
 `write_file` / `patch` are judged by target path; terminal commands are
-lexically tiered at the shell level. Two layers, two responsibilities — the
+lexically tiered at the shell level; `execute_code` targets are statically
+unparseable — never judged pre-landing, covered by the audit-layer snapshot
+pairing and the latch. Two layers, two responsibilities — the
 front layer owns pre-landing, the audit layer owns post-landing:
 
 **Front layer (interception, permissive and fast)** — designed on **allow
 false passes, never false blocks**:
 
-- Only three write-class tools are judged: `write_file` / `patch` /
-  `terminal`; other tools and read-only commands never enter the chain.
+- The write-class tool set has four tools: `write_file` / `patch` /
+  `terminal` / `execute_code`. The first three are judged by target;
+  `execute_code` targets are statically unparseable — never pre-blocked on
+  a target, covered by the audit-layer snapshot pairing. Other tools and
+  read-only commands never enter the chain.
 - **Three-tier verdict**: deterministic targets (tool paths, terminal
   redirects / `touch` / `cp`·`mv` destinations / resolvable `mkdir`,
   `curl -o` and `wget -O` targets — rule_keys `terminal-mkdir` /
@@ -203,7 +209,8 @@ user `dir_whip_allow_path` registrations stay exempt.
 **Audit layer (backstop, four-level ladder)** — observes only what allowed
 terminal commands actually landed:
 
-- **Snapshot diff**: pre/post root snapshots for allowed terminal commands
+- **Snapshot diff**: pre/post root snapshots for allowed write-class calls
+  (`terminal` / `execute_code`)
   only; root-level **file** entries only — directory changes never violate,
   deletions are record-only.
 - **Pending set**: session-scoped; subagent violations post to the parent's
@@ -252,6 +259,10 @@ Session Directory by a previous conversation:
 - **Fail-open**: any scan error is silently skipped; recorded in stats as
   the `orphan-notice` rule_key, with no bus event (the 7-event emit
   surface is unchanged).
+- **Three-stated delivery**: an accepted injection records `delivered`;
+  an unavailable channel records `suppressed:no-ctx` / `no-method` /
+  `falsy-return` (never silent) and re-delivers the notice on the first
+  eligible tool result (`orphan-notice-fallback`).
 
 ## Commands
 
@@ -454,7 +465,8 @@ Every verdict is appended as one JSON line to
 Recorded: interception verdicts, runtime exemptions, approval observations,
 and the write audit's violations and gate blocks
 (`write-audit-violation` / `write-audit-gate-block`), split by subagent;
-observe-only rows (`session-reminder`, `orphan-notice`, `pre-verify-nudge`,
+observe-only rows (`session-reminder`, `orphan-notice` / `-fallback`,
+`pre-verify-nudge`,
 `write-audit-settle` / `-rejected`, `subagent-start` / `subagent-stop`,
 `pre-command:*`) are recorded alongside.
 Each line carries two groups of fields:
@@ -468,7 +480,7 @@ Each line carries two groups of fields:
 | `ts` | Event timestamp | ISO format, moment of the verdict |
 | `outcome` | Verdict outcome | `block` / `allow` / `external-write` / `fail-open`, etc. |
 | `reason` | Outcome reason | Short phrase, e.g. `target outside working_dir_root` for out-of-root writes |
-| `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `allow-path`, etc. |
+| `tool` | Triggering tool | `write_file` / `patch` / `terminal` / `execute_code` / `allow-path`, etc. |
 | `rule_key` | Verdict rule key | e.g. `root-file` / `non-session-dir` / `session-dir` / `runtime-allowlist` / `external-write` / `terminal-mkdir` / `terminal-download` / `session-dir-limit` / `orphan-notice` / `write-audit-violation` / `write-audit-gate-block` / `allow-path-external-rejected` |
 | `target` | Target path | Always relative to the Working Directory; external paths are hashed or omitted |
 
@@ -494,18 +506,23 @@ Observability surfaces:
 
 dir-whip is **behavioral monitoring and soft management**, **not a security
 boundary**: it observes and corrects file behavior through the host tool
-layer and cannot defend channels that bypass that layer (such as file I/O
-inside a code-execution kernel).
+layer and the audit layer; root-level landings from a code-execution kernel
+are covered by the audit snapshot pairing, but the audit scope is root
+top-level entries only, and channels outside the tool layer remain outside
+the defense surface.
 
 **Enforced.**
 
-1. **Write-class interception** — in `write_file` / `patch` / `terminal`,
-   writes inside the Working Directory but outside the allowlist and
-   Session Directories are blocked before they land (root-level files and
+1. **Write-class interception** — for `write_file` / `patch` / `terminal`,
+   resolvable writes inside the Working Directory but outside the allowlist
+   and Session Directories are blocked before they land (root-level files and
    non-session subdirectories alike; `root-file` / `non-session-dir`), with
-   fix-it guidance in the message.
-2. **Post-hoc root-file audit + settlement gate** — allowed terminal
-   commands are re-checked via snapshot diff; slipped-through violations
+   fix-it guidance in the message; `execute_code` targets are statically
+   unparseable — never pre-blocked, covered by the audit-layer snapshot
+   pairing.
+2. **Post-hoc root-file audit + settlement gate** — allowed write-class
+   calls (`terminal` / `execute_code`) are re-checked via snapshot diff;
+   slipped-through violations
    run the L1–L4 ladder until settled (see Enforcement).
 3. **Session Directory structure compliance** — `audit_workspace.py`
    checks the Outputs/ and .tmp/ layout and lists expired `.tmp` entries
@@ -513,9 +530,11 @@ inside a code-execution kernel).
 
 **Not enforced.**
 
-1. **Arbitrary code execution** — file I/O inside an execution kernel
-   (`execute_code` and similar) bypasses the guard, the audit, and the gate
-   entirely; this is the largest blind spot.
+1. **Arbitrary code execution** — an execution kernel (`execute_code` and
+   similar) can perform arbitrary I/O; its root-level landings are now
+   covered by the audit snapshot pairing (the L1–L4 ladder applies), but
+   non-landing behavior inside the kernel and deep-directory content stay
+   outside the observed scope.
 2. **Uncertain write intent** — interpreter scripts, nested shells, variable
    paths, heredoc: allowed + logged; may slip through (the audit is the
    backstop).
