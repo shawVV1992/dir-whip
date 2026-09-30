@@ -569,7 +569,7 @@ def settle_paths(session_id, paths):
             return {"error": "working_dir_root unresolved; cannot settle"}
         pending = pending_violation_snapshot(session_id)
         keys, error = _resolve_settle_keys(paths, working_dir_root, pending)
-        if error:
+        if error or keys is None:
             return error
         # The quarantine lives under the dir-whip home (<profile
         # home>/dir-whip/audit-quarantine/<ts>/), layout-aware via

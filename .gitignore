@@ -27,3 +27,6 @@ tests/
 
 # ZCode local workspace
 .zcode/
+
+# Local lint tooling (not published)
+ruff.toml

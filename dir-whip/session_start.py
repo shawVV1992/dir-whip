@@ -277,7 +277,10 @@ def _project_skip_id(cwd):
     Evaluated HERE at session start (the active pointer varies across
     sessions); any probe failure fails open to the normal flow.
     """
-    project_fn = getattr(state.session, "project_active_fn", None)
+    # Pre-R7 state shapes may lack the slot entirely (fail-open).
+    if not hasattr(state.session, "project_active_fn"):
+        return None
+    project_fn = state.session.project_active_fn
     if not callable(project_fn):
         return None
     try:

@@ -1,0 +1,8 @@
+{
+  "typeCheckingMode": "standard",
+  "ignore": [
+    "tests",
+    "internal",
+    "dir-whip/skills/workspace-organization/scripts"
+  ]
+}

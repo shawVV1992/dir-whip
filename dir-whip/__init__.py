@@ -22,18 +22,18 @@ import os
 from pathlib import Path
 
 try:
-    from hermes_cli.tools.terminal_tool import get_session_cwd as _get_session_cwd
+    from hermes_cli.tools.terminal_tool import get_session_cwd as _get_session_cwd  # pyright: ignore[reportMissingImports]
 except ImportError:
     _get_session_cwd = None
 
 try:
-    from agent.runtime_cwd import resolve_agent_cwd as _resolve_agent_cwd
+    from agent.runtime_cwd import resolve_agent_cwd as _resolve_agent_cwd  # pyright: ignore[reportMissingImports]
 except ImportError:
     _resolve_agent_cwd = None
 
 # Project-mode exemption: projects_db imported ONLY here.
 try:
-    from hermes_cli.projects_db import (
+    from hermes_cli.projects_db import (  # pyright: ignore[reportMissingImports]
         connect_closing as _projects_connect_closing,
         get_active_id as _projects_get_active_id,
     )
@@ -41,7 +41,7 @@ except ImportError:
     _projects_connect_closing = None
     _projects_get_active_id = None
 
-from . import allowlist_writer, audit, audit_prompts, claims, classify, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents, terminal
+from . import audit, audit_prompts, claims, classify, config, events, guard, logsetup, report, runtime_allowlist, session_dirs, session_start, state, stats, subagents
 from .events import (
     RULE_KEY_APPROVAL_DENIED,
     RULE_KEY_APPROVAL_GRANTED,
@@ -80,12 +80,12 @@ def _observe_unseen_tool(tool_name, session_id):
 # Runtime allowlist surface: see runtime_allowlist.py.
 from .runtime_allowlist import (
     ALLOW_PATH_TOOL_SCHEMA,
-    ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,
-    ALLOW_PATH_ROOT_REJECTED_MESSAGE,
-    ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE,
-    ALLOW_PATH_LATCH_CONTEXT_LINE,
+    ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,  # noqa: F401
+    ALLOW_PATH_ROOT_REJECTED_MESSAGE,  # noqa: F401
+    ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE,  # noqa: F401
+    ALLOW_PATH_LATCH_CONTEXT_LINE,  # noqa: F401
 )
-from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
+from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE  # noqa: F401
 
 # Bundled skill description (spec 3.1; converged sentence).
 SKILL_DESCRIPTION = (
@@ -222,8 +222,9 @@ def _register_tool_command_skill(ctx):
     # Bundled skill (opt-in, qualified name); the once-per-session
     # discipline block replaced the always-on prompt.
     try:
-        skill_md = Path(state.session.skill_md_path)
-        if skill_md.is_file() and hasattr(ctx, "register_skill"):
+        skill_md_path = state.session.skill_md_path
+        skill_md = Path(skill_md_path) if skill_md_path else None
+        if skill_md is not None and skill_md.is_file() and hasattr(ctx, "register_skill"):
             ctx.register_skill(
                 "workspace-organization", skill_md, description=SKILL_DESCRIPTION
             )

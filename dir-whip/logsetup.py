@@ -23,7 +23,7 @@ from .paths import dirwhip_home
 
 # Tier 1: cross-process-safe rotation (host venv); absence -> stdlib tier.
 try:
-    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    from concurrent_log_handler import ConcurrentRotatingFileHandler  # pyright: ignore[reportMissingImports]
 except ImportError:
     ConcurrentRotatingFileHandler = None
 

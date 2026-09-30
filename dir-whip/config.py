@@ -29,7 +29,7 @@ logger = logging.getLogger("dir-whip")
 # plugins.plugin_utils is a host package (absent in the test venv);
 # guarded so config.py never crashes -- fail-open to the local cache.
 try:
-    from plugins.plugin_utils import lazy_singleton
+    from plugins.plugin_utils import lazy_singleton  # pyright: ignore[reportMissingImports]
 except ImportError:
     lazy_singleton = None
 
@@ -40,9 +40,9 @@ from .allowlist import parse_allowlist_raw
 # Message templates live in the core leaf messages.py; same-name aliases
 # keep config.* / test import paths unchanged (MS-2 pinned).
 from .messages import (
-    ALLOW_PATH_EMPTY_REJECTED_MESSAGE,
-    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
-    RUNTIME_ALLOWLIST_ADDED_TEMPLATE,
+    ALLOW_PATH_EMPTY_REJECTED_MESSAGE,  # noqa: F401
+    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,  # noqa: F401
+    RUNTIME_ALLOWLIST_ADDED_TEMPLATE,  # noqa: F401
 )
 
 from .paths import config_file_path, get_hermes_home
@@ -91,7 +91,7 @@ def load_guard_config(config_path=None):
         config_path = config_file_path()
     config_path = Path(config_path)
 
-    result = {
+    result: dict = {
         "allowlist": [],
     }
 
@@ -292,6 +292,9 @@ def get_cached_config(ctx, config_path=None):
                     _cached_result = _resolve_config(ctx, config_path)
                     _cache_initialized = True
         result = _cached_result
+    if result is None:
+        # Defensive: unreachable while the cache/accessor invariant holds.
+        result = _resolve_config(ctx, config_path)
     if not state.session.working_dir_root_initialized:
         # Initial value of the session working_dir_root = the register-time
         # resolution.

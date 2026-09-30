@@ -19,6 +19,7 @@ Key exports:
   - reset_all -- test-cleanup entry: resets all four containers + the persistent claims file.
 """
 import threading
+from collections.abc import Callable
 
 
 class _SessionState:
@@ -31,18 +32,18 @@ class _SessionState:
     def reset(self):
         self.registered_ctx = None       # single registration-context slot
         self.register_config_path = None
-        self.working_dir_root = None     # None = unresolved/fail-open (never keeps a stale value)
+        self.working_dir_root: str | None = None     # None = unresolved/fail-open (never keeps a stale value)
         self.working_dir_root_initialized = False
         self.session_profile = None
         self.fail_open_warned = False
         self.emit_enabled = False
         self.session_cwd_fn = None       # host API injection slot (ADR-0007; filled at register)
         self.agent_cwd_fn = None         # host API injection slot (ADR-0007; conditional agent-CWD injection)
-        self.project_active_fn = None    # host API injection slot (ADR-0007; project-exemption probe, called at on_start)
-        self.reminder_status = None      # injected|skipped-outside|skipped-child|unavailable
+        self.project_active_fn: Callable[[], tuple[str, list[str]] | None] | None = None    # host API injection slot (ADR-0007; project-exemption probe, called at on_start)
+        self.reminder_status: str | None = None      # injected|skipped-outside|skipped-child|unavailable
         self.reminder_pending_fallback = False  # unavailable reminder -> one-shot transform_tool_result fallback armed
         self.orphan_pending_fallback = False    # suppressed orphan notice -> same pending-notes fallback armed
-        self.orphan_notice_text = None   # cached orphan notice text for the fallback tail
+        self.orphan_notice_text: str | None = None   # cached orphan notice text for the fallback tail
         self.log_handler_installed = False  # dir-whip.log attach idempotence flag
         self.confirmation_issued = set()  # allow_path two-step confirmation issued set (guarded by self.lock)
         self.unseen_tools = set()        # unseen:<tool> probe throttle, (session_id, tool_name) keys (self.lock)
@@ -53,10 +54,10 @@ class _SessionState:
         self.top_session = None          # latest top-level session (child-inheritance fallback)
         # Precomputed plugin paths/version: filled once at register();
         # None until then (direct-call fallbacks keep __file__ derivation).
-        self.plugin_dir = None
-        self.script_resolver_path = None
-        self.skill_md_path = None
-        self.plugin_version = None
+        self.plugin_dir: str | None = None
+        self.script_resolver_path: str | None = None
+        self.skill_md_path: str | None = None
+        self.plugin_version: str | None = None
 
 
 class _AuditState:

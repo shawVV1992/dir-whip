@@ -532,7 +532,7 @@ def _handle_allow(rest):
         if not working_dir_root:
             return "[dir-whip] Working Directory unresolved: cannot list candidates"
         cands, err = _list_candidates()
-        if err:
+        if err or cands is None:
             return err
         fc, dc = cands
         return render_two_sections(
@@ -546,7 +546,7 @@ def _handle_allow(rest):
     if not tokens:
         return "[dir-whip] Invalid argument: empty filename"
     cands, err = _list_candidates()
-    if err:
+    if err or cands is None:
         return err
     fc, dc = cands
     numbered = list(fc) + list(dc)
