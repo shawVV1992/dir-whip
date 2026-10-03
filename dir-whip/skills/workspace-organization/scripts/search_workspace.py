@@ -106,22 +106,15 @@ def _is_reparse_point(st):
 
 
 def _dir_exempt(name, dirs_entries):
-    """True when a root entry's first segment matches an allowlist dirs entry.
+    """True when a root entry's name is exempt by an allowlist dirs entry.
 
-    v2.7 R9 first-segment subtree exemption; casefolded on Windows only
-    (POSIX compares case-sensitively, spec 4.6 v2.22 — aligned with
-    4.2 audit_workspace.py and the plugin's allowlist matching); the
-    entry list comes from the resolver's allowlist loading surface.
+    v2.26 SCR-061 guard-homologous semantics: the name must EQUAL an
+    entry (a multi-level entry does not exempt its parent; casefolded on
+    Windows only, spec 4.6 — aligned with 4.2 audit_workspace.py and the
+    plugin guard matching); the entry list comes from the resolver's
+    allowlist loading surface.
     """
-    if not dirs_entries:
-        return False
-    name_cmp = name.casefold() if os.name == "nt" else name
-    for entry in dirs_entries:
-        first = str(entry).replace("\\", "/").split("/")[0]
-        first_cmp = first.casefold() if os.name == "nt" else first
-        if first_cmp and name_cmp == first_cmp:
-            return True
-    return False
+    return workspace_resolver._ws_is_allowlist_dir_name(name, dirs_entries)
 
 
 def _task_matches(session_name, task):

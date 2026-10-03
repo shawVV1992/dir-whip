@@ -4,7 +4,7 @@
 READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only (minimal line-based config parsing, mirroring the plugin's PyYAML-based parser); duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7 R9, SCR-039 R9; legacy v2.6 flat tagged lists ignored fail-closed).
 
 Layer: skill-subprocess
-Refs: spec 4.4, spec v2.6 B2, spec v2.7 R9, SCR-006, SCR-011, SCR-026, SCR-027, SCR-039 R9, SCR-042, ADR-0006
+Refs: spec 4.4, spec v2.6 B2, spec v2.7 R9, spec v2.26 SCR-061, SCR-006, SCR-011, SCR-026, SCR-027, SCR-039 R9, SCR-042, ADR-0006
 Key exports:
   - hermes_home -- Hermes home (HERMES_HOME override first; Windows LOCALAPPDATA/hermes, POSIX ~/.hermes).
   - normalize_path -- SCR-006 normalization for exact matching (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).
@@ -425,46 +425,36 @@ def _ws_is_allowlist_file(name, parsed):
         return base in files
 
 
-def _ws_is_allowlist_dir(path, working_dir_root, parsed):
-    """Parity duplicate of allowlist.is_allowlist_dir (v2.7 R9).
+def _ws_is_allowlist_dir_name(name, dirs_entries):
+    """Guard-homologous dirs matching for a ROOT-LEVEL entry name (v2.26 SCR-061).
 
-    True when ``path`` equals or is under ``<root>/<entry>`` for any dirs
-    entry (recursive subtree, forward-slash normalized, casefolded on
-    Windows). The root itself and anything outside it are never exempt.
+    The guard's dirs semantics ("a target equals or is under
+    <root>/<entry>") reduce to name EQUALITY in the root-level
+    single-segment domain: a single-segment name contains no "/", so the
+    "under" arm (`rel.startswith(entry + "/")`) can never hold and only
+    `rel == entry` remains. A multi-level entry such as ``projects/foo``
+    therefore does NOT exempt its parent ``projects``. Entries are
+    normalized (backslashes -> slashes, duplicate slashes collapsed,
+    trailing slash stripped); the comparison is casefolded on Windows
+    only (spec 4.6, v2.22 SCR-053 ruling). Non-string / empty names and
+    entries never match. The former path-level twin
+    ``_ws_is_allowlist_dir`` was retired with SCR-061 (it was never
+    wired; the script call sites only ever pass root-level names).
     """
-    if not isinstance(path, str) or not path.strip():
+    if not isinstance(name, str) or not name.strip():
         return False
-    if not working_dir_root:
+    name_norm = _ws_normalize_dir_rel(name)
+    if not name_norm or "/" in name_norm:
         return False
-
-    def _norm(p):
-        s = str(p).replace("\\", "/")
-        s = re.sub(r"/{2,}", "/", s)
-        if s != "/" and s.endswith("/"):
-            s = s.rstrip("/")
-        return s
-
-    t = _norm(path)
-    r = _norm(working_dir_root)
-    if not t or not r:
-        return False
-    cf = os.name == "nt"
-    t_cmp = t.casefold() if cf else t
-    r_cmp = r.casefold() if cf else r
-    r_cmp = r_cmp.rstrip("/")
-    if t_cmp == r_cmp:
-        return False
-    prefix = r_cmp + "/"
-    if not t_cmp.startswith(prefix):
-        return False
-    rel = t[len(r.rstrip("/")) + 1:]
-    rel_cmp = rel.casefold() if cf else rel
-    for d in (parsed or {}).get("dirs") or set():
-        if not isinstance(d, str):
+    name_cmp = name_norm.casefold() if os.name == "nt" else name_norm
+    for entry in dirs_entries or ():
+        if not isinstance(entry, str) or not entry.strip():
             continue
-        d_norm = _norm(d)
-        d_cmp = d_norm.casefold() if cf else d_norm
-        if rel_cmp == d_cmp or rel_cmp.startswith(d_cmp + "/"):
+        entry_norm = _ws_normalize_dir_rel(entry)
+        if not entry_norm:
+            continue
+        entry_cmp = entry_norm.casefold() if os.name == "nt" else entry_norm
+        if entry_cmp == name_cmp:
             return True
     return False
 

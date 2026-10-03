@@ -252,17 +252,36 @@ def check_root_files(root, allowed, violations):
 
 
 def _dir_exempt(name, dirs_entries):
-    """True when a root-level directory is covered by an allowlist dirs
-    entry (v2.7 R9: first path segment match, casefolded on Windows)."""
-    if not dirs_entries:
-        return False
-    cf = name.casefold() if os.name == "nt" else name
-    for d in dirs_entries:
-        first = str(d).replace("\\", "/").split("/")[0]
-        first_cmp = first.casefold() if os.name == "nt" else first
-        if cf == first_cmp:
-            return True
-    return False
+    """True when a root-level directory is exempt by the allowlist dirs
+    entries (v2.26 SCR-061: guard-homologous semantics -- the name must
+    EQUAL an entry; a multi-level entry does not exempt its parent)."""
+    return workspace_resolver._ws_is_allowlist_dir_name(name, dirs_entries)
+
+
+def _dir_suggestion(name, dirs_entries):
+    """Suggestion for a flagged root-level directory.
+
+    When a multi-level dirs entry sits BELOW the flagged directory, the
+    entry's own subtree is allowlisted but the parent shell is not --
+    name the entry (v2.26 SCR-061 A+). Otherwise the legacy rename
+    suggestion.
+    """
+    name_norm = str(name).replace("\\", "/").strip("/")
+    name_cmp = name_norm.casefold() if os.name == "nt" else name_norm
+    for entry in dirs_entries or ():
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        entry_norm = str(entry).replace("\\", "/").strip().rstrip("/")
+        if not entry_norm:
+            continue
+        entry_cmp = entry_norm.casefold() if os.name == "nt" else entry_norm
+        if entry_cmp.startswith(name_cmp + "/"):
+            return (
+                "Allowlisted subtree '%s' does not exempt its parent; "
+                "add this directory to the allowlist dirs entries or "
+                "rename it to a session directory." % entry_norm
+            )
+    return "Rename to YYYYMMDD_HHMMSS_TaskName or YYYYMMDD_HHMMSS."
 
 
 def check_root_outputs(root, violations):
@@ -283,16 +302,16 @@ def check_root_session_format(root, violations, dirs_entries=None):
         # SCR-043 R5: the .hermes root-dir whitelist is removed -- after
         # the quarantine relocation to the dir-whip home no .hermes/
         # directory should exist in the workspace; a leftover one is a
-        # non-session violation like any other (_dir_exempt is the
-        # allowlist dirs channel, untouched).
+        # non-session violation like any other (the dirs channel is the
+        # guard-homologous _dir_exempt, v2.26 SCR-061).
         if _dir_exempt(entry.name, dirs_entries):
-            continue  # allowlist dirs subtree (v2.7 R9)
+            continue  # allowlist dirs entry (guard-homologous, v2.26 SCR-061)
         if not is_session_name(entry.name):
             violations.append({
                 "check": 3,
                 "name": "Session directory format",
                 "path": to_fwd(entry.path),
-                "suggestion": "Rename to YYYYMMDD_HHMMSS_TaskName or YYYYMMDD_HHMMSS.",
+                "suggestion": _dir_suggestion(entry.name, dirs_entries),
             })
 
 
