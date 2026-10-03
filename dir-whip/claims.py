@@ -2,7 +2,8 @@
 
 The claims home: owner resolution, bind / mv-transfer / release / heal,
 slot determination and the CLR-1/CLR-2 lifecycle (restore at register,
-resume-keep at top-level session start, clear via state.reset_all).
+resume-keep at top-level session start, explicit clear via
+claims.clear_claims_store from the test-support isolation entry).
 Write-through mirrored to session-claims.json in the default dir-whip
 home (atomic tmp+replace, fail-open, 64-entry ts-LRU); creation gates
 live in session_dirs.py (direction: session_dirs -> claims only).
@@ -10,7 +11,7 @@ live in session_dirs.py (direction: session_dirs -> claims only).
 Layer: core
 Refs: spec 5.19, SCR-044, SCR-048
 Key exports:
-  - load_claims / clear_claims_store -- restore the store at register() / CLR-2 delete (state.reset_all hook).
+  - load_claims / clear_claims_store -- restore the store at register() / explicit CLR-2 delete (test-support isolation entry).
   - claim_of / claim_of_owner -- owner-resolved bound dir name (public read) / raw owner-level read.
   - owner_of / bind / rebind / is_slot_occupied / heal_missing_claim -- owner resolution + claim-slot operations (gate consumers in session_dirs.py).
   - same_name / is_compliant -- BND-7 claim-name comparison + compliant session-dir name check (shared with session_dirs.py).
@@ -181,9 +182,10 @@ def load_claims():
 def clear_claims_store():
     """Delete the persistent claims store (spec 5.19).
 
-    Called by state.reset_all through a function-local import (a
-    module-level state -> claims edge would be a cycle). Fail-open:
-    never raises (a missing file is the normal case).
+    Called by the test-support isolation entry (tests/support.py) so each
+    test starts with no persisted claims; state.reset_all no longer
+    touches the file (SCR-061 R3). Fail-open: never raises (a missing
+    file is the normal case).
     """
     try:
         _claims_store_path().unlink()

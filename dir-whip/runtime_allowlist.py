@@ -4,9 +4,10 @@ Two halves of one theme: the entry-gating chain (subagent rejection ->
 root rejection -> outside-root rejection -> two-step user confirmation)
 and the process-lifetime exemption state it feeds (add / segment-
 boundary check / snapshot / clear + narrow config-cache refresh). Core
-discipline: no host imports; guard is imported function-locally only
-(cycle break). The assembly layer keeps the _allow_path_handler thin
-fail-open adapter (tests call it directly).
+discipline: no host imports; the runtime allowlist set + lock live in
+state.session (SCR-061 R3), and the resolved root is read through
+config.resolved_config. The assembly layer keeps the _allow_path_handler
+thin fail-open adapter (tests call it directly).
 
 Layer: core
 Refs: spec 5.7, spec 5.11, SCR-043
@@ -21,7 +22,6 @@ Key exports:
 """
 
 import logging
-import threading
 
 from . import config, state, subagents
 from .audit import pending_violation_paths
@@ -60,9 +60,9 @@ logger = logging.getLogger("dir-whip")
 
 # ---------------------------------------------------------------- Runtime allowlist state
 
-
-_runtime_allowlist = set()
-_runtime_allowlist_lock = threading.Lock()
+# The process-lifetime exemption set + its lock live in state.session
+# (SCR-061 R3): they survive reset_all and are cleared explicitly by
+# runtime_allowlist_clear (session start / register).
 
 
 def _normalize_allowlist_path(path):
@@ -91,8 +91,8 @@ def runtime_allowlist_add(path, working_dir_root=None):
         normalize_target(normalized, working_dir_root), working_dir_root
     ):
         return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
-    with _runtime_allowlist_lock:
-        _runtime_allowlist.add(normalized)
+    with state.session.runtime_allowlist_lock:
+        state.session.runtime_allowlist.add(normalized)
     logger.debug("dir-whip: runtime allowlist added: %s", normalized)
     return RUNTIME_ALLOWLIST_ADDED_TEMPLATE % normalized
 
@@ -108,17 +108,17 @@ def is_runtime_allowlisted(path):
     _normalize_allowlist_path lexical domain are kept.
     """
     normalized = _normalize_allowlist_path(path).casefold()
-    with _runtime_allowlist_lock:
+    with state.session.runtime_allowlist_lock:
         return any(
             normalized == ec or normalized.startswith(ec.rstrip("/") + "/")
-            for ec in (e.casefold() for e in _runtime_allowlist)
+            for ec in (e.casefold() for e in state.session.runtime_allowlist)
         )
 
 
 def runtime_allowlist_snapshot():
     """Return a copy of the runtime allowlist (debug/testing)."""
-    with _runtime_allowlist_lock:
-        return set(_runtime_allowlist)
+    with state.session.runtime_allowlist_lock:
+        return set(state.session.runtime_allowlist)
 
 
 def runtime_allowlist_clear():
@@ -126,11 +126,12 @@ def runtime_allowlist_clear():
 
     The dir_whip_allow_path tool grants a session-scoped exemption
     ("exempt for this session"); the guard must not keep allowing a path
-    across sessions in the same process. on_session_start calls this so
-    each new session starts without leftover allowlist entries.
+    across sessions in the same process. on_session_start and register()
+    call this so each new session starts without leftover allowlist
+    entries.
     """
-    with _runtime_allowlist_lock:
-        _runtime_allowlist.clear()
+    with state.session.runtime_allowlist_lock:
+        state.session.runtime_allowlist.clear()
 
 
 def dir_whip_allow_path(args, working_dir_root=None, **kwargs):
@@ -155,8 +156,8 @@ def _refresh_allowlist_cache():
 
     Invalidates the cache so the next get_cached_config / classify_target
     sees the updated file. Delegates to config.invalidate_config_cache;
-    config.reset_cache clears this module's state via a function-local
-    import (the cycle-break idiom on that side).
+    config no longer reaches this module's state (SCR-061 R3: the runtime
+    allowlist lives in state.session and reset_cache does not clear it).
     """
     return config.invalidate_config_cache()
 
@@ -244,11 +245,7 @@ def _entry_rejection(path, session_id):
     """Entry gating: subagent rejection -> Working Directory root
     rejection -> outside-root rejection. Returns the rejection message,
     or None when the path may proceed.
-
-    Function-local import = cycle break (guard consumes this module's
-    gating chain through the assembly layer).
     """
-    from .guard import resolved_config
     # Subagents are rejected before any other check (the sanction flows
     # top-down only; parent-guidance variant).
     if subagents._is_subagent_session(session_id):
@@ -260,7 +257,7 @@ def _entry_rejection(path, session_id):
     if not path:
         return None
     # The Working Directory root itself is never allowlisted.
-    working_dir_root, _ = resolved_config()
+    working_dir_root, _ = config.resolved_config()
     if working_dir_root and _is_working_dir_root(path, working_dir_root):
         emit(
             "block", "allow-path", RULE_KEY_ALLOW_PATH_ROOT_REJECTED, None,
@@ -321,8 +318,7 @@ def _confirmed_add(args, path, session_id, kwargs):
     bus event + the symmetric runtime-allowlist-add stats row; allow
     outcome -> no extra bus fanout.
     """
-    from .guard import resolved_config
-    working_dir_root, _ = resolved_config()
+    working_dir_root, _ = config.resolved_config()
     result = dir_whip_allow_path(
         args, working_dir_root=working_dir_root, session_id=session_id,
         **kwargs,

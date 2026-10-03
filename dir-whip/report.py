@@ -46,24 +46,6 @@ from .allowlist import parse_allowlist, validate_dir_entry
 
 logger = logging.getLogger("dir-whip")
 
-# The ctx captured by register_dir_whip_commands (module-internal: render()
-# and the allow|remove|list handlers resolve profiles through this slot;
-# register_dir_whip_commands is the only writer).
-_cmd_ctx = None
-
-
-def _get_cmd_ctx():
-    """The ctx captured by register_dir_whip_commands (None when
-    unregistered)."""
-    return _cmd_ctx
-
-
-def _set_cmd_ctx(ctx):
-    """Capture the /dir-whip command ctx (only writer:
-    register_dir_whip_commands)."""
-    global _cmd_ctx
-    _cmd_ctx = ctx
-
 
 def _resolution_source(ctx):
     """The resolution-chain step that produces working_dir_root (spec 5.5).
@@ -227,7 +209,7 @@ def render():
     Health problem. Never raises.
     """
     try:
-        ctx = _get_cmd_ctx()
+        ctx = state.session.registered_ctx
         cfg = load_guard_config()
         working_dir_root = effective_working_dir_root(ctx)
         lines = []
@@ -360,7 +342,7 @@ def _list_candidates():
     a dirs entry (a leftover .hermes/ is enumerated like any other
     non-session dir). Sorted for determinism.
     """
-    ctx = _get_cmd_ctx()
+    ctx = state.session.registered_ctx
     working_dir_root = effective_working_dir_root(ctx)
     if not working_dir_root:
         return None, "[dir-whip] Working Directory unresolved: cannot list candidates"
@@ -523,7 +505,7 @@ def _handle_allow(rest):
     if m:
         create = True
         rest = (rest[:m.start()] + " " + rest[m.end():]).strip()
-    ctx = _get_cmd_ctx()
+    ctx = state.session.registered_ctx
     working_dir_root = effective_working_dir_root(ctx)
     working_dir_root_fwd = (
         str(working_dir_root).replace("\\", "/") if working_dir_root else ""
@@ -587,7 +569,7 @@ def _handle_remove(rest):
         return render_two_sections(
             files, dirs, tail="Remove: /dir-whip remove <number|name>",
         )
-    ctx = _get_cmd_ctx()
+    ctx = state.session.registered_ctx
     working_dir_root = effective_working_dir_root(ctx)
     tokens = [t for t in re.split(r"[,\s]+", rest) if t]
     if not tokens:
@@ -697,7 +679,6 @@ def register_dir_whip_commands(ctx):
     allow_path is a TOOL and is NOT registered here (__init__.py registers
     it). args_hint surfaces in Discord/Telegram menus.
     """
-    _set_cmd_ctx(ctx)
     if not hasattr(ctx, "register_command"):
         return
     try:

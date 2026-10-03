@@ -27,6 +27,9 @@ from .allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist
 
 from .runtime_allowlist import is_runtime_allowlisted
 
+# Lexical leaf: device-path predicate (terminal/classify shared).
+from .command_lex import is_device_path
+
 from .events import (
     RULE_KEY_ALLOWED_FILE,
     RULE_KEY_EXTERNAL_WRITE,
@@ -307,9 +310,7 @@ def evaluate_target(target, tool_name, working_dir_root, allowlist,
     """
     if is_terminal:
         # Device paths are exempt BEFORE normalization: no verdict/stats
-        # event, no drive-inherited path fabrication. Function-local
-        # import = cycle break (terminal statically consumes this chain).
-        from .terminal import is_device_path
+        # event, no drive-inherited path fabrication.
         if is_device_path(target):
             return None
         abs_target = _resolve_terminal_target(

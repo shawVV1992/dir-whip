@@ -45,6 +45,9 @@ from .messages import (
 
 from .paths import is_absolute_any
 
+# Lexical leaf: session-script predicate + mv/cp source lookup.
+from .command_lex import is_session_dir_script, terminal_cp_mv_src
+
 logger = logging.getLogger("dir-whip")
 
 # The session-dir-limit rule_key is defined in events.py (single
@@ -166,9 +169,10 @@ def script_invocation_line(task, working_dir_root):
 
 # Classification chain, injected by the assembly layer (inject-don't-
 # import, mirroring audit.set_classifier -- classify statically imports
-# this module, so a static import back is a cycle). Unwired ->
-# scan_orphans fails open to None (register() wires before any hook).
-_classify_fn = None
+# this module, so a static import back is a cycle). The slot lives in the
+# owner container (state.session_dirs.classify_fn) and survives
+# reset_all. Unwired -> scan_orphans fails open to None (register() wires
+# before any hook).
 
 # The advisory notice lines live in messages.py. ADVISE-ONLY: plain TEXT,
 # never blocks, never deletes, at most once per top-level session start.
@@ -176,8 +180,7 @@ _classify_fn = None
 
 def set_classifier(fn):
     """Wire the classification chain (assembly-layer injection)."""
-    global _classify_fn
-    _classify_fn = fn
+    state.session_dirs.classify_fn = fn
 
 
 def _orphan_notice(working_dir_root, names):
@@ -215,7 +218,11 @@ def scan_orphans(working_dir_root, allowlist=None):
     """
     try:
         root = str(working_dir_root) if working_dir_root else None
-        if not root or not os.path.isdir(root) or _classify_fn is None:
+        if (
+            not root
+            or not os.path.isdir(root)
+            or state.session_dirs.classify_fn is None
+        ):
             return None
         try:
             names = sorted(os.listdir(root))
@@ -223,7 +230,7 @@ def scan_orphans(working_dir_root, allowlist=None):
             return None
         orphans = []
         for name in names:
-            verdict = _classify_fn(
+            verdict = state.session_dirs.classify_fn(
                 os.path.join(root, name), root, allowlist
             )
             if (
@@ -298,9 +305,6 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
                 bind(owner, first_seg, working_dir_root)
             return None
         if tokens and target is not None:
-            # Function-local import = cycle break (terminal statically
-            # consumes this gate surface).
-            from .terminal import terminal_cp_mv_src
             src = terminal_cp_mv_src(tokens, target)
             if src is not None and same_name(
                 _token_first_segment(src, working_dir_root), claim
@@ -332,9 +336,6 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
     uncertain-tier allow + log still fires downstream).
     """
     try:
-        # Function-local import = cycle break (terminal statically
-        # consumes this gate surface).
-        from .terminal import is_session_dir_script
         if not is_session_dir_script(tokens):
             return None
         owner = owner_of(session_id)

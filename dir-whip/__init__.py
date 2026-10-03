@@ -187,6 +187,9 @@ def _wire_register_state(ctx):
     except Exception:
         state.session.emit_enabled = False
     config.reset_cache()
+    # The runtime allowlist no longer rides reset_cache (SCR-061 R3):
+    # register/re-register clears it explicitly at the same point.
+    runtime_allowlist.runtime_allowlist_clear()
     config.get_cached_config(ctx)
 
 

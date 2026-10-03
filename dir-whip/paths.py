@@ -261,11 +261,9 @@ def config_file_path():
     """The profile-aware dir-whip-config.yaml location.
 
     Resolution chain: state.session.session_profile ->
-    registered_ctx.profile_name -> report command ctx.profile_name
-    (function-local import: the documented cycle-break idiom -- report
-    imports config which imports paths). Falls back to HERMES_HOME/
-    dir-whip/... when no profile is findable (default tests). Built on
-    dirwhip_home(); fail-open on any state read error.
+    registered_ctx.profile_name. Falls back to HERMES_HOME/dir-whip/...
+    when no profile is findable (default tests). Built on dirwhip_home();
+    fail-open on any state read error.
     """
     profile = None
     try:
@@ -276,14 +274,6 @@ def config_file_path():
     if not profile:
         try:
             ctx = getattr(state.session, "registered_ctx", None)
-            if ctx is not None and getattr(ctx, "profile_name", None):
-                profile = ctx.profile_name
-        except Exception:
-            pass
-    if not profile:
-        try:
-            from . import report as _report
-            ctx = _report._get_cmd_ctx()
             if ctx is not None and getattr(ctx, "profile_name", None):
                 profile = ctx.profile_name
         except Exception:

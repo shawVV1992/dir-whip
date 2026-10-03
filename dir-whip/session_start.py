@@ -2,9 +2,9 @@
 
 The decision chain lives here; the assembly hook adapters are thin
 fail-open dispatches (session_start itself never catches top-level).
-Depends on guard for reset_fail_open_flag / resolved_config and on
-runtime_allowlist for the session-scope reset (both one-way: guard never
-imports session_start at module level).
+Depends on guard for the fail-open latch reset, on config for the cached
+(root, allowlist) reader, and on runtime_allowlist for the session-scope
+reset (all one-way).
 
 Layer: core
 Refs: spec 5.4, spec 5.17, SCR-050
@@ -27,9 +27,8 @@ from .messages import DISCIPLINE_BLOCK_MESSAGE
 
 from .paths import within_working_dir
 
-# One-way session_start -> guard edge: only the fail-open latch reset and
-# the cached (root, allowlist) reader are consumed here; guard imports
-# nothing from this module.
+# One-way session_start -> guard edge: only the fail-open latch reset is
+# consumed here; guard imports nothing from this module.
 from . import guard
 
 logger = logging.getLogger("dir-whip")
@@ -356,7 +355,7 @@ def session_start(session_id, ctx):
                 active_id,
             )
             return
-    working_dir_root, allowlist = guard.resolved_config()
+    working_dir_root, allowlist = config.resolved_config()
     if not discipline_applies(cwd, working_dir_root):
         state.session.reminder_status = "skipped-outside"
         _record_session_reminder(session_id, "skipped-outside")

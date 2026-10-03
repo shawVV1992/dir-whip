@@ -4,13 +4,14 @@ Inverted resolution chain: dir-whip-config.yaml working_dir_root override
 (authoritative) -> current profile terminal.cwd -> fail-open, guard
 disabled; HERMES_HOME env override ahead of the platform default; the
 guarded plugins.plugin_utils.lazy_singleton import degrades to a local
-lock-guarded cache. Single unified ``allowlist:`` key, strict empty
-fallback, no backward compat.
+lock-guarded cache (both live in the state.config container). Single
+unified ``allowlist:`` key, strict empty fallback, no backward compat.
 
 Layer: core+host-guarded
 Refs: spec 5.5, spec 5.6, spec 5.7
 Key exports:
   - get_cached_config -- cached (working_dir_root, allowlist); seeds the session root.
+  - resolved_config -- cached (working_dir_root, allowlist) for the registered ctx; (None, []) on failure.
   - resolve_working_dir_root -- the inverted 3-step chain; None = guard disabled (fail-open).
   - refresh_resolution -- re-resolve for the session's profile at on_session_start.
   - load_guard_config -- load dir-whip-config.yaml (working_dir_root + raw allowlist).
@@ -19,7 +20,6 @@ Key exports:
 """
 
 import logging
-import threading
 from pathlib import Path
 
 import yaml
@@ -46,10 +46,6 @@ from .messages import (
 )
 
 from .paths import config_file_path, get_hermes_home
-
-_cache_lock = threading.Lock()
-_cached_result = None
-_cache_initialized = False
 
 # Session-scoped resolution: a desktop process registers under the ACTIVE
 # profile but later sessions can be a DIFFERENT profile, so the
@@ -262,9 +258,22 @@ def _resolve_registered_config():
 
 
 if lazy_singleton is not None:
-    _registered_config_accessor = lazy_singleton(_resolve_registered_config)
+    state.config.lazy_accessor = lazy_singleton(_resolve_registered_config)
 else:
-    _registered_config_accessor = None
+    state.config.lazy_accessor = None
+
+
+def resolved_config():
+    """Cached (working_dir_root, allowlist) for the registered ctx.
+
+    Fail-open: any error -> (None, []) (guard disabled). Callers keep the
+    module-qualified ``config.resolved_config()`` form so tests can
+    monkeypatch it.
+    """
+    try:
+        return get_cached_config(state.session.registered_ctx)
+    except Exception:
+        return (None, [])
 
 
 def get_cached_config(ctx, config_path=None):
@@ -276,22 +285,22 @@ def get_cached_config(ctx, config_path=None):
     top-level on_session_start refreshes it via refresh_resolution(ctx),
     so consumers never read a stale value. Backed by
     plugins.plugin_utils.lazy_singleton when the host provides it,
-    otherwise a local lock-guarded cache. reset_cache() clears either.
+    otherwise a local lock-guarded cache; both live in state.config.
+    reset_cache() clears either.
     """
-    global _cached_result, _cache_initialized
-    if _registered_config_accessor is not None:
+    if state.config.lazy_accessor is not None:
         if state.session.registered_ctx is None:
             # First caller is register(); capture its ctx for the factory.
             state.session.registered_ctx = ctx
             state.session.register_config_path = config_path
-        result = _registered_config_accessor()
+        result = state.config.lazy_accessor()
     else:
-        if not _cache_initialized:
-            with _cache_lock:
-                if not _cache_initialized:
-                    _cached_result = _resolve_config(ctx, config_path)
-                    _cache_initialized = True
-        result = _cached_result
+        if not state.config.cache_initialized:
+            with state.config.lock:
+                if not state.config.cache_initialized:
+                    state.config.cached_result = _resolve_config(ctx, config_path)
+                    state.config.cache_initialized = True
+        result = state.config.cached_result
     if result is None:
         # Defensive: unreachable while the cache/accessor invariant holds.
         result = _resolve_config(ctx, config_path)
@@ -324,35 +333,34 @@ def invalidate_config_cache():
     accessor when present, so the next get_cached_config / classify
     re-reads dir-whip-config.yaml. Consumed by
     runtime_allowlist.refresh_allowlist_cache (allowlist-writer refresh
-    hook); the cache globals stay in their home module.
+    hook); the cache group lives in state.config.
     """
-    global _cached_result, _cache_initialized
-    with _cache_lock:
-        _cached_result = None
-        _cache_initialized = False
-    if _registered_config_accessor is not None:
+    with state.config.lock:
+        state.config.cached_result = None
+        state.config.cache_initialized = False
+    if state.config.lazy_accessor is not None:
         try:
-            _registered_config_accessor.reset()
+            state.config.lazy_accessor.reset()
         except Exception:
             pass
     return
 
 
 def reset_cache():
-    """Reset config cache, stats and runtime allowlist (register/re-register)."""
-    global _cached_result, _cache_initialized
-    with _cache_lock:
-        _cached_result = None
-        _cache_initialized = False
-    if _registered_config_accessor is not None:
-        _registered_config_accessor.reset()
-    # Runtime-allowlist state lives in runtime_allowlist.py; the
-    # function-local import breaks the cycle (that module's refresh hook
-    # reaches this one).
-    from . import runtime_allowlist
-    runtime_allowlist.runtime_allowlist_clear()
-    # The allow_path confirmation-issued set follows the runtime
-    # allowlist lifecycle (register/re-register clears it too).
+    """Reset the config cache, stats and the session-scoped root/profile.
+
+    The runtime allowlist is NOT cleared here (SCR-061 R3): register()
+    calls runtime_allowlist_clear explicitly, and the test-support
+    isolation fixture owns the per-test reset.
+    """
+    with state.config.lock:
+        state.config.cached_result = None
+        state.config.cache_initialized = False
+    if state.config.lazy_accessor is not None:
+        state.config.lazy_accessor.reset()
+    # The allow_path confirmation-issued set follows the register/
+    # re-register lifecycle (cleared here; the runtime allowlist is
+    # cleared by its own explicit call).
     with state.session.lock:
         state.session.confirmation_issued.clear()
     # Session-scoped state: re-seeded at register (get_cached_config) and at
@@ -371,6 +379,7 @@ profile_config_path = _profile_config_path
 # re-exported from paths.py (consumer/test import paths).
 __all__ = [
     "get_cached_config",
+    "resolved_config",
     "get_working_dir_root",
     "resolve_working_dir_root",
     "refresh_resolution",

@@ -76,15 +76,15 @@ AUDIT_PAIRED_TOOLS = ("terminal", "execute_code")
 WRITE_AUDIT_ENTRY_CAP = 2000
 
 # Classification chain, injected by the assembly layer at register().
-# Unwired -> RuntimeError (production-unreachable: register() wires before
-# any hook runs; the fail-open hook adapter catches it).
-_classify_fn = None
+# The slot lives in the owner container (state.audit.classify_fn) and
+# survives reset_all. Unwired -> RuntimeError (production-unreachable:
+# register() wires before any hook runs; the fail-open hook adapter
+# catches it).
 
 
 def set_classifier(fn):
     """Wire the classification chain (assembly-layer injection, ADR-0007)."""
-    global _classify_fn
-    _classify_fn = fn
+    state.audit.classify_fn = fn
 
 
 def snapshot(working_dir_root):
@@ -152,9 +152,9 @@ def classify_diff(diff, before, after, working_dir_root, allowlist,
         if info is None or info[2]:
             continue  # directory entries never violate (5.18)
         abs_path = os.path.join(working_dir_root, name)
-        if _classify_fn is None:
+        if state.audit.classify_fn is None:
             raise RuntimeError("audit classifier not wired")
-        verdict = _classify_fn(
+        verdict = state.audit.classify_fn(
             abs_path, working_dir_root, allowlist, is_subagent
         )
         if verdict["outcome"] == "block" and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
@@ -270,9 +270,9 @@ def pending_violation_paths(session_id, working_dir_root=None, allowlist=None):
                 continue  # gone -> settled
             if not within_working_dir(path, working_dir_root):
                 continue  # moved outside the root -> settled
-            if _classify_fn is None:
+            if state.audit.classify_fn is None:
                 raise RuntimeError("audit classifier not wired")
-            verdict = _classify_fn(
+            verdict = state.audit.classify_fn(
                 path, working_dir_root, allowlist or [], is_subagent=False,
                 honor_runtime_allowlist=False,
             )

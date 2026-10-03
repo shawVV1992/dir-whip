@@ -10,11 +10,8 @@ Layer: core
 Refs: spec 5.3, spec 5.4, spec 5.12
 Key exports:
   - guard -- pre-tool-call decision chain; None = allow, a block dict = block.
-  - discipline_applies -- delegation alias (canonical home session_start.py); True = inject the session-start reminder.
-  - project_exemption_applies -- delegation alias (canonical home session_start.py); True = CWD under an active host project folder.
   - extract_target_paths -- write_file / patch target path(s); empty list when absent.
   - reset_fail_open_flag -- reset the one-time fail-open warning flag.
-  - resolved_config -- cached (working_dir_root, allowlist); (None, []) on failure.
   - approval_granted -- host approval choice -> granted/denied (consumer: the assembly approval observer).
 """
 
@@ -47,30 +44,6 @@ from .terminal import guard_terminal
 WRITE_CLASS_TOOLS = ("write_file", "patch", "terminal", "execute_code")
 INTERCEPTED_TOOLS = WRITE_CLASS_TOOLS
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
-
-
-def discipline_applies(cwd, working_dir_root):
-    """Conditional-injection predicate (spec 5.4).
-
-    Delegation alias with canonical home session_start.py; the same
-    name keeps guard.* / test import paths unchanged. Lazy import
-    breaks the cycle: guard has NO module-level session_start edge
-    (session_start imports guard for reset_fail_open_flag /
-    resolved_config).
-    """
-    from .session_start import discipline_applies as _canonical
-    return _canonical(cwd, working_dir_root)
-
-
-def project_exemption_applies(cwd, folders):
-    """Project-mode injection exemption predicate (spec 3.2 Layer 0).
-
-    Delegation alias with canonical home session_start.py; fail-open
-    semantics (missing cwd / folders or any error -> False = no
-    exemption).
-    """
-    from .session_start import project_exemption_applies as _canonical
-    return _canonical(cwd, folders)
 
 # Host approval choices that count as granted (host approval.py vocabulary).
 _APPROVAL_GRANTED_CHOICES = frozenset(
@@ -191,14 +164,6 @@ def reset_fail_open_flag():
 
 # ---------------------------------------------------------------- Observation helpers
 
-def resolved_config():
-    """Cached (working_dir_root, allowlist); (None, []) on failure."""
-    try:
-        return get_cached_config(_get_ctx())
-    except Exception:
-        return (None, [])
-
-
 def approval_granted(choice):
     """Map host approval choices to granted/denied."""
     return str(choice or "").strip().lower() in _APPROVAL_GRANTED_CHOICES
@@ -229,11 +194,8 @@ def extract_target_paths(tool_name, args):
 
 __all__ = [
     "guard",
-    "discipline_applies",
-    "project_exemption_applies",
     "approval_granted",
     "extract_target_paths",
     "reset_fail_open_flag",
-    "resolved_config",
     "FAIL_OPEN_WARNING_MESSAGE",
 ]
