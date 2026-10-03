@@ -4,13 +4,12 @@ Counters keyed outcome x tool x rule_key x is_subagent; the stats state
 lives in state.stats; no host imports (core discipline).
 
 Layer: core
-Refs: spec 5.13, SCR-027, SCR-035
+Refs: spec 5.13
 Key exports:
   - stats_record -- bump counters + append one stats.jsonl event line; never raises.
   - stats_set_session -- attach provided session context fields to persisted events.
   - stats_backfill_session -- set session_id only when currently empty (race-safe under the stats lock).
   - stats_snapshot -- deep copy of the counters (outcome x tool x rule_key x is_subagent).
-  - stats_end_session -- close the session context fields (counters kept).
   - stats_reset -- clear in-memory counters + session context at register/re-register.
   - stats_jsonl_path -- report-facing stats.jsonl location (session profile home).
 """
@@ -49,17 +48,6 @@ def _reset_stats_session_locked():
     state.stats.session["session_id"] = None
     state.stats.session["is_subagent"] = False
     state.stats.session["started_at"] = None
-
-
-def stats_end_session():
-    """Close the stats session context (counters kept).
-
-    Clears the session fields (profile / session_id / is_subagent /
-    started_at) so a closed child session's context never leaks into
-    later events; in-memory counters are untouched.
-    """
-    with state.stats.lock:
-        _reset_stats_session_locked()
 
 
 def stats_set_session(profile=None, session_id=None, is_subagent=None, started_at=None):
@@ -146,16 +134,29 @@ def _append_stats_event(event):
 
 
 def stats_record(outcome, tool, rule_key, target=None, reason=None,
-                 is_subagent=None, working_dir_root=None):
+                 is_subagent=None, working_dir_root=None, *,
+                 precomputed=None):
     """Record one guard verdict: bump counters + append one stats.jsonl line.
 
     outcome x tool x rule_key counters are split by is_subagent; each
     event persists session + event fields. Never raises: a failed stats
     write is logged and does NOT affect the verdict (fail-open logging).
+
+    precomputed: optional shared projection from events.emit
+    ({"target", "is_subagent", "ts"}) so the log event and the stats
+    row share one relativization / one clock; None computes them here
+    (the backward-compatible public path).
     """
-    if is_subagent is None:
-        is_subagent = state.stats.session.get("is_subagent", False)
-    is_subagent = bool(is_subagent)
+    if precomputed is not None:
+        is_subagent = bool(precomputed["is_subagent"])
+        rel_target = precomputed["target"]
+        ts = precomputed["ts"]
+    else:
+        if is_subagent is None:
+            is_subagent = state.stats.session.get("is_subagent", False)
+        is_subagent = bool(is_subagent)
+        rel_target = relativize_target(target, working_dir_root)
+        ts = _now_iso()
     with state.stats.lock:
         by_outcome = state.stats.counters.setdefault(outcome, {})
         by_tool = by_outcome.setdefault(tool, {})
@@ -167,12 +168,12 @@ def stats_record(outcome, tool, rule_key, target=None, reason=None,
                 "session_id": state.stats.session.get("session_id"),
                 "is_subagent": is_subagent,
                 "started_at": state.stats.session.get("started_at"),
-                "ts": _now_iso(),
+                "ts": ts,
                 "outcome": outcome,
                 "reason": reason,
                 "tool": tool,
                 "rule_key": rule_key,
-                "target": relativize_target(target, working_dir_root),
+                "target": rel_target,
             })
         except Exception as exc:
             logger.debug("dir-whip: stats write failed (ignored): %s", exc)
@@ -183,7 +184,6 @@ __all__ = [
     "stats_set_session",
     "stats_backfill_session",
     "stats_snapshot",
-    "stats_end_session",
     "stats_reset",
     "stats_jsonl_path",
 ]

@@ -7,7 +7,7 @@ session_id / is_subagent stay explicit params. No host imports; single
 definition point for every static RULE_KEY_* and OUTCOME_* (values frozen).
 
 Layer: core
-Refs: spec 5.13, spec 5.14, SCR-052
+Refs: spec 5.13, spec 5.14
 Key exports:
   - RULE_KEY_* -- the frozen static rule_key constants (single definition point).
   - OUTCOME_* -- the frozen verdict-axis outcome constants (single definition point).
@@ -94,13 +94,6 @@ _BUS_SKIP_RULE_KEYS = frozenset((
 ))
 
 
-def _verdict_reason(outcome):
-    """Short reason string for a verdict event (5.13)."""
-    if outcome == "external-write":
-        return "target outside working_dir_root"
-    return None
-
-
 def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
     """Emit ONE single-line structured verdict event.
 
@@ -116,13 +109,24 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
     """
     try:
         working_dir_root = state.session.working_dir_root
+        # Single computation, two projections: the relative target, the
+        # is_subagent bool and ONE clock are shared with the stats row
+        # (the old two-clock skew is retired).
+        rel_target = relativize_target(target, working_dir_root)
+        is_subagent = bool(is_subagent)
+        timestamp = datetime.datetime.now().isoformat(timespec="seconds")
         stats_record(
             outcome, tool, rule_key, target=target, reason=reason,
-            is_subagent=bool(is_subagent), working_dir_root=working_dir_root,
+            is_subagent=is_subagent, working_dir_root=working_dir_root,
+            precomputed={
+                "target": rel_target,
+                "is_subagent": is_subagent,
+                "ts": timestamp,
+            },
         )
-        rel_target = relativize_target(target, working_dir_root)        # The log/bus routing basis is GEOMETRIC (computed fresh,
-        # chain-homologous); the outcome string stays as fallback so
-        # fail-open shapes keep their levels.
+        # The log/bus routing basis is GEOMETRIC (chain-homologous); the
+        # outcome string stays as fallback so fail-open shapes keep
+        # their levels.
         outside = (
             bool(target) and bool(working_dir_root)
             and not within_working_dir(
@@ -135,12 +139,12 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             "tool": tool,
             "target": rel_target,
             "rule_key": rule_key,
-            "is_subagent": bool(is_subagent),
+            "is_subagent": is_subagent,
             "session_id": session_id,
-            # v2.25 SCR-057 D1: multi-profile attribution inside one
-            # desktop-process log (session_id alone is ambiguous).
+            # Multi-profile attribution inside one desktop-process log
+            # (session_id alone is ambiguous).
             "profile": state.session.session_profile,
-            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "timestamp": timestamp,
         }
         line = json.dumps(event)
         if outcome in (OUTCOME_BLOCK, OUTCOME_FAIL_OPEN):

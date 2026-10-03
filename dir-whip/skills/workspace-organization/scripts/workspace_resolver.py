@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Shared READ-ONLY Working Directory resolver for the skill CLIs -- the ONLY cross-import exception (SCR-011), parity-locked with dir-whip/config.py (ADR-0006).
+"""Shared READ-ONLY Working Directory resolver for the skill CLIs -- the ONLY cross-import exception, parity-locked with dir-whip/config.py.
 
-READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only (minimal line-based config parsing, mirroring the plugin's PyYAML-based parser); duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7 R9, SCR-039 R9; legacy v2.6 flat tagged lists ignored fail-closed).
+READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only (minimal line-based config parsing, mirroring the plugin's PyYAML-based parser); duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7; legacy v2.6 flat tagged lists ignored fail-closed).
 
 Layer: skill-subprocess
-Refs: spec 4.4, spec v2.6 B2, spec v2.7 R9, spec v2.26 SCR-061, SCR-006, SCR-011, SCR-026, SCR-027, SCR-039 R9, SCR-042, ADR-0006
+Refs: spec 4.4, spec v2.6, spec v2.7, spec v2.26
 Key exports:
   - hermes_home -- Hermes home (HERMES_HOME override first; Windows LOCALAPPDATA/hermes, POSIX ~/.hermes).
-  - normalize_path -- SCR-006 normalization for exact matching (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).
+  - normalize_path -- exact-match normalization (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).
+  - is_session_name -- session-directory name check (SESSION_NAME_RE + real-timestamp strptime validation); the single copy consumed by all three scripts.
   - parse_terminal_cwd -- minimal terminal.cwd parser for config.yaml, mirroring config.py parse_terminal_cwd.
-  - allowlist_state -- structured allowlist {files, dirs, legacy}; STRICT empty when absent (spec v2.7 R9 parity). The audit consumes the files subset from here.
+  - allowlist_state -- structured allowlist {files, dirs, legacy}; STRICT empty when absent (spec v2.7 parity). The audit consumes the files subset from here.
   - resolve_working_dir_root -- 4-step chain (spec 4.4); fail-open None after exactly ONE stderr WARNING.
   - validate_workspace -- boundary validation of an explicit --workspace (spec 4.4).
+
+Size: the READ-ONLY resolver and the parity-locked allowlist/name
+helpers stay one self-contained stdlib file (the single cross-import
+exception).
 """
 
+import datetime
 import os
 import posixpath
 import re
 import sys
 
-# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# Never crash on a non-UTF-8 console/pipe (e.g. cp936 with
 # non-ASCII paths) -- encode errors degrade to replacement characters
 # instead of raising UnicodeEncodeError. errors= only; encoding itself is
 # untouched, and the hasattr guard covers non-standard streams.
@@ -58,7 +64,7 @@ def hermes_home(env=None):
     override, used by tests to isolate from any real installation);
     otherwise Windows: LOCALAPPDATA/hermes -- with a user-home fallback
     when LOCALAPPDATA is unset/empty so the home is NEVER a relative path
-    resolvable against the CWD (SCR-042 N7) --, POSIX: ~/.hermes. `env`
+    resolvable against the CWD --, POSIX: ~/.hermes. `env`
     overrides os.environ (test isolation).
     """
     if env is None:
@@ -90,14 +96,14 @@ def _msys_drive(path):
 
 
 def normalize_path(path):
-    """Normalize a path for exact matching (SCR-006 rules).
+    """Normalize a path for exact matching.
 
     Windows branch: MSYS mapping, then normpath; rooted-no-drive paths
     inherit the CWD drive; forward slashes + casefold (case-insensitive
     filesystem). POSIX branch: normpath identity (forward slashes).
 
     MSYS mapping caveat (current semantics, consistent with paths.py's
-    SCR-006 legacy regex): /<letter>... and //<letter>... map to a drive
+    legacy regex): /<letter>... and //<letter>... map to a drive
     letter, so forward-slash forms are NOT reliably UNC-safe -- a
     single-letter "server" such as //s/share is misread as drive S:
     (S:/share). Multi-letter server names (//server/share) do not match
@@ -118,6 +124,22 @@ def normalize_path(path):
                 norm = drive + norm
         return norm.replace("\\", "/").casefold()
     return os.path.normpath(path).replace("\\", "/")
+
+
+# Session-directory name pattern: YYYYMMDD_HHMMSS with an optional
+# _TaskName suffix; the timestamp must parse as a real datetime.
+SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
+
+
+def is_session_name(name):
+    """True if name is YYYYMMDD_HHMMSS[_TaskName] with a real timestamp."""
+    if not isinstance(name, str) or not SESSION_NAME_RE.match(name):
+        return False
+    try:
+        datetime.datetime.strptime(name[:15].replace("_", ""), "%Y%m%d%H%M%S")
+    except ValueError:
+        return False
+    return True
 
 
 def parse_terminal_cwd(config_path):
@@ -217,14 +239,14 @@ def _is_within(child, root):
 
 
 def _profile_config_path(hh, profile):
-    """Profile config path aware of both home layouts (SCR-026/027).
+    """Profile config path aware of both home layouts.
 
     At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
     non-default profiles (e.g. HERMES_HOME=.../profiles/learn); tests keep
     HERMES_HOME at the root with named profiles under profiles/<name>/.
     Detect the layout by path shape: when hh already IS the profile dir
     (basename == profile, parent basename == "profiles"), the profile
-    config is hh/config.yaml. The reverse case (R2): a "default" session
+    config is hh/config.yaml. The reverse case: a "default" session
     while hh is a NAMED profile's dir -> the default home is TWO levels up
     (dirname(dirname(hh))/config.yaml).
     """
@@ -310,7 +332,7 @@ def resolve_working_dir_root(workspace=None, hh=None, env=None):
     return None
 
 
-# ---------------------------------------------------------------- Structured allowlist parity (spec v2.7 R9, duplicated from allowlist.py)
+# ---------------------------------------------------------------- Structured allowlist parity (spec v2.7, duplicated from allowlist.py)
 
 def _ws_is_absolute_any(target):
     """Rooted on local OS, Windows-drive-rooted, or backslash-rooted (parity)."""
@@ -373,7 +395,7 @@ def _ws_validate_dir_rel(path):
 
 def _ws_normalize_dir_rel(path):
     """Normalize a validated dir entry: forward slashes, trailing slash
-    stripped, duplicate slashes collapsed (R7 storage normalization)."""
+    stripped, duplicate slashes collapsed (storage normalization)."""
     if not isinstance(path, str):
         return ""
     s = path.strip().replace("\\", "/")
@@ -382,7 +404,7 @@ def _ws_normalize_dir_rel(path):
 
 
 def _ws_parse_allowlist(raw):
-    """Parity duplicate of allowlist.parse_allowlist (v2.7 R9, stdlib only).
+    """Parity duplicate of allowlist.parse_allowlist (spec v2.7, stdlib only).
 
     Expected MAPPING ``{"files": [...], "dirs": [...]}`` with root-relative
     entries. A legacy FLAT value (the v2.6 list of ``file:``/``prefix:``
@@ -426,7 +448,7 @@ def _ws_is_allowlist_file(name, parsed):
 
 
 def _ws_is_allowlist_dir_name(name, dirs_entries):
-    """Guard-homologous dirs matching for a ROOT-LEVEL entry name (v2.26 SCR-061).
+    """Guard-homologous dirs matching for a ROOT-LEVEL entry name (spec v2.26).
 
     The guard's dirs semantics ("a target equals or is under
     <root>/<entry>") reduce to name EQUALITY in the root-level
@@ -436,9 +458,9 @@ def _ws_is_allowlist_dir_name(name, dirs_entries):
     therefore does NOT exempt its parent ``projects``. Entries are
     normalized (backslashes -> slashes, duplicate slashes collapsed,
     trailing slash stripped); the comparison is casefolded on Windows
-    only (spec 4.6, v2.22 SCR-053 ruling). Non-string / empty names and
+    only (spec 4.6 ruling). Non-string / empty names and
     entries never match. The former path-level twin
-    ``_ws_is_allowlist_dir`` was retired with SCR-061 (it was never
+    ``_ws_is_allowlist_dir`` was retired (it was never
     wired; the script call sites only ever pass root-level names).
     """
     if not isinstance(name, str) or not name.strip():
@@ -472,7 +494,7 @@ def _split_flow_list(rest):
 
 
 def _parse_allowlist_yaml(data):
-    """Extract the structured allowlist from parsed YAML (v2.7 R9 parity).
+    """Extract the structured allowlist from parsed YAML (spec v2.7 parity).
 
     Reads the single key ``allowlist`` (mapping form). Legacy flat values /
     old keys are ignored fail-closed; the legacy entry count is returned
@@ -529,7 +551,7 @@ def _apply_allowlist_subkey(stripped, raw_map, in_sub):
 
 
 def _parse_allowlist_lines(path):
-    """Line-based structured allowlist parser (PyYAML unavailable, v2.7 R9).
+    """Line-based structured allowlist parser (PyYAML unavailable, spec v2.7).
 
     Handles the mapping block form::
 
@@ -583,7 +605,7 @@ def _parse_allowlist_lines(path):
 
 
 def allowlist_state(hh=None):
-    """Structured allowlist state from dir-whip-config.yaml (v2.7 R9).
+    """Structured allowlist state from dir-whip-config.yaml (spec v2.7).
 
     Reads the ``allowlist`` mapping from <HERMES_HOME>/dir-whip/
     dir-whip-config.yaml. Returns {"files": [sorted basenames],

@@ -7,7 +7,7 @@ from these constants; the original modules keep same-name import aliases,
 so all test import paths stay intact. Message texts are frozen.
 
 Layer: core
-Refs: spec 5.11, spec 5.20, ADR-0014
+Refs: spec 5.11, spec 5.20
 Key exports:
   - FAIL_OPEN_WARNING_MESSAGE, DISCIPLINE_BLOCK_MESSAGE -- guard-disabled warning + session-start discipline block (text frozen).
   - BLOCK_MESSAGE_* -- unified block skeleton fragments (header / fix lines / uniqueness / allowlist hint / [Reason]+[Next] tail).

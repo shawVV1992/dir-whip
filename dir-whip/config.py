@@ -109,7 +109,9 @@ def resolve_working_dir_root(ctx, config_path=None):
     <name>/config.yaml via ctx.profile_name) -> fail-open (WARNING +
     None, guard disabled). The TERMINAL_CWD / HERMES_SESSION_PROFILE env
     steps are NOT part of the plugin chain. Resolution happens once at
-    register() (cached); None -> all guard checks allow.
+    register() (cached); None -> all guard checks allow. The resolving
+    step is recorded in state.session.working_dir_source for the
+    report (dir-whip-config / profile-config / fail-open).
     """
     # 1. dir-whip-config.yaml explicit value (authoritative when set)
     try:
@@ -120,6 +122,7 @@ def resolve_working_dir_root(ctx, config_path=None):
                 "dir-whip: working_dir_root resolved from dir-whip-config: %s",
                 working_dir_root,
             )
+            state.session.working_dir_source = "dir-whip-config"
             return working_dir_root
     except Exception:
         pass
@@ -136,6 +139,7 @@ def resolve_working_dir_root(ctx, config_path=None):
                     "dir-whip: working_dir_root resolved from profile-config: %s",
                     cwd,
                 )
+                state.session.working_dir_source = "profile-config"
                 return cwd
     except Exception:
         pass
@@ -147,6 +151,7 @@ def resolve_working_dir_root(ctx, config_path=None):
         getattr(ctx, "profile_name", None) if ctx else None,
         state.stats.session.get("session_id"),
     )
+    state.session.working_dir_source = "fail-open"
     return None
 
 
@@ -336,7 +341,7 @@ def invalidate_config_cache():
 def reset_cache():
     """Reset the config cache, stats and the session-scoped root/profile.
 
-    The runtime allowlist is NOT cleared here (SCR-061 R3): register()
+    The runtime allowlist is NOT cleared here: register()
     calls runtime_allowlist_clear explicitly, and the test-support
     isolation fixture owns the per-test reset.
     """
@@ -354,6 +359,7 @@ def reset_cache():
     # the next top-level on_session_start.
     state.session.working_dir_root = None
     state.session.working_dir_root_initialized = False
+    state.session.working_dir_source = None
     state.session.session_profile = None
     stats.stats_reset()
 

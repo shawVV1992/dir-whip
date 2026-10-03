@@ -9,7 +9,7 @@ no secret-class content). Known limits: multi-profile interleave in one
 desktop process; stdlib-tier WinError 32 risk on Windows.
 
 Layer: core
-Refs: spec 5.13, SCR-026, SCR-027
+Refs: spec 5.13
 Key exports:
   - setup -- attach the diagnostic file handler; idempotent, fail-open, never raises.
   - diagnostic_log_path -- the session profile's dir-whip.log path (single source for report.py).

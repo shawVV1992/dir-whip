@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Audit the Working Directory for structural compliance violations -- 6 root/session checks + read-only expired .tmp inventory (spec 4.4).
 
-Boundary validation: an explicit --workspace must equal the resolved Working Directory; the default target is the resolved Working Directory, with interactive fail-open to the CWD after exactly ONE resolver stderr warning, while --gate REFUSES to fall back (exit 2, no wakeAgent line; SCR-042 H1 reframed by SCR-043 R6 as cron failure visibility); a missing directory or mismatch is a parameter error. Six checks (root files vs the allowlist files entries -- structured mapping spec v2.7 R9, legacy flat values ignored with a stderr hint; no root-level Outputs/; root dirs session-format or allowlist dirs subtree, no .hermes/ whitelist -- SCR-043 R5; session dirs contain Outputs/ and .tmp/; no build artifacts directly in Outputs/; no loose scripts in a session root) plus a READ-ONLY expired .tmp inventory (spec 3.4, spec 8.1; --days default 30, interactive proposal only, zero auto-delete); --gate appends the exactly-two-key {"wakeAgent": bool, "violations": N} line, plain violation blocks or a single OK line, --json a JSON array; exit 0 compliant / 1 violations / 2 parameter, path or unresolved-gate error.
+Boundary validation: an explicit --workspace must equal the resolved Working Directory; the default target is the resolved Working Directory, with interactive fail-open to the CWD after exactly ONE resolver stderr warning, while --gate REFUSES to fall back (exit 2, no wakeAgent line; gate mode refuses fallback for cron failure visibility); a missing directory or mismatch is a parameter error. Six checks (root files vs the allowlist files entries -- structured mapping (spec v2.7), legacy flat values ignored with a stderr hint; no root-level Outputs/; root dirs session-format or allowlist dirs subtree, no .hermes/ whitelist; session dirs contain Outputs/ and .tmp/; no build artifacts directly in Outputs/; no loose scripts in a session root) plus a READ-ONLY expired .tmp inventory (spec 3.4, spec 8.1; --days default 30, interactive proposal only, zero auto-delete); --gate appends the exactly-two-key {"wakeAgent": bool, "violations": N} line, plain violation blocks or a single OK line, --json a JSON array; exit 0 compliant / 1 violations / 2 parameter, path or unresolved-gate error.
 
 Layer: skill-subprocess
-Refs: spec 3.4, spec 4.4, spec 5.7, spec 8.1, spec v2.7 R9, SCR-037, SCR-039 R9, SCR-042, SCR-043, ADR-0008
+Refs: spec 3.4, spec 4.4, spec 5.7, spec 8.1, spec v2.7
 Key exports:
   - main -- CLI entry: resolve/validate the root, run the checks + inventory, emit plain/JSON/gate output; exit 0/1/2.
-  - list_expired_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes (SCR-043 R6).
+  - list_expired_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes.
+
+Size: the structural checks and the read-only .tmp inventory share
+one CLI/output contract (plain / --json / --gate).
 """
 
 import argparse
@@ -19,7 +22,7 @@ import re
 import sys
 import time
 
-# SCR-042 H2: the bundled shared resolver is loaded from THIS script's own
+# The bundled shared resolver is loaded from THIS script's own
 # directory via an absolute path -- independent of sys.path / PYTHONPATH /
 # CWD state, so a same-named workspace file can never hijack the module
 # (python -m / PYTHONPATH shadow / embedded-import vectors). Registering
@@ -34,14 +37,13 @@ workspace_resolver = importlib.util.module_from_spec(_resolver_spec)
 sys.modules["workspace_resolver"] = workspace_resolver
 _resolver_spec.loader.exec_module(workspace_resolver)
 
-# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# Never crash on a non-UTF-8 console/pipe (e.g. cp936 with
 # non-ASCII paths) -- encode errors degrade to replacement characters
 # (stderr too: error messages carry the same non-ASCII paths).
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
 
-SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 OUTPUTS_DIR = "Outputs"
 TMP_DIR = ".tmp"
 SCRIPT_EXTENSIONS = (".py", ".sh", ".bat", ".ps1")
@@ -53,10 +55,10 @@ BLACKLIST_NAMES = {
 }
 
 
-# --- SCR-037 enablement precheck (spec 5.7, ADR-0008 D4) ---
+# --- Enablement precheck (spec 5.7) ---
 # Inline layout-aware helpers (do NOT import workspace_resolver for this;
-# stdlib only, per #55 boundary). Logic mirrors dir-whip/config.py:292-311
-# and workspace_resolver.py:220-242.
+# stdlib only, dual-implementation boundary kept). Logic mirrors
+# paths.get_hermes_home and config.profile_config_path.
 
 def _precheck_hermes_home():
     """Inline hermes_home() (env-aware, stdlib only)."""
@@ -64,7 +66,7 @@ def _precheck_hermes_home():
     if env_home:
         return env_home
     if os.name == "nt":
-        # SCR-042 N7: unset/empty LOCALAPPDATA falls back to the user home
+        # Unset/empty LOCALAPPDATA falls back to the user home
         # so the precheck never reads config relative to the CWD.
         local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
         if local_app_data:
@@ -87,7 +89,7 @@ def _precheck_current_profile(hh):
 
 
 def _precheck_profile_config_path(hh, profile):
-    """Layout-aware config.yaml path (both home layouts, per R2)."""
+    """Layout-aware config.yaml path (both home layouts)."""
     if not profile or profile == "default":
         norm = os.path.normpath(str(hh))
         if os.path.basename(os.path.dirname(norm)) == "profiles":
@@ -224,20 +226,9 @@ def to_fwd(path):
     return path.replace(os.sep, "/")
 
 
-def is_session_name(name):
-    """True if name is YYYYMMDD_HHMMSS or YYYYMMDD_HHMMSS_TaskName with a real timestamp."""
-    if not SESSION_NAME_RE.match(name):
-        return False
-    try:
-        datetime.datetime.strptime(name[:15].replace("_", ""), "%Y%m%d%H%M%S")
-    except ValueError:
-        return False
-    return True
-
-
 def check_root_files(root, allowed, violations):
     for entry in os.scandir(root):
-        # SCR-042 M1: match through the resolver's allowlist helper (the
+        # Match through the resolver's allowlist helper (the
         # same code path shape as allowlist.is_allowlist_file, Windows
         # casefold) so guard and audit never disagree on case variants.
         if entry.is_file() and not workspace_resolver._ws_is_allowlist_file(
@@ -253,7 +244,7 @@ def check_root_files(root, allowed, violations):
 
 def _dir_exempt(name, dirs_entries):
     """True when a root-level directory is exempt by the allowlist dirs
-    entries (v2.26 SCR-061: guard-homologous semantics -- the name must
+    entries (guard-homologous semantics -- the name must
     EQUAL an entry; a multi-level entry does not exempt its parent)."""
     return workspace_resolver._ws_is_allowlist_dir_name(name, dirs_entries)
 
@@ -263,7 +254,7 @@ def _dir_suggestion(name, dirs_entries):
 
     When a multi-level dirs entry sits BELOW the flagged directory, the
     entry's own subtree is allowlisted but the parent shell is not --
-    name the entry (v2.26 SCR-061 A+). Otherwise the legacy rename
+    name the entry. Otherwise the legacy rename
     suggestion.
     """
     name_norm = str(name).replace("\\", "/").strip("/")
@@ -299,14 +290,14 @@ def check_root_session_format(root, violations, dirs_entries=None):
     for entry in os.scandir(root):
         if not entry.is_dir():
             continue
-        # SCR-043 R5: the .hermes root-dir whitelist is removed -- after
+        # The .hermes root-dir whitelist is removed -- after
         # the quarantine relocation to the dir-whip home no .hermes/
         # directory should exist in the workspace; a leftover one is a
         # non-session violation like any other (the dirs channel is the
-        # guard-homologous _dir_exempt, v2.26 SCR-061).
+        # guard-homologous _dir_exempt).
         if _dir_exempt(entry.name, dirs_entries):
-            continue  # allowlist dirs entry (guard-homologous, v2.26 SCR-061)
-        if not is_session_name(entry.name):
+            continue  # allowlist dirs entry (guard-homologous)
+        if not workspace_resolver.is_session_name(entry.name):
             violations.append({
                 "check": 3,
                 "name": "Session directory format",
@@ -329,7 +320,7 @@ def check_session_structure(session, violations):
 def check_outputs_content(outputs, violations):
     for entry in os.scandir(outputs):
         kind = "directory" if entry.is_dir() else "file"
-        # SCR-042 M1: blacklist comparisons are case-insensitive (keys are
+        # Blacklist comparisons are case-insensitive (keys are
         # already lowercase; .pyc style matches check_session_scripts).
         name_lower = entry.name.lower()
         if name_lower == "__pycache__" or name_lower == "node_modules":
@@ -359,7 +350,7 @@ def check_session_scripts(session, violations):
 
 def audit(root, hh):
     """Run all checks; return a list of violation dicts."""
-    # v2.7 R9: structured allowlist {files, dirs}; legacy flat values are
+    # Structured allowlist {files, dirs}; legacy flat values are
     # ignored fail-closed with ONE stderr hint (clean-break visibility).
     al_state = workspace_resolver.allowlist_state(hh)
     if al_state.get("legacy"):
@@ -374,7 +365,7 @@ def audit(root, hh):
     check_root_session_format(root, violations, dirs_entries=al_state["dirs"])
 
     for entry in os.scandir(root):
-        if not entry.is_dir() or not is_session_name(entry.name):
+        if not entry.is_dir() or not workspace_resolver.is_session_name(entry.name):
             continue
         check_session_structure(entry.path, violations)
         check_session_scripts(entry.path, violations)
@@ -390,13 +381,13 @@ def find_tmp_entries(parent):
     Only scans parent/<session-dir>/.tmp/ where the session dir name is a
     valid session name (real timestamp). Never recurses deeper and never
     scans .tmp/ directories outside session dirs. Symlink boundary
-    (SCR-042 N1), two layers: session-name symlinks are not session dirs
+    Two layers: session-name symlinks are not session dirs
     (follow_symlinks=False), and a symlinked .tmp/ body skips the whole
     session (scandir would list external content through the link).
     """
     entries = []
     for entry in os.scandir(parent):
-        if not entry.is_dir(follow_symlinks=False) or not is_session_name(entry.name):
+        if not entry.is_dir(follow_symlinks=False) or not workspace_resolver.is_session_name(entry.name):
             continue
         tmp_dir = os.path.join(entry.path, TMP_DIR)
         if os.path.islink(tmp_dir) or not os.path.isdir(tmp_dir):
@@ -416,7 +407,7 @@ def is_old(path, days):
 
 
 def list_expired_tmp(root, days):
-    """Read-only inventory of expired session .tmp/ entries (SCR-043 R6).
+    """Read-only inventory of expired session .tmp/ entries.
 
     Returns the sorted entry paths that have not been modified for
     `days` days or longer (find_tmp_entries + is_old filter). The
@@ -443,7 +434,7 @@ def print_json(violations):
 
 
 def main(argv=None):
-    """CLI entry: resolve and validate the audit root, run the structural checks + read-only .tmp inventory, emit plain / --json / --gate output (SCR-042 H1)."""
+    """CLI entry: resolve and validate the audit root, run the structural checks + read-only .tmp inventory, emit plain / --json / --gate output."""
     args = _build_parser().parse_args(argv)
 
     if args.days < 0:
@@ -455,7 +446,7 @@ def main(argv=None):
     if code is not None:
         return code
 
-    # SCR-037 enablement precheck (spec 5.7): quiet when enabled, WARN otherwise; no exit code change
+    # Enablement precheck (spec 5.7): quiet when enabled, WARN otherwise; no exit code change
     _run_enablement_precheck(hh)
 
     violations = audit(root, hh)
@@ -510,7 +501,7 @@ def _resolve_root(args, hh):
         return root, None
     root = workspace_resolver.resolve_working_dir_root(hh=hh)
     if root is None and args.gate:
-        # SCR-042 H1 / SCR-043 R6: gate mode never falls back to the
+        # Gate mode never falls back to the
         # fail-open CWD -- exit 2, zero stdout, no wakeAgent line.
         sys.stderr.write(
             "error: Working Directory unresolved; --gate refuses to "
@@ -534,7 +525,7 @@ def _emit_result(args, violations):
 
 
 def _emit_expired_proposal(root, args):
-    # SCR-043 R6: read-only inventory -- the expired entries are listed
+    # Read-only inventory -- the expired entries are listed
     # as a proposal in interactive plain mode only (gate outputs no
     # expired list; --json keeps stdout schema-clean); nothing is ever
     # deleted, --days serves the inventory threshold.
@@ -549,7 +540,7 @@ def _emit_expired_proposal(root, args):
 
 
 def _emit_gate(violations):
-    # SCR-043 R6: exactly two keys (removed/failed are gone with auto-delete).
+    # Exactly two keys (removed/failed are gone with auto-delete).
     payload = {
         "wakeAgent": bool(violations),
         "violations": len(violations),

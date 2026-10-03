@@ -1,4 +1,4 @@
-"""dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point (ADR-0007).
+"""dir-whip plugin for Hermes -- assembly layer over the pure decision/state modules: register(ctx) + the hook-adapter surface + the ONLY host-API touch point.
 
 Three guarded host imports (absence -> None -> documented fallback):
 get_session_cwd / resolve_agent_cwd fill the CWD injection slots (missing
@@ -9,11 +9,11 @@ dispatch: every hook adapter is a THIN dispatch; any registration error
 logs a warning and Hermes continues normally.
 
 Layer: assembly
-Refs: spec 5.7, spec 5.8, ADR-0007
+Refs: spec 5.7, spec 5.8
 Key exports:
   - register -- register the host hooks, the dir_whip_allow_path tool, the /dir-whip command, the bundled skill and the event bus (single fail-open layer).
   - _guard_hook, on_start, on_post_tool_call, on_post_approval_response, on_pre_command, on_subagent_start, on_subagent_stop, on_transform_tool_result, on_pre_verify -- the thin host-hook adapters; each fail-open, never raises.
-  - state.session.session_cwd_fn / agent_cwd_fn / project_active_fn -- injected host-API slots (ADR-0007); unimportable host API -> None -> documented fallback.
+  - state.session.session_cwd_fn / agent_cwd_fn / project_active_fn -- injected host-API slots; unimportable host API -> None -> documented fallback.
 """
 
 import json
@@ -50,13 +50,13 @@ from .events import (
 
 logger = logging.getLogger("dir-whip")
 
-# Plugin-owned tools excluded from the unseen probe (D4, v2.25 SCR-057).
+# Plugin-owned tools excluded from the unseen probe.
 _PLUGIN_TOOLS = frozenset(("dir_whip_allow_path", "dir_whip_settle"))
 
 
 def _observe_unseen_tool(tool_name, session_id):
     """One DEBUG observation per (session, tool) for tools outside the
-    write-class set (v2.25 SCR-057 D4 probe): the next unobserved
+    write-class set (unseen probe): the next unobserved
     write-capable channel surfaces here instead of via an incident.
     Excludes plugin-owned tools; throttled per session+tool (mirrors the
     one-time fail-open warning precedent); fail-open, never raises.
@@ -154,14 +154,14 @@ def _wire_register_state(ctx):
         plugin_dir, "skills", "workspace-organization", "SKILL.md"
     )
     state.session.plugin_version = report.plugin_version()
-    # Assembly-layer injection (ADR-0007): wire the audit + orphan-scan
+    # Assembly-layer injection: wire the audit + orphan-scan
     # classifiers BEFORE any hook can fire (inject-don't-import).
     audit.set_classifier(classify.classify_target)
     session_dirs.set_classifier(classify.classify_target)
     # Restore the write-through claims store BEFORE any hook fires
     # (fail-open, validation drops dead entries).
     claims.load_claims()
-    # Host API injection slots (ADR-0007): absent host API -> None ->
+    # Host API injection slots: absent host API -> None ->
     # on_start always injects.
     state.session.session_cwd_fn = _get_session_cwd
     state.session.agent_cwd_fn = _resolve_agent_cwd
@@ -180,7 +180,7 @@ def _wire_register_state(ctx):
     except Exception:
         state.session.emit_enabled = False
     config.reset_cache()
-    # The runtime allowlist no longer rides reset_cache (SCR-061 R3):
+    # The runtime allowlist no longer rides reset_cache:
     # register/re-register clears it explicitly at the same point.
     runtime_allowlist.runtime_allowlist_clear()
     config.get_cached_config(ctx)

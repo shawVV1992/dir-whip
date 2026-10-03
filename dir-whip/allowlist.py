@@ -5,10 +5,12 @@ tolerance only); legacy flat / non-dict input is ignored fail-closed
 (empty sets), legacy shapes surfacing on the report/list surfaces.
 ``files`` = exact basename match (casefold on Windows), ``dirs`` =
 recursive subtree exemption under <working_dir_root>/<entry>; the root
-is never exempt. Pure functions, no host imports, no state.
+is never exempt. Pure functions plus ONE read-side helper
+(load_allowlist_state, profile-aware via paths.config_file_path);
+no host imports, no state.
 
 Layer: core
-Refs: spec 5.6, spec 5.3, ADR-0007
+Refs: spec 5.6, spec 5.3
 Key exports:
   - parse_allowlist -- raw ``allowlist`` config value -> validated ``{"files": set, "dirs": set}`` (fail-closed).
   - parse_allowlist_raw -- raw value passthrough (list/dict kept; scalars -> []).
@@ -21,7 +23,11 @@ Key exports:
 import os
 import re
 
+import yaml
+
+from .paths import config_file_path
 from .paths import is_absolute_any as _is_absolute_any
+from .paths import to_fwd
 
 MAX_FILENAME_LEN = 255
 MAX_DIR_LEN = 4096
@@ -78,7 +84,7 @@ def _validate_dir_rel(path):
         return False, "dir entry must be relative to the Working Directory root"
     if ":" in stripped:
         return False, "dir entry must not contain ':'"
-    normalized = stripped.replace("\\", "/")
+    normalized = to_fwd(stripped)
     if normalized.startswith("/"):
         return False, "dir entry must be relative to the Working Directory root"
     parts = normalized.split("/")
@@ -95,8 +101,6 @@ def _normalize_dir_rel(path):
         return ""
     s = path.strip().replace("\\", "/")
     s = re.sub(r"/{2,}", "/", s)
-    while s.endswith("/") and len(s) > 1:
-        s = s.rstrip("/")
     return s.rstrip("/")
 
 
@@ -196,7 +200,7 @@ def is_allowlist_file(name, parsed):
     if not isinstance(name, str):
         return False
     # Use basename if a path was passed (defensive)
-    base = os.path.basename(name.strip().replace("\\", "/"))
+    base = os.path.basename(to_fwd(name.strip()))
     if not base:
         base = name.strip()
     files = (parsed or {}).get("files") or set()
@@ -252,6 +256,34 @@ def is_allowlist_dir(path, working_dir_root, parsed):
 # ---------------------------------------------------------------- Supplemental helpers (for allowlist_writer / report)
 
 
+def load_allowlist_state(path=None):
+    """Read the structured allowlist state from dir-whip-config.yaml.
+
+    ONE file read + parse + legacy count: returns
+    ({"files": [sorted], "dirs": [sorted]}, legacy_count). Missing /
+    unreadable file -> strict-empty mapping + 0 (fail-closed). The
+    single read-side source for allowlist_writer.load_config /
+    load_allowlist_legacy_count and report.load_allowlist_state.
+    """
+    if path is None:
+        path = config_file_path()
+    raw = None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        raw = data.get("allowlist") if isinstance(data, dict) else None
+    except Exception:
+        raw = None
+    parsed = parse_allowlist(raw)
+    legacy = 0
+    if isinstance(raw, list):
+        legacy = sum(1 for x in raw if isinstance(x, str) and x.strip())
+    return {
+        "files": sorted(parsed.get("files") or []),
+        "dirs": sorted(parsed.get("dirs") or []),
+    }, legacy
+
+
 def validate_file_entry(name):
     """Public wrapper for file validation; returns (ok, reason)."""
     return _validate_file(name)
@@ -278,6 +310,7 @@ __all__ = [
     "validate_file_entry",
     "validate_dir_entry",
     "normalize_dir_entry",
+    "load_allowlist_state",
     "MAX_FILENAME_LEN",
     "MAX_DIR_LEN",
 ]

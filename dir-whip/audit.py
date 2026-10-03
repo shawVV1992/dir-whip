@@ -8,7 +8,7 @@ INJECTED via set_classifier to break the audit<->guard cycle. Pure
 decision layer: no host imports, no audit_prompts import.
 
 Layer: core
-Refs: spec 5.18, SCR-043, ADR-0007
+Refs: spec 5.18
 Key exports:
   - set_classifier -- wire the classification chain (assembly-layer injection).
   - AUDIT_PAIRED_TOOLS -- the write-class tools covered by pre/post pairing (single source).
@@ -18,6 +18,9 @@ Key exports:
   - pending_violation_snapshot / pending_violation_paths -- read-only pending-set views (L3 gate input / settlement judgment).
   - pre_snapshot / audit_post_check -- allowed-terminal pre snapshot (cap-guarded) + terminal re-scan/diff violation post-check.
   - SETTLE_TOOL_SCHEMA / settle_paths / lazy_register_settle_tool -- dir_whip_settle schema, quarantine core and lazy registration.
+
+Size: the write-audit lifecycle (snapshot / diff / gate / settle /
+quarantine) is one cohesive state machine over the pending set.
 """
 
 import datetime
@@ -44,6 +47,7 @@ from .events import (
 from .paths import (
     dirwhip_home,
     relativize_target,
+    to_fwd,
     within_working_dir,
 )
 
@@ -62,7 +66,7 @@ from . import subagents
 logger = logging.getLogger("dir-whip")
 
 # Tools whose ALLOWED calls are covered by the pre/post snapshot pairing
-# (v2.25 SCR-057: terminal + execute_code). Single definition point --
+# (terminal + execute_code). Single definition point --
 # consumed by the guard pre branch, the assembly post adapter and the L1
 # transform surface; no second literal list.
 AUDIT_PAIRED_TOOLS = ("terminal", "execute_code")
@@ -79,7 +83,7 @@ WRITE_AUDIT_ENTRY_CAP = 2000
 
 
 def set_classifier(fn):
-    """Wire the classification chain (assembly-layer injection, ADR-0007)."""
+    """Wire the classification chain (assembly-layer injection)."""
     state.audit.classify_fn = fn
 
 
@@ -446,10 +450,8 @@ def _record_settle_stats(working_dir_root):
     """Record one settle action: stats + log only, NO bus event (the emit
     surface stays at 7 events).
 
-    Two counter shapes are maintained: the standard nested verdict counter
-    via stats.record (which also appends the stats.jsonl line) AND the
-    flat ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE) tuple key that
-    stats_snapshot() exposes.
+    The standard nested verdict counter via stats_record (which also
+    appends the stats.jsonl line).
     """
     try:
         stats_record(
@@ -457,11 +459,6 @@ def _record_settle_stats(working_dir_root):
             target=None, reason="same-turn self-heal settlement",
             working_dir_root=working_dir_root,
         )
-        with state.stats.lock:
-            flat_key = ("allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE)
-            state.stats.counters[flat_key] = (
-                state.stats.counters.get(flat_key, 0) + 1
-            )
     except Exception as exc:
         logger.debug("dir-whip: settle stats error (ignored): %s", exc)
 
@@ -508,7 +505,7 @@ def _resolve_settle_keys(paths, working_dir_root, pending):
         if key not in pending:
             _record_settle_rejected("not-in-pending")
             return None, {"error": "path is not in the pending violation "
-                                   "set: %s" % str(path).replace("\\", "/")}
+                                   "set: %s" % to_fwd(path)}
         keys.append(key)
     return keys, None
 

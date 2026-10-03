@@ -16,6 +16,10 @@ Key exports:
   - register_dir_whip_commands -- register the single "dir-whip" slash command; captures ctx; no-op when the host lacks register_command.
   - _dir_whip_cmd -- the registered dispatcher (report + allow|remove|list); never raises.
   - relativize_input / render_two_sections / render_current_state -- command-output helpers.
+
+Size: the merged report and the /dir-whip command family stay
+single-homed (spec 5.7) so field order and allowlist editing never
+diverge.
 """
 
 import logging
@@ -23,22 +27,20 @@ import os
 import re
 from pathlib import Path
 
-from . import allowlist_writer, state
+from . import allowlist, allowlist_writer, state
 
 from .config import (
     effective_working_dir_root,
     load_guard_config,
-    parse_terminal_cwd,
-    profile_config_path,
     profile_terminal_cwd,
 )
 
 from .paths import (
     SESSION_DIR_RE,
     dirwhip_home,
-    get_hermes_home,
     is_absolute_any,
     paths_equal,
+    to_fwd,
 )
 from .stats import stats_jsonl_path
 
@@ -47,54 +49,38 @@ from . import logsetup
 
 # Unified allowlist core (validate_dir_entry backs the command-side input
 # layer).
-from .allowlist import parse_allowlist, validate_dir_entry
+from .allowlist import validate_dir_entry
 
 logger = logging.getLogger("dir-whip")
 
 
-def _resolution_source(ctx):
-    """The resolution-chain step that produces working_dir_root (spec 5.5).
-
-    Mirrors resolve_working_dir_root's order: dir-whip-config override ->
-    profile terminal.cwd -> fail-open. Source strings match the chain's
-    INFO log sources exactly.
-    """
-    try:
-        if load_guard_config().get("working_dir_root"):
-            return "dir-whip-config"
-    except Exception:
-        pass
-    try:
-        profile = getattr(ctx, "profile_name", None)
-        if profile:
-            hermes_home = get_hermes_home()
-            # Reuse the layout-aware resolver (both home layouts).
-            if parse_terminal_cwd(profile_config_path(hermes_home, profile)):
-                return "profile-config"
-    except Exception:
-        pass
-    return "fail-open"
-
-
 def _stats_writable():
-    """Check stats.jsonl writability (Health). Returns (ok, error)."""
+    """Check stats.jsonl writability (Health). Returns (ok, error).
+
+    Non-destructive probe: NO mkdir, NO O_CREAT. An existing stats path
+    must be a writable regular file; otherwise the nearest EXISTING
+    ancestor directory must be writable. A fresh profile (<home>/dir-whip
+    absent) is Good when its ancestor is writable -- the stats writer
+    creates the directory on first append.
+    """
     path = stats_jsonl_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
-        return False, str(exc)
-    fd = None
-    try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    if path.exists():
+        if not path.is_file():
+            return False, "not a regular file: %s" % path
+        if os.access(str(path), os.W_OK):
+            return True, ""
+        return False, "not writable: %s" % path
+    ancestor = path.parent
+    while not ancestor.exists():
+        parent = ancestor.parent
+        if parent == ancestor:
+            break
+        ancestor = parent
+    if not ancestor.is_dir():
+        return False, "not a directory: %s" % ancestor
+    if os.access(str(ancestor), os.W_OK):
         return True, ""
-    except Exception as exc:
-        return False, str(exc)
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                pass
+    return False, "not writable: %s" % ancestor
 
 
 def plugin_version(path=None):
@@ -119,15 +105,18 @@ def plugin_version(path=None):
     return "unknown"
 
 
-def _render_working_dir_line(ctx, working_dir_root):
-    """Line 3: Working Directory + resolving source (spec 5.5 chain)."""
+def _render_working_dir_line(working_dir_root):
+    """Line 3: Working Directory + resolving source (spec 5.5 chain).
+
+    The chain step is recorded by config.resolve_working_dir_root into
+    state.session.working_dir_source (dir-whip-config / profile-config /
+    fail-open); the dir-whip-config step renders as the guard-config
+    display label. A missing label falls back to fail-open.
+    """
     if not working_dir_root:
         return "Working Directory: (unresolved)"
-    source = _resolution_source(ctx)
-    # Display label: the dir-whip-config source renders as "guard-config";
-    # profile-config / fail-open render as-is.
-    if source == "dir-whip-config":
-        source = "guard-config"
+    source = state.session.working_dir_source or "fail-open"
+    source = "guard-config" if source == "dir-whip-config" else source
     return "Working Directory: %s  (source: %s)" % (working_dir_root, source)
 
 
@@ -223,7 +212,7 @@ def render():
         lines.append("State: enabled" if working_dir_root else "State: disabled")
 
         # Line 3: Working Directory + resolving source (5.5 chain).
-        lines.append(_render_working_dir_line(ctx, working_dir_root))
+        lines.append(_render_working_dir_line(working_dir_root))
 
         # Line 4: allowlist multi-line block (formatter above).
         state_map, legacy_n = load_allowlist_state()
@@ -255,24 +244,12 @@ def render():
 def load_allowlist_state():
     """Current structured allowlist + ignored legacy count.
 
-    Returns ({"files": [sorted...], "dirs": [sorted...]}, legacy_count).
-    Legacy flat values are ignored fail-closed by parse_allowlist; the
-    count surfaces them for the clean-break hint. Read-side single source
-    for render() and the command family.
+    Thin delegate to allowlist.load_allowlist_state (ONE file read +
+    parse; the single read-side source for render() and the command
+    family). Returns ({"files": [sorted...], "dirs": [sorted...]},
+    legacy_count).
     """
-    try:
-        cfg = load_guard_config()
-        raw = cfg.get("allowlist")
-    except Exception:
-        raw = None
-    parsed = parse_allowlist(raw)
-    legacy = 0
-    if isinstance(raw, list):
-        legacy = sum(1 for x in raw if isinstance(x, str) and x.strip())
-    return {
-        "files": sorted(parsed.get("files") or []),
-        "dirs": sorted(parsed.get("dirs") or []),
-    }, legacy
+    return allowlist.load_allowlist_state()
 
 
 def relativize_input(token, working_dir_root):
@@ -282,8 +259,8 @@ def relativize_input(token, working_dir_root):
     possible trailing slash (the --create form signal); None means guided
     rejection (root itself / ancestor / outside root).
     """
-    t = str(token).replace("\\", "/").strip()
-    r = str(working_dir_root).replace("\\", "/").rstrip("/")
+    t = to_fwd(token).strip()
+    r = to_fwd(working_dir_root).rstrip("/")
     cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
     t_cmp = t.casefold() if cf else t
     r_cmp = r.casefold() if cf else r
@@ -417,7 +394,7 @@ def _allow_parse_token(tok, fc, dc, numbered, working_dir_root,
         return None, "d", name
     # Path token: ABSOLUTE input is relativized against the root
     # (input tolerance); a relative token is taken as-is.
-    tok_fwd = tok.replace("\\", "/")
+    tok_fwd = to_fwd(tok)
     if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
         rel_raw, reason = relativize_input(tok, working_dir_root)
         if rel_raw is None:
@@ -510,7 +487,7 @@ def _handle_allow(rest):
     ctx = state.session.registered_ctx
     working_dir_root = effective_working_dir_root(ctx)
     working_dir_root_fwd = (
-        str(working_dir_root).replace("\\", "/") if working_dir_root else ""
+        to_fwd(working_dir_root) if working_dir_root else ""
     )
     if not rest:
         if not working_dir_root:
@@ -590,7 +567,7 @@ def _handle_remove(rest):
         else:
             # Name token: relative or absolute (normalized, 5.6); matched
             # by NAME against both sets -- no disk-aware discrimination.
-            tok_fwd = tok.replace("\\", "/")
+            tok_fwd = to_fwd(tok)
             rel = None
             if is_absolute_any(tok_fwd) or tok_fwd.startswith("/"):
                 if working_dir_root:

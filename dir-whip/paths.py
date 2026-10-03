@@ -16,6 +16,7 @@ Key exports:
   - is_inside_session_dir -- True when the path sits under working_dir_root/<session_dir>/... (spec 5.9).
   - dirwhip_home / config_file_path -- profile-aware dir-whip home + dir-whip-config.yaml location.
   - get_hermes_home / profile_home / paths_equal -- home resolution + path equality helpers.
+  - to_fwd -- forward-slash conversion single point (None -> "").
 """
 
 import datetime
@@ -48,7 +49,7 @@ def is_inside_session_dir(path, working_dir_root):
         rel = os.path.relpath(path, working_dir_root)
     except ValueError:
         return False
-    parts = rel.replace("\\", "/").split("/")
+    parts = to_fwd(rel).split("/")
     if parts and SESSION_DIR_RE.match(parts[0]):
         try:
             datetime.datetime.strptime(parts[0][:15].replace("_", ""), "%Y%m%d%H%M%S")
@@ -59,7 +60,7 @@ def is_inside_session_dir(path, working_dir_root):
 
 
 def get_hermes_home():
-    """Return the Hermes home directory path (D5).
+    """Return the Hermes home directory path.
 
     HERMES_HOME environment override FIRST, then the platform default:
     Windows LOCALAPPDATA/hermes (Path.home()/"hermes" fallback when
@@ -180,6 +181,20 @@ def normalize_target(path, working_dir_root):
     return _normalize_posix(path)
 
 
+# ---------------------------------------------------------------- Forward-slash rendering
+
+def to_fwd(path):
+    """Forward-slash form of a path (single conversion point).
+
+    None -> "" (the normalized-empty sentinel used by the allowlist
+    matchers); any other value str()s before the conversion. Every
+    package-side backslash-to-slash conversion goes through here.
+    """
+    if path is None:
+        return ""
+    return str(path).replace("\\", "/")
+
+
 # ---------------------------------------------------------------- Containment (spec 5.3 step 6)
 
 def within_working_dir(target, working_dir_root):
@@ -189,8 +204,8 @@ def within_working_dir(target, working_dir_root):
     ANY host (a WSL session can carry a Windows-style root); native paths
     use os.path.relpath (case-sensitive on POSIX).
     """
-    target_fwd = str(target).replace("\\", "/")
-    root_fwd = str(working_dir_root).replace("\\", "/")
+    target_fwd = to_fwd(target)
+    root_fwd = to_fwd(working_dir_root)
     if _DRIVE_ROOTED_RE.match(target_fwd) and _DRIVE_ROOTED_RE.match(root_fwd):
         target_cf = target_fwd.casefold()
         root_cf = root_fwd.casefold()
@@ -231,13 +246,13 @@ def relativize_target(target, working_dir_root):
         return _hash_prefix(target)
     if os.path.isabs(rel) or rel == os.pardir or rel.startswith(".." + os.sep):
         return _hash_prefix(target)
-    return rel.replace("\\", "/")
+    return to_fwd(rel)
 
 
 def paths_equal(a, b):
     """Forward-slash path equality; case-insensitive on Windows."""
-    a = str(a).replace("\\", "/")
-    b = str(b).replace("\\", "/")
+    a = to_fwd(a)
+    b = to_fwd(b)
     if os.name == "nt":
         return a.casefold() == b.casefold()
     return a == b
@@ -286,6 +301,7 @@ __all__ = [
     "relativize_target",
     "within_working_dir",
     "is_absolute_any",
+    "to_fwd",
     "is_inside_session_dir",
     "SESSION_DIR_RE",
     "get_hermes_home",

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cross-session metadata search over Session Directories -- stateless single-pass os.scandir over every session-format directory and its full tree (spec 4.6).
 
-Locates files without an index (metadata only: session name / rel_path / size / mtime; content search stays the job of grep); filters --task / --name / --since / --until are AND-combined, ordering is session name DESCENDING then (casefold(rel_path), rel_path) ascending, --limit (default 50) applies after ordering with total counted BEFORE truncation. Domain excludes symlinked/junction session dirs, directory reparse points (never traversed) and allowlist ``dirs`` subtrees (SCR-049); boundary validation mirrors create_session_dir.py (spec 4.4) -- omitted --workspace resolves with exactly ONE resolver stderr WARNING (this script adds none), explicit --workspace checks existence first (exit 1) then mismatch (exit 2), and scan errors are fail-open (exit 0).
+Locates files without an index (metadata only: session name / rel_path / size / mtime; content search stays the job of grep); filters --task / --name / --since / --until are AND-combined, ordering is session name DESCENDING then (casefold(rel_path), rel_path) ascending, --limit (default 50) applies after ordering with total counted BEFORE truncation. Domain excludes symlinked/junction session dirs, directory reparse points (never traversed) and allowlist ``dirs`` subtrees; boundary validation mirrors create_session_dir.py (spec 4.4) -- omitted --workspace resolves with exactly ONE resolver stderr WARNING (this script adds none), explicit --workspace checks existence first (exit 1) then mismatch (exit 2), and scan errors are fail-open (exit 0).
 
 Layer: skill-subprocess
-Refs: spec 4.4, spec 4.6, SCR-042, SCR-049
+Refs: spec 4.4, spec 4.6
 Key exports:
   - main -- CLI entry: parse args, validate the boundary, scan + filter + order + truncate, emit plain or JSON; exit 0/1/2 (spec 4.6).
   - scan -- enumerate the search domain: real session-name dirs, per-file lstat records, fail-open {path, error} entries (spec 4.6).
@@ -20,7 +20,7 @@ import re
 import stat
 import sys
 
-# SCR-042 H2: the bundled shared resolver is loaded from THIS script's own
+# The bundled shared resolver is loaded from THIS script's own
 # directory via an absolute path -- independent of sys.path / PYTHONPATH /
 # CWD state, so a same-named workspace file can never hijack the module
 # (python -m / PYTHONPATH shadow / embedded-import vectors). Registering
@@ -35,16 +35,11 @@ workspace_resolver = importlib.util.module_from_spec(_resolver_spec)
 sys.modules["workspace_resolver"] = workspace_resolver
 _resolver_spec.loader.exec_module(workspace_resolver)
 
-# SCR-042 M3: never crash on a non-UTF-8 console/pipe (e.g. cp936 with
+# Never crash on a non-UTF-8 console/pipe (e.g. cp936 with
 # non-ASCII paths) -- encode errors degrade to replacement characters.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
-
-# SCR-049 (spec 4.6): script-local SESSION_NAME_RE copy -- the THIRD copy
-# alongside audit_workspace.py and create_session_dir.py (the stdlib-only /
-# zero-package-import boundary is kept; the copies are registered in 4.6).
-SESSION_NAME_RE = re.compile(r"^\d{8}_\d{6}(?:_\S.*)?$")
 
 EXIT_OK = 0
 EXIT_PARAM_ERROR = 1
@@ -79,17 +74,6 @@ def to_fwd(path):
     return str(path).replace(os.sep, "/")
 
 
-def is_session_name(name):
-    """True if name is YYYYMMDD_HHMMSS or YYYYMMDD_HHMMSS_TaskName with a real timestamp."""
-    if not SESSION_NAME_RE.match(name):
-        return False
-    try:
-        datetime.datetime.strptime(name[:15].replace("_", ""), "%Y%m%d%H%M%S")
-    except ValueError:
-        return False
-    return True
-
-
 def _format_mtime(timestamp):
     """Local-time mtime as YYYY-MM-DDTHH:MM:SS (spec 4.6 result field)."""
     return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%dT%H:%M:%S")
@@ -108,7 +92,7 @@ def _is_reparse_point(st):
 def _dir_exempt(name, dirs_entries):
     """True when a root entry's name is exempt by an allowlist dirs entry.
 
-    v2.26 SCR-061 guard-homologous semantics: the name must EQUAL an
+    Guard-homologous semantics: the name must EQUAL an
     entry (a multi-level entry does not exempt its parent; casefolded on
     Windows only, spec 4.6 — aligned with 4.2 audit_workspace.py and the
     plugin guard matching); the entry list comes from the resolver's
@@ -206,10 +190,10 @@ def scan(workspace, dirs_entries):
             errors.append({"path": to_fwd(entry.path), "error": str(exc)})
             continue
         # Only real directories: junction/symlink dirs are out of domain
-        # (SCR-049 reparse-point exclusion); loose root files never match.
+        # (reparse-point exclusion); loose root files never match.
         if not stat.S_ISDIR(st.st_mode) or _is_reparse_point(st):
             continue
-        if not is_session_name(entry.name):
+        if not workspace_resolver.is_session_name(entry.name):
             continue
         sessions.append(entry.name)
     sessions.sort(reverse=True)

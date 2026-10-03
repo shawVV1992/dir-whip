@@ -5,12 +5,12 @@ root rejection -> outside-root rejection -> two-step user confirmation)
 and the process-lifetime exemption state it feeds (add / segment-
 boundary check / snapshot / clear + narrow config-cache refresh). Core
 discipline: no host imports; the runtime allowlist set + lock live in
-state.session (SCR-061 R3), and the resolved root is read through
+state.session, and the resolved root is read through
 config.resolved_config. The assembly layer keeps the _allow_path_handler
 thin fail-open adapter (tests call it directly).
 
 Layer: core
-Refs: spec 5.7, spec 5.11, SCR-043
+Refs: spec 5.7, spec 5.11
 Key exports:
   - handle -- entry-gating chain + confirmed add (two-step user confirmation).
   - ALLOW_PATH_TOOL_SCHEMA -- OpenAI function-call schema for dir_whip_allow_path (the plugin's only tool).
@@ -40,6 +40,7 @@ from .paths import (
     normalize_target,
     paths_equal,
     relativize_target,
+    to_fwd,
     within_working_dir,
 )
 
@@ -47,16 +48,9 @@ logger = logging.getLogger("dir-whip")
 
 # ---------------------------------------------------------------- Runtime allowlist state
 
-# The process-lifetime exemption set + its lock live in state.session
-# (SCR-061 R3): they survive reset_all and are cleared explicitly by
+# The process-lifetime exemption set + its lock live in state.session.
+# They survive reset_all and are cleared explicitly by
 # runtime_allowlist_clear (session start / register).
-
-
-def _normalize_allowlist_path(path):
-    """Normalize a path for allowlist comparison (forward slashes)."""
-    if path is None:
-        return ""
-    return str(path).replace("\\", "/")
 
 
 def runtime_allowlist_add(path, working_dir_root=None):
@@ -71,7 +65,7 @@ def runtime_allowlist_add(path, working_dir_root=None):
     returned; working_dir_root=None (direct-call/test form) skips the
     assertion.
     """
-    normalized = _normalize_allowlist_path(path)
+    normalized = to_fwd(path)
     if not normalized:
         return messages.ALLOW_PATH_EMPTY_REJECTED_MESSAGE
     if working_dir_root is not None and not within_working_dir(
@@ -91,10 +85,10 @@ def is_runtime_allowlisted(path):
     (file-level registration) and everything UNDER it (directory subtree,
     entry with or without a trailing slash). A bare string prefix does
     NOT match -- allowing "docs" does not exempt a same-prefix sibling
-    like "docs_secret/x.txt". casefold and the forward-slash
-    _normalize_allowlist_path lexical domain are kept.
+    like "docs_secret/x.txt". casefold and the paths.to_fwd lexical
+    domain are kept.
     """
-    normalized = _normalize_allowlist_path(path).casefold()
+    normalized = to_fwd(path).casefold()
     with state.session.runtime_allowlist_lock:
         return any(
             normalized == ec or normalized.startswith(ec.rstrip("/") + "/")
@@ -138,20 +132,15 @@ def dir_whip_allow_path(args, working_dir_root=None, **kwargs):
 
 # ---------------------------------------------------------------- Narrow cache refresh
 
-def _refresh_allowlist_cache():
+def refresh_allowlist_cache():
     """Narrow cache refresh for the unified allowlist.
 
     Invalidates the cache so the next get_cached_config / classify_target
     sees the updated file. Delegates to config.invalidate_config_cache;
-    config no longer reaches this module's state (SCR-061 R3: the runtime
-    allowlist lives in state.session and reset_cache does not clear it).
+    config no longer reaches this module's state (the runtime allowlist
+    lives in state.session and reset_cache does not clear it).
     """
     return config.invalidate_config_cache()
-
-
-def refresh_allowlist_cache():
-    """Public alias for narrow allowlist cache refresh."""
-    return _refresh_allowlist_cache()
 
 
 # ---------------------------------------------------------------- Tool schema + entry gating (spec 5.11)
@@ -194,17 +183,17 @@ def _confirmation_issued(path):
     """True when the path already received its confirmation payload this
     session (casefold-insensitive on the forward-slash form, mirroring
     the runtime allowlist matching)."""
-    normalized = str(path).replace("\\", "/").casefold()
+    normalized = to_fwd(path).casefold()
     with state.session.lock:
         return any(
-            normalized == str(e).replace("\\", "/").casefold()
+            normalized == to_fwd(e).casefold()
             for e in state.session.confirmation_issued
         )
 
 
 def _confirmation_mark(path):
     """Record the path in the session-memory confirmation-issued set."""
-    normalized = str(path).replace("\\", "/")
+    normalized = to_fwd(path)
     with state.session.lock:
         state.session.confirmation_issued.add(normalized)
 
@@ -225,7 +214,7 @@ def _confirmation_payload(path, session_id):
     line is appended when the pending set is non-empty (latch active).
     Fail-open: an unresolved-paths check failure omits the line."""
     payload = messages.ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE % (
-        str(path).replace("\\", "/")
+        to_fwd(path)
     )
     try:
         if pending_violation_paths(session_id):
@@ -293,13 +282,13 @@ def _confirmation_gate(path, confirm, session_id):
             logger.debug(
                 "dir-whip: allow_path confirmation payload re-issued "
                 "(confirm=true without a prior confirmation payload): %s",
-                str(path).replace("\\", "/"),
+                to_fwd(path),
             )
         else:
             logger.debug(
                 "dir-whip: allow_path confirmation payload issued "
                 "(first call): %s",
-                str(path).replace("\\", "/"),
+                to_fwd(path),
             )
     if not (confirm and confirmed):
         return _confirmation_payload(path, session_id)

@@ -7,7 +7,7 @@ Depends on guard for the fail-open latch reset, on config for the cached
 reset (all one-way).
 
 Layer: core
-Refs: spec 5.4, spec 5.17, SCR-050
+Refs: spec 5.4, spec 5.17
 Key exports:
   - session_start -- top-level session-start decision chain; child sessions short-circuit to skipped-child.
   - append_reminder_fallback -- one-shot REMINDER tail note after an unavailable session start (5.17 fallback channel).
@@ -46,8 +46,8 @@ def _record_session_reminder(session_id, status):
 
 
 def _record_orphan_notice(session_id, reason):
-    """One orphan-notice stats row -- delivered OR suppressed (v2.25
-    SCR-057: a falsy injection is never silent; reason carries the
+    """One orphan-notice stats row -- delivered OR suppressed:
+    a falsy injection is never silent; reason carries the
     delivery state). Same non-verdict advisory convention as
     _record_session_reminder (allow outcome -> no bus fanout). Top-level
     path only, so is_subagent is False by construction. Fail-open:
@@ -59,7 +59,7 @@ def _record_orphan_notice(session_id, reason):
 
 
 def _record_orphan_notice_fallback(session_id):
-    """One orphan-notice-fallback stats row (v2.25 SCR-057): the
+    """One orphan-notice-fallback stats row: the
     suppressed notice was re-delivered on the first eligible tool result
     (5.17 pending-notes queue). Stats-only allow row, target None, no bus
     event. Fail-open: events.emit never raises."""
@@ -130,7 +130,7 @@ def _is_error_json_result(result):
 
 def append_reminder_fallback(audited_result, original_result, session_id):
     """One-shot pending-notes tail after an unavailable session start
-    (v2.25 SCR-057: generalized queue -- reminder note + suppressed
+    (generalized queue -- reminder note + suppressed
     orphan notice ride the SAME first eligible call, single-tail
     concatenation; each note keeps its own fire-once flag and stats row).
 
@@ -274,7 +274,7 @@ def _project_skip_id(cwd):
     Evaluated HERE at session start (the active pointer varies across
     sessions); any probe failure fails open to the normal flow.
     """
-    # Pre-R7 state shapes may lack the slot entirely (fail-open).
+    # Older state shapes may lack the slot entirely (fail-open).
     if not hasattr(state.session, "project_active_fn"):
         return None
     project_fn = state.session.project_active_fn
@@ -298,7 +298,7 @@ def _deliver_orphan_notice(working_dir_root, allowlist, session_id, ctx):
     injection (child sessions returned at the top, so subagents never
     scan; CWD-outside sessions returned at the skipped-outside branch).
     Decision logic lives in session_dirs; advise-only TEXT, never a block
-    action. Delivery is three-stated (v2.25 SCR-057, mirroring the 5.17
+    action. Delivery is three-stated (mirroring the 5.17
     reminder diagnostics): delivered (stats row) | suppressed:<no-ctx |
     no-method | falsy-return> (stats row + the notice text cached for the
     pending-notes fallback -- a suppressed delivery is never silent) |

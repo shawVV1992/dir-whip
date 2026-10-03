@@ -5,11 +5,11 @@ ALLOW whose first segment does not exist binds through claims.bind
 (creation signal); a second creation blocks rule_key session-dir-limit
 (the block emits through events: stats + generic blocked bus fanout);
 an mv rename of the bound dir transfers the claim; the orphan scan
-consumes the injected classify chain (ADR-0007), advisory-only. Claim
+consumes the injected classify chain, advisory-only. Claim
 store lives in claims.py (direction: session_dirs -> claims only).
 
 Layer: core
-Refs: spec 5.19, SCR-044, SCR-048
+Refs: spec 5.19
 Key exports:
   - guard_create -- session-dir creation gate: bind / mv-transfer / session-dir-limit block (single enforcement point).
   - guard_script -- create_session_dir.py script gate: arm the pending marker or block.
@@ -37,7 +37,7 @@ from .events import (
     emit,
 )
 
-from .paths import is_absolute_any
+from .paths import is_absolute_any, to_fwd
 
 # Lexical leaf: session-script predicate + mv/cp source lookup.
 from .command_lex import is_session_dir_script, terminal_cp_mv_src
@@ -56,20 +56,20 @@ def _first_segment(normalized, working_dir_root):
     """Root-relative first path segment of a normalized absolute target
     (the claim value domain)."""
     rel = os.path.relpath(str(normalized), str(working_dir_root))
-    return rel.replace("\\", "/").split("/")[0]
+    return to_fwd(rel).split("/")[0]
 
 
 def _token_first_segment(token, working_dir_root):
     """Root-relative first segment of a raw command token: relative
     tokens contribute their leading segment directly; absolute tokens
     are related against the root. None when unrelatable."""
-    tok = str(token).strip("\"'").replace("\\", "/")
+    tok = to_fwd(token).strip("\"'")
     if is_absolute_any(tok):
         try:
             rel = os.path.relpath(tok, str(working_dir_root))
         except ValueError:
             return None
-        tok = rel.replace("\\", "/")
+        tok = to_fwd(rel)
     return tok.split("/")[0]
 
 
@@ -117,8 +117,8 @@ def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
         else messages.SESSION_DIR_LIMIT_BLOCK_MESSAGE
     )
     message = template % {
-        "root": str(working_dir_root).replace("\\", "/"),
-        "claim": str(claim).replace("\\", "/") if claim else "",
+        "root": to_fwd(working_dir_root),
+        "claim": to_fwd(claim) if claim else "",
     }
     emit(
         OUTCOME_BLOCK, tool_name, RULE_KEY_SESSION_DIR_LIMIT, target,
@@ -144,7 +144,7 @@ def scripts_path():
                 "skills", "workspace-organization", "scripts",
             )
         )
-    return str(resolved).replace("\\", "/")
+    return to_fwd(resolved)
 
 
 def script_invocation_line(task, working_dir_root):
@@ -156,7 +156,7 @@ def script_invocation_line(task, working_dir_root):
     "<task_name>").
     """
     return "python %s/create_session_dir.py %s --workspace %s" % (
-        scripts_path(), task, str(working_dir_root).replace("\\", "/"),
+        scripts_path(), task, to_fwd(working_dir_root),
     )
 
 
@@ -181,7 +181,7 @@ def set_classifier(fn):
 def _orphan_notice(working_dir_root, names):
     """Build the advisory notice: header, one listed entry per orphan
     (newest-first is not meaningful here -- name-sorted; capped at 3
-    entries with a "(+N more)" overflow line, v2.25 SCR-057, mirroring
+    entries with a "(+N more)" overflow line, mirroring
     the create_session_dir.py same-day advisory cap), cleanup guidance
     (the create + relocate path via the shared builder), then the
     allowlist registration alternative (tail)."""

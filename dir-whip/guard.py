@@ -32,7 +32,7 @@ from . import subagents
 
 from .terminal import guard_terminal
 
-# Write-class tool set (v2.25 SCR-057): the four write-capable tools.
+# Write-class tool set: the four write-capable tools.
 # Defined HERE at ONE point; the post_tool_call adapter consumes the same
 # constant (no second literal list -- the drift surface that let
 # execute_code escape every defence).
@@ -51,7 +51,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
     Intercepts ONLY the write-class tool set (write_file / patch /
     terminal / execute_code); the guard-disabled shortcut
     (working_dir_root None) runs BEFORE path extraction. execute_code
-    (v2.25 SCR-057) is a snapshot-only member: after the latch check it
+    is a snapshot-only member: after the latch check it
     takes the 5.18 pre snapshot and allows -- its targets are statically
     unparseable, so it is never target-classified.
     """
@@ -99,7 +99,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
         return result
 
     if tool_name == "execute_code":
-        # v2.25 (SCR-057): statically unparseable targets -- no extraction,
+        # Statically unparseable targets -- no extraction,
         # no classification. The latch (above) and the fail-open shortcut
         # (above) already applied; pair the 5.18 pre snapshot
         # (cap-guarded) and allow.

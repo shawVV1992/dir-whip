@@ -8,7 +8,7 @@ session-start audit reset. Kernels and the pending store live in
 audit.py (read-only from here); no host imports.
 
 Layer: core
-Refs: spec 5.18, SCR-040, SCR-041
+Refs: spec 5.18
 Key exports:
   - transform_tool_result -- L1 fire-once notice hook; appends the settle instruction notice.
   - gate_unresolved -- unresolved pending paths for the L3 gate (empty -> gate open).
@@ -43,6 +43,7 @@ from .events import (
 from .paths import (
     dirwhip_home,
     relativize_target,
+    to_fwd,
 )
 
 from .subagents import record_top_session
@@ -68,13 +69,13 @@ def _settle_instruction(paths_display):
     except Exception:
         home = None
     quarantine = "%s/audit-quarantine/" % (
-        str(home).replace("\\", "/") if home else "<home>/dir-whip"
+        to_fwd(home) if home else "<home>/dir-whip"
     )
     return (
         messages.SETTLE_INSTRUCTION_TEMPLATE
         % (
             ", ".join(
-                '"%s"' % str(path).replace("\\", "/")
+                '"%s"' % to_fwd(path)
                 for path in paths_display
             ),
             quarantine,
@@ -92,7 +93,7 @@ def _audit_notice_message(paths):
     edits)."""
     lines = [messages.AUDIT_NOTICE_HEADER_LINE]
     for path in paths:
-        lines.append("  - %s" % str(path).replace("\\", "/"))
+        lines.append("  - %s" % to_fwd(path))
     lines.append(
         _settle_instruction(paths)
         + messages.AUDIT_NOTICE_TAIL_LINE
@@ -221,7 +222,7 @@ def gate_block(tool_name, session_id, is_subagent, working_dir_root,
         "paths": list(rel_paths),
         "latch": "latched",
     })
-    display = [str(path).replace("\\", "/") for path in unresolved]
+    display = [to_fwd(path) for path in unresolved]
     return {
         "action": "block",
         "message": _audit_gate_block_message(display, is_subagent),
@@ -269,7 +270,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
             "continuation nudge issued (attempt %d)" % (count + 1),
             session_id, False,
         )
-        display = [str(path).replace("\\", "/") for path in unresolved]
+        display = [to_fwd(path) for path in unresolved]
         # The resolution choice is presented to the USER; the keep-at-root
         # command carries the REAL absolute forward-slash path(s)
         # (copy-paste runnable; /dir-whip allow accepts batches).

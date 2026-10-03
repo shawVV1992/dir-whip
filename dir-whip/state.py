@@ -10,10 +10,10 @@ classify chain. stats: counters + session fields. config: the config
 cache group (lock / cached result / initialized bit / host lazy
 accessor). Lock-per-group discipline: locks travel with their group;
 cross-group invariants share one lock. Container-only access -- never
-re-export individual fields (ADR-0005).
+re-export individual fields.
 
 Layer: core
-Refs: spec 5.19, SCR-035, ADR-0005
+Refs: spec 5.19
 Key exports:
   - session -- container: registration ctx + working_dir_root/profile + switches + injected host callables + runtime allowlist.
   - audit -- container: pending violations + pre-snapshots + cap/nudge counters + classify chain slot.
@@ -43,12 +43,13 @@ class _SessionState:
         self.register_config_path = None
         self.working_dir_root: str | None = None     # None = unresolved/fail-open (never keeps a stale value)
         self.working_dir_root_initialized = False
+        self.working_dir_source: str | None = None   # chain step: dir-whip-config / profile-config / fail-open
         self.session_profile = None
         self.fail_open_warned = False
         self.emit_enabled = False
-        self.session_cwd_fn = None       # host API injection slot (ADR-0007; filled at register)
-        self.agent_cwd_fn = None         # host API injection slot (ADR-0007; conditional agent-CWD injection)
-        self.project_active_fn: Callable[[], tuple[str, list[str]] | None] | None = None    # host API injection slot (ADR-0007; project-exemption probe, called at on_start)
+        self.session_cwd_fn = None       # host API injection slot (filled at register)
+        self.agent_cwd_fn = None         # host API injection slot (conditional agent-CWD injection)
+        self.project_active_fn: Callable[[], tuple[str, list[str]] | None] | None = None    # host API injection slot (project-exemption probe, called at on_start)
         self.reminder_status: str | None = None      # injected|skipped-outside|skipped-child|unavailable
         self.reminder_pending_fallback = False  # unavailable reminder -> one-shot transform_tool_result fallback armed
         self.orphan_pending_fallback = False    # suppressed orphan notice -> same pending-notes fallback armed
@@ -72,7 +73,7 @@ class _SessionState:
 class _AuditState:
     def __init__(self):
         self.lock = threading.Lock()     # group lock: pending / pre_snapshots invariants
-        # Classification chain slot, wired at register (ADR-0007); it
+        # Classification chain slot, wired at register; it
         # survives reset_all (re-wired at every register).
         self.classify_fn = None
         self.reset()
@@ -102,7 +103,7 @@ class _SessionDirState:
     def __init__(self):
         self.lock = threading.Lock()
         # Orphan-scan classification chain slot, wired at register
-        # (ADR-0007); it survives reset_all.
+        # It survives reset_all.
         self.classify_fn = None
         self.reset()
 

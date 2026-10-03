@@ -3,12 +3,12 @@
 ``files`` = root-level file basenames, ``dirs`` = root-relative recursive
 subtree. Each key stays a single flow-style line (``files: ["a", "b"]``);
 the ``allowlist`` block is replaced line-level with comments above the key
-preserved -- block-style ``- item`` lists are never produced. Pure stdlib
-+ pyyaml, no host imports; path resolution is single-sourced in
+preserved -- block-style ``- item`` lists are never produced. Pure stdlib,
+no host imports; path resolution is single-sourced in
 paths.config_file_path.
 
 Layer: core
-Refs: spec 5.6, SCR-039, ADR-0007
+Refs: spec 5.6
 Key exports:
   - load_config -- current allowlist as structured {"files": [sorted], "dirs": [sorted]}.
   - load_allowlist_legacy_count -- count of ignored legacy flat entries (clean-break visibility signal).
@@ -18,11 +18,9 @@ Key exports:
 import json
 import re
 
-import yaml
-
 from .paths import config_file_path
 
-from .allowlist import parse_allowlist as _allowlist_parse
+from .allowlist import load_allowlist_state
 from .allowlist import format_allowlist as _allowlist_format
 
 # ---------------------------------------------------------------- Constants
@@ -33,35 +31,15 @@ MAX_ENTRIES = 100
 # ---------------------------------------------------------------- Parse/format delegation
 
 
-def _parse_mapping(raw):
-    """Parse raw value via allowlist module (fallback: empty mapping)."""
-    if _allowlist_parse is not None:
-        try:
-            return _allowlist_parse(raw)
-        except Exception:
-            pass
-    if not isinstance(raw, dict):
-        return {"files": set(), "dirs": set()}
-    files = {f for f in (raw.get("files") or []) if isinstance(f, str) and f.strip()}
-    dirs = {
-        str(d).replace("\\", "/").strip().rstrip("/")
-        for d in (raw.get("dirs") or [])
-        if isinstance(d, str) and d.strip()
-    }
-    return {"files": files, "dirs": dirs}
-
-
 def _format_mapping(parsed):
     """Format parsed sets into the canonical mapping of sorted lists."""
-    if _allowlist_format is not None:
-        try:
-            return _allowlist_format(parsed)
-        except Exception:
-            pass
-    return {
-        "files": sorted(str(f) for f in (parsed or {}).get("files") or []),
-        "dirs": sorted(str(d) for d in (parsed or {}).get("dirs") or []),
-    }
+    try:
+        return _allowlist_format(parsed)
+    except Exception:
+        return {
+            "files": sorted(str(f) for f in (parsed or {}).get("files") or []),
+            "dirs": sorted(str(d) for d in (parsed or {}).get("dirs") or []),
+        }
 
 
 # ---------------------------------------------------------------- Path resolution
@@ -72,42 +50,22 @@ def _format_mapping(parsed):
 def load_config():
     """Read the current allowlist as the structured mapping.
 
-    Returns {"files": [sorted...], "dirs": [sorted...]} -- validated,
-    normalized, deduped. Missing key / legacy flat value / unreadable
-    file -> empty mapping (fail-closed; legacy flat values are IGNORED
-    and surfaced as hints by the command layer).
+    Thin delegate to allowlist.load_allowlist_state (ONE read-side
+    source). Returns {"files": [sorted...], "dirs": [sorted...]} --
+    validated, normalized, deduped; missing/unreadable file -> empty
+    mapping (fail-closed).
     """
-    path = config_file_path()
-    if not path.is_file():
-        return {"files": [], "dirs": []}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        raw = data.get("allowlist") if isinstance(data, dict) else None
-        return _format_mapping(_parse_mapping(raw))
-    except Exception:
-        pass
-    return {"files": [], "dirs": []}
+    return load_allowlist_state()[0]
 
 
 def load_allowlist_legacy_count():
     """Number of ignored legacy flat entries under the allowlist key.
 
-    Non-zero only when the raw value is a LIST with string entries --
-    the clean-break visibility signal for /dir-whip list.
+    Thin delegate to allowlist.load_allowlist_state (ONE read-side
+    source); non-zero only when the raw value is a LIST with string
+    entries -- the clean-break visibility signal for /dir-whip list.
     """
-    path = config_file_path()
-    if not path.is_file():
-        return 0
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        raw = data.get("allowlist") if isinstance(data, dict) else None
-        if isinstance(raw, list):
-            return sum(1 for x in raw if isinstance(x, str) and x.strip())
-    except Exception:
-        pass
-    return 0
+    return load_allowlist_state()[1]
 
 
 # ---------------------------------------------------------------- Row-level write (preserves comments)

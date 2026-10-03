@@ -115,8 +115,8 @@ def _flag_value(*flags):
 # curl / wget targets classify through the same T0-T4 chain as the write
 # tools. Non-literal targets are never extracted and fall to the uncertain
 # tier; the blanket uncertain signal for curl / wget stays untouched for
-# non-extracted forms. Read-only mapping (module-level state-form gate,
-# SCR-061 R5); every consumer uses .get().
+# non-extracted forms. Read-only mapping (module-level state-form gate);
+# every consumer uses .get().
 _WRITE_SPECS = MappingProxyType({
     "touch": (_all_literal_args, RULE_KEY_TERMINAL_TOUCH),
     "cp": (_last_literal_arg, RULE_KEY_TERMINAL_CP_MV),
@@ -223,8 +223,8 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
 
         # Session-dir script gate BEFORE the heredoc blanket demotion --
         # a second create_session_dir.py attempt is blocked even in
-        # heredoc form (BLK-3); a first attempt arms the pending_create
-        # marker that the audit post-diff observer consumes (OB-1/OB-2).
+        # heredoc form; a first attempt arms the pending_create
+        # marker that the audit post-diff observer consumes.
         act = session_dirs.guard_script(
             tokens, working_dir_root, session_id, is_subagent,
         )

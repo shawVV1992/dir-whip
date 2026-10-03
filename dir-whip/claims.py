@@ -1,7 +1,7 @@
 """Session-Directory claim store: in-memory owner -> bound-dir maps + write-through session-claims.json sidecar (spec 5.19).
 
 The claims home: owner resolution, bind / mv-transfer / release / heal,
-slot determination and the CLR-1/CLR-2 lifecycle (restore at register,
+slot determination and the claim lifecycle (restore at register,
 resume-keep at top-level session start, explicit clear via
 claims.clear_claims_store from the test-support isolation entry).
 Write-through mirrored to session-claims.json in the default dir-whip
@@ -9,13 +9,13 @@ home (atomic tmp+replace, fail-open, 64-entry ts-LRU); creation gates
 live in session_dirs.py (direction: session_dirs -> claims only).
 
 Layer: core
-Refs: spec 5.19, SCR-044, SCR-048
+Refs: spec 5.19
 Key exports:
-  - load_claims / clear_claims_store -- restore the store at register() / explicit CLR-2 delete (test-support isolation entry).
+  - load_claims / clear_claims_store -- restore the store at register() / explicit delete (test-support isolation entry).
   - claim_of / claim_of_owner -- owner-resolved bound dir name (public read) / raw owner-level read.
   - owner_of / bind / rebind / is_slot_occupied / heal_missing_claim -- owner resolution + claim-slot operations (gate consumers in session_dirs.py).
-  - same_name / is_compliant -- BND-7 claim-name comparison + compliant session-dir name check (shared with session_dirs.py).
-  - observe_added / on_session_start -- script-vector binding observer + top-level claim lifecycle (CLR-1 resume).
+  - same_name / is_compliant -- claim-name comparison + compliant session-dir name check (shared with session_dirs.py).
+  - observe_added / on_session_start -- script-vector binding observer + top-level claim lifecycle (resume).
   - is_entry_alive / persist_locked -- sidecar liveness probe / atomic store write.
   - CLAIMS_STORE_NAME / CLAIMS_STORE_VERSION / CLAIMS_STORE_CAP -- persistent store constants.
 """
@@ -184,7 +184,7 @@ def clear_claims_store():
 
     Called by the test-support isolation entry (tests/support.py) so each
     test starts with no persisted claims; state.reset_all no longer
-    touches the file (SCR-061 R3). Fail-open: never raises (a missing
+    touches the file. Fail-open: never raises (a missing
     file is the normal case).
     """
     try:
@@ -238,7 +238,7 @@ def bind(owner, name, working_dir_root=None):
 
 
 def rebind(owner, name, working_dir_root=None):
-    """Claim transfer (mv rename of the bound dir, MV-1) + write-through."""
+    """Claim transfer (mv rename of the bound dir) + write-through."""
     with state.session_dirs.lock:
         state.session_dirs.claims[owner] = name
         meta = state.session_dirs.claim_meta.get(owner)
@@ -256,7 +256,7 @@ def rebind(owner, name, working_dir_root=None):
 def is_slot_occupied(owner):
     """True when the conversation's slot is taken: a claim OR an
     in-flight script creation (the pending marker counts as the
-    claim, BLK-4)."""
+    claim)."""
     with state.session_dirs.lock:
         return (
             owner in state.session_dirs.claims

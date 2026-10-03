@@ -2,7 +2,7 @@
 
 THE single classification definition: the guard front layer, the audit
 diff and the session-dir gates all consume classify_target through
-set_classifier injection (ADR-0007). Scope-first: T0 out-of-root is
+set_classifier injection. Scope-first: T0 out-of-root is
 ALWAYS external-write, then T1 runtime allowlist > T2 config allowlist
 > T3 Session Directory > T4 block (root included); no approve tier.
 evaluate_target is the shared resolve -> normalize -> classify ->
@@ -48,6 +48,7 @@ from .paths import (
     is_absolute_any,
     is_inside_session_dir,
     normalize_target,
+    to_fwd,
     within_working_dir,
 )
 
@@ -124,15 +125,6 @@ def _resolve_parsed_allowlist(allowlist):
         return {"files": set(), "dirs": set()}
 
 
-# ---------------------------------------------------------------- Verdict helpers (spec 5.13)
-
-def _outcome_reason(outcome):
-    """Short reason string for a verdict event."""
-    if outcome == OUTCOME_EXTERNAL_WRITE:
-        return "target outside working_dir_root"
-    return None
-
-
 # ---------------------------------------------------------------- Block message assembly (spec 5.3)
 
 def _orphan_move_line(target, working_dir_root):
@@ -147,7 +139,7 @@ def _orphan_move_line(target, working_dir_root):
     """
     try:
         rel = os.path.relpath(str(target), str(working_dir_root))
-        first = rel.replace("\\", "/").split("/")[0]
+        first = to_fwd(rel).split("/")[0]
         if not first or first == ".":
             return None
         first_path = os.path.join(str(working_dir_root), first)
@@ -156,7 +148,7 @@ def _orphan_move_line(target, working_dir_root):
         if is_inside_session_dir(first_path, str(working_dir_root)):
             return None
         return 'mv "%s/%s" "<session_dir>/Outputs/"' % (
-            str(working_dir_root).replace("\\", "/"), first
+            to_fwd(working_dir_root), first
         )
     except Exception:
         return None
@@ -172,7 +164,7 @@ def _block_message(target, working_dir_root, is_subagent=False):
     line is replaced by parent-target guidance -- subagents never create
     session directories; no uniqueness / move lines.
     """
-    target_fwd = str(target).replace("\\", "/")
+    target_fwd = to_fwd(target)
     if is_subagent:
         fix_line = messages.BLOCK_MESSAGE_SUBAGENT_FIX_LINE
         post_lines = ""
@@ -249,7 +241,7 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
     except ValueError:
         # Mixed drive/UNC pair on Windows: cannot relate -> external.
         return {"outcome": OUTCOME_EXTERNAL_WRITE, "rule_key": RULE_KEY_EXTERNAL_WRITE}
-    rel_fwd = rel.replace("\\", "/")
+    rel_fwd = to_fwd(rel)
     # T2 root-level file (rel == "." never reaches the file check: the
     # root itself falls through to T4).
     if rel != "." and "/" not in rel_fwd:
@@ -326,9 +318,14 @@ def evaluate_target(target, tool_name, working_dir_root, allowlist,
             session_id, is_subagent,
         )
         return {"action": "block", "message": verdict["message"]}
+    reason = (
+        "target outside working_dir_root"
+        if verdict["outcome"] == OUTCOME_EXTERNAL_WRITE
+        else None
+    )
     emit(
         verdict["outcome"], tool_name, emit_rule_key, normalized,
-        _outcome_reason(verdict["outcome"]), session_id, is_subagent,
+        reason, session_id, is_subagent,
     )
     return None
 
