@@ -26,23 +26,19 @@ import logging
 import os
 import shutil
 
-from . import state
+from . import messages, state
 
 from .config import get_cached_config
 
 from .events import (
+    OUTCOME_ALLOW,
+    OUTCOME_BLOCK,
     RULE_KEY_ROOT_FILE,
     RULE_KEY_WRITE_AUDIT_SETTLE,
     RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED,
     RULE_KEY_WRITE_AUDIT_VIOLATION,
     bus_emit,
     emit,
-)
-
-# Message templates live in the core leaf messages.py.
-from .messages import (
-    SETTLE_TOOL_DESCRIPTION,
-    SETTLE_TOOL_PATHS_DESCRIPTION,
 )
 
 from .paths import (
@@ -157,7 +153,7 @@ def classify_diff(diff, before, after, working_dir_root, allowlist,
         verdict = state.audit.classify_fn(
             abs_path, working_dir_root, allowlist, is_subagent
         )
-        if verdict["outcome"] == "block" and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
+        if verdict["outcome"] == OUTCOME_BLOCK and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
             pending_violations.append(abs_path)
     for name in diff.get("deleted", []):
         info = (before or {}).get(name)
@@ -276,7 +272,7 @@ def pending_violation_paths(session_id, working_dir_root=None, allowlist=None):
                 path, working_dir_root, allowlist or [], is_subagent=False,
                 honor_runtime_allowlist=False,
             )
-            if verdict["outcome"] == "block" and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
+            if verdict["outcome"] == OUTCOME_BLOCK and verdict["rule_key"] == RULE_KEY_ROOT_FILE:
                 unresolved.append(path)
         return sorted(unresolved)
     except Exception as exc:
@@ -349,11 +345,11 @@ def audit_post_check(session_id, task_id, is_subagent=False):
         for path in classified["violations"]:
             pending_violation_add(session_id, path)
             emit(
-                "block", "audit", RULE_KEY_WRITE_AUDIT_VIOLATION, path,
+                OUTCOME_BLOCK, "audit", RULE_KEY_WRITE_AUDIT_VIOLATION, path,
                 "root write audit violation (5.18)", session_id, is_subagent,
             )
             bus_emit("write-audit-violation", {
-                "outcome": "block",
+                "outcome": OUTCOME_BLOCK,
                 "rule_key": RULE_KEY_WRITE_AUDIT_VIOLATION,
                 "path": relativize_target(path, working_dir_root),
                 "is_subagent": bool(is_subagent),
@@ -379,14 +375,14 @@ def audit_post_check(session_id, task_id, is_subagent=False):
 # Description texts live in messages.py.
 SETTLE_TOOL_SCHEMA = {
     "name": "dir_whip_settle",
-    "description": SETTLE_TOOL_DESCRIPTION,
+    "description": messages.SETTLE_TOOL_DESCRIPTION,
     "parameters": {
         "type": "object",
         "properties": {
             "paths": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": SETTLE_TOOL_PATHS_DESCRIPTION,
+                "description": messages.SETTLE_TOOL_PATHS_DESCRIPTION,
             }
         },
         "required": ["paths"],
@@ -447,7 +443,7 @@ def _record_settle_stats(working_dir_root):
     """
     try:
         stats_record(
-            "allow", "settle", RULE_KEY_WRITE_AUDIT_SETTLE,
+            OUTCOME_ALLOW, "settle", RULE_KEY_WRITE_AUDIT_SETTLE,
             target=None, reason="same-turn self-heal settlement",
             working_dir_root=working_dir_root,
         )
@@ -472,7 +468,7 @@ def _record_settle_rejected(reason, is_subagent=False):
     """
     try:
         stats_record(
-            "block", "settle", RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED,
+            OUTCOME_BLOCK, "settle", RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED,
             target=None, reason=reason, is_subagent=is_subagent,
         )
         logger.warning("dir-whip: settle rejected (%s)", reason)

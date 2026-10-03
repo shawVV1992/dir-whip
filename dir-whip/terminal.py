@@ -28,6 +28,7 @@ from .command_lex import (
 )
 
 from .events import (
+    OUTCOME_ALLOW,
     RULE_KEY_TERMINAL_CP_MV,
     RULE_KEY_TERMINAL_DOWNLOAD,
     RULE_KEY_TERMINAL_MKDIR,
@@ -231,7 +232,7 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
         # Heredoc blanket demotion: never parse the body, never block.
         if "<<" in command:
             emit(
-                "allow", "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
+                OUTCOME_ALLOW, "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
                 "heredoc detected, blanket demotion", session_id, is_subagent,
             )
             return None
@@ -248,7 +249,7 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
 
         if is_terminal_uncertain(tokens):
             emit(
-                "allow", "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
+                OUTCOME_ALLOW, "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
                 "write intent detected, target uncertain", session_id, is_subagent,
             )
             return None

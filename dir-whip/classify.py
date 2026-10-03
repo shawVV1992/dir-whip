@@ -20,7 +20,7 @@ Key exports:
 import logging
 import os
 
-from . import state
+from . import messages, state
 
 # Unified allowlist helpers (structured mapping)
 from .allowlist import is_allowlist_dir, is_allowlist_file, parse_allowlist
@@ -31,6 +31,9 @@ from .runtime_allowlist import is_runtime_allowlisted
 from .command_lex import is_device_path
 
 from .events import (
+    OUTCOME_ALLOW,
+    OUTCOME_BLOCK,
+    OUTCOME_EXTERNAL_WRITE,
     RULE_KEY_ALLOWED_FILE,
     RULE_KEY_EXTERNAL_WRITE,
     RULE_KEY_NON_SESSION_DIR,
@@ -39,20 +42,6 @@ from .events import (
     RULE_KEY_SESSION_DIR,
     RULE_KEY_TIER0_ALLOWLIST,
     emit,
-)
-
-# Message templates live in the core leaf messages.py; same-name aliases
-# keep classify.* call sites and test import paths unchanged.
-from .messages import (
-    BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
-    BLOCK_MESSAGE_FIX_LINE_TEMPLATE,
-    BLOCK_MESSAGE_HEADER_LINE,
-    BLOCK_MESSAGE_NEXT_LINE,
-    BLOCK_MESSAGE_REASON_LINE,
-    BLOCK_MESSAGE_SUBAGENT_FIX_LINE,
-    BLOCK_MESSAGE_SUBAGENT_NEXT_LINE,
-    BLOCK_MESSAGE_SUBAGENT_REASON_LINE,
-    BLOCK_MESSAGE_UNIQUENESS_LINE,
 )
 
 from .paths import (
@@ -139,7 +128,7 @@ def _resolve_parsed_allowlist(allowlist):
 
 def _outcome_reason(outcome):
     """Short reason string for a verdict event."""
-    if outcome == "external-write":
+    if outcome == OUTCOME_EXTERNAL_WRITE:
         return "target outside working_dir_root"
     return None
 
@@ -185,29 +174,29 @@ def _block_message(target, working_dir_root, is_subagent=False):
     """
     target_fwd = str(target).replace("\\", "/")
     if is_subagent:
-        fix_line = BLOCK_MESSAGE_SUBAGENT_FIX_LINE
+        fix_line = messages.BLOCK_MESSAGE_SUBAGENT_FIX_LINE
         post_lines = ""
-        reason_line = BLOCK_MESSAGE_SUBAGENT_REASON_LINE
-        next_line = BLOCK_MESSAGE_SUBAGENT_NEXT_LINE
+        reason_line = messages.BLOCK_MESSAGE_SUBAGENT_REASON_LINE
+        next_line = messages.BLOCK_MESSAGE_SUBAGENT_NEXT_LINE
     else:
         fix_line = (
-            BLOCK_MESSAGE_FIX_LINE_TEMPLATE
+            messages.BLOCK_MESSAGE_FIX_LINE_TEMPLATE
             % session_dirs.script_invocation_line(
                 "<task_name>", working_dir_root
             )
         )
-        post_lines = BLOCK_MESSAGE_UNIQUENESS_LINE
+        post_lines = messages.BLOCK_MESSAGE_UNIQUENESS_LINE
         rename_line = _orphan_move_line(target, working_dir_root)
         if rename_line:
             post_lines += "\n" + rename_line
-        reason_line = BLOCK_MESSAGE_REASON_LINE
-        next_line = BLOCK_MESSAGE_NEXT_LINE
+        reason_line = messages.BLOCK_MESSAGE_REASON_LINE
+        next_line = messages.BLOCK_MESSAGE_NEXT_LINE
     return "\n".join(
         (
-            BLOCK_MESSAGE_HEADER_LINE,
+            messages.BLOCK_MESSAGE_HEADER_LINE,
             "Target: %s" % target_fwd,
             fix_line + post_lines,
-            BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
+            messages.BLOCK_MESSAGE_ALLOWLIST_HINT_LINE,
             reason_line,
             next_line,
         )
@@ -245,37 +234,37 @@ def classify_target(target, working_dir_root, allowlist=None, is_subagent=False,
 
     # T0: scope first -- outside-root is ALWAYS external-write
     if not within_working_dir(target, working_dir_root):
-        return {"outcome": "external-write", "rule_key": RULE_KEY_EXTERNAL_WRITE}
+        return {"outcome": OUTCOME_EXTERNAL_WRITE, "rule_key": RULE_KEY_EXTERNAL_WRITE}
 
     # T1: runtime allowlist (strict subtree of root gating)
     if honor_runtime_allowlist and is_runtime_allowlisted(target):
-        return {"outcome": "allow", "rule_key": RULE_KEY_RUNTIME_ALLOWLIST}
+        return {"outcome": OUTCOME_ALLOW, "rule_key": RULE_KEY_RUNTIME_ALLOWLIST}
 
     # T2: config allowlist -- dirs subtree (dual rule_keys kept)
     if is_allowlist_dir(target, working_dir_root, parsed):
-        return {"outcome": "allow", "rule_key": RULE_KEY_TIER0_ALLOWLIST}
+        return {"outcome": OUTCOME_ALLOW, "rule_key": RULE_KEY_TIER0_ALLOWLIST}
 
     try:
         rel = os.path.relpath(target, working_dir_root)
     except ValueError:
         # Mixed drive/UNC pair on Windows: cannot relate -> external.
-        return {"outcome": "external-write", "rule_key": RULE_KEY_EXTERNAL_WRITE}
+        return {"outcome": OUTCOME_EXTERNAL_WRITE, "rule_key": RULE_KEY_EXTERNAL_WRITE}
     rel_fwd = rel.replace("\\", "/")
     # T2 root-level file (rel == "." never reaches the file check: the
     # root itself falls through to T4).
     if rel != "." and "/" not in rel_fwd:
         base = os.path.basename(target)
         if is_allowlist_file(base, parsed):
-            return {"outcome": "allow", "rule_key": RULE_KEY_ALLOWED_FILE}
+            return {"outcome": OUTCOME_ALLOW, "rule_key": RULE_KEY_ALLOWED_FILE}
 
     # T3: session dir
     if is_inside_session_dir(target, working_dir_root):
-        return {"outcome": "allow", "rule_key": RULE_KEY_SESSION_DIR}
+        return {"outcome": OUTCOME_ALLOW, "rule_key": RULE_KEY_SESSION_DIR}
 
     # T4: block (incl. root itself: rel == "." -> root-file)
     rule_key = RULE_KEY_ROOT_FILE if "/" not in rel_fwd else RULE_KEY_NON_SESSION_DIR
     return {
-        "outcome": "block",
+        "outcome": OUTCOME_BLOCK,
         "rule_key": rule_key,
         "message": _block_message(target, working_dir_root, is_subagent),
     }
@@ -327,13 +316,13 @@ def evaluate_target(target, tool_name, working_dir_root, allowlist,
     if limit_block:
         return limit_block
     emit_rule_key = rule_key if is_terminal else verdict["rule_key"]
-    if verdict["outcome"] == "block":
+    if verdict["outcome"] == OUTCOME_BLOCK:
         reason = (
             "terminal write target blocked" if is_terminal
             else "write blocked by guard rule"
         )
         emit(
-            "block", tool_name, emit_rule_key, normalized, reason,
+            OUTCOME_BLOCK, tool_name, emit_rule_key, normalized, reason,
             session_id, is_subagent,
         )
         return {"action": "block", "message": verdict["message"]}

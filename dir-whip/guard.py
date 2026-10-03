@@ -17,7 +17,7 @@ Key exports:
 
 import re
 
-from . import state
+from . import messages, state
 
 from .audit import pre_snapshot
 from .audit_prompts import gate_block, gate_unresolved
@@ -26,11 +26,7 @@ from .classify import evaluate_target, parsed_allowlist_raw
 
 from .config import get_cached_config
 
-from .events import RULE_KEY_FAIL_OPEN, emit
-
-# Message templates live in the core leaf messages.py; same-name aliases
-# keep guard.* call sites and test import paths unchanged.
-from .messages import FAIL_OPEN_WARNING_MESSAGE
+from .events import OUTCOME_FAIL_OPEN, RULE_KEY_FAIL_OPEN, emit
 
 from . import subagents
 
@@ -39,10 +35,8 @@ from .terminal import guard_terminal
 # Write-class tool set (v2.25 SCR-057): the four write-capable tools.
 # Defined HERE at ONE point; the post_tool_call adapter consumes the same
 # constant (no second literal list -- the drift surface that let
-# execute_code escape every defence). INTERCEPTED_TOOLS stays as the
-# compatibility alias for earlier call sites/tests.
+# execute_code escape every defence).
 WRITE_CLASS_TOOLS = ("write_file", "patch", "terminal", "execute_code")
-INTERCEPTED_TOOLS = WRITE_CLASS_TOOLS
 PATCH_FILE_RE = re.compile(r"^\*\*\* Update File:\s*(.+)$", re.MULTILINE)
 
 # Host approval choices that count as granted (host approval.py vocabulary).
@@ -147,11 +141,11 @@ def _warn_fail_open_once(ctx, tool_name, session_id, is_subagent):
         state.session.fail_open_warned = True
         try:
             if ctx and hasattr(ctx, "inject_message"):
-                ctx.inject_message(FAIL_OPEN_WARNING_MESSAGE)
+                ctx.inject_message(messages.FAIL_OPEN_WARNING_MESSAGE)
         except Exception:
             pass
     emit(
-        "fail-open", tool_name, RULE_KEY_FAIL_OPEN, None,
+        OUTCOME_FAIL_OPEN, tool_name, RULE_KEY_FAIL_OPEN, None,
         "working_dir_root unresolved", session_id, is_subagent,
     )
 
@@ -197,5 +191,4 @@ __all__ = [
     "approval_granted",
     "extract_target_paths",
     "reset_fail_open_flag",
-    "FAIL_OPEN_WARNING_MESSAGE",
 ]

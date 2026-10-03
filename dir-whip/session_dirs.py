@@ -22,25 +22,19 @@ Key exports:
 import logging
 import os
 
-from . import state
+from . import messages, state
 
 from .claims import (
     bind, claim_of_owner, heal_missing_claim, is_compliant,
     is_slot_occupied, owner_of, rebind, same_name,
 )
 
-from .events import RULE_KEY_SESSION_DIR, SESSION_DIR_LIMIT_RULE_KEY, emit
-
-# Message templates live in the core leaf messages.py; same-name aliases
-# keep session_dirs.* call sites, __all__ entries and test import paths
-# unchanged.
-from .messages import (
-    ORPHAN_NOTICE_CREATE_RELOCATE_LINE,
-    ORPHAN_NOTICE_HEADER,
-    ORPHAN_NOTICE_MV_LINE,
-    ORPHAN_NOTICE_TAIL,
-    SESSION_DIR_LIMIT_BLOCK_MESSAGE,
-    SESSION_DIR_LIMIT_SUBAGENT_MESSAGE,
+from .events import (
+    OUTCOME_ALLOW,
+    OUTCOME_BLOCK,
+    RULE_KEY_SESSION_DIR,
+    RULE_KEY_SESSION_DIR_LIMIT,
+    emit,
 )
 
 from .paths import is_absolute_any
@@ -51,8 +45,9 @@ from .command_lex import is_session_dir_script, terminal_cp_mv_src
 logger = logging.getLogger("dir-whip")
 
 # The session-dir-limit rule_key is defined in events.py (single
-# definition point); this module re-exports it for consumer/test import
-# paths. <root>/<claim> are substituted at build time by _limit_block.
+# definition point); this module re-exports the renamed constant for
+# consumer/test import paths. <root>/<claim> are substituted at build
+# time by _limit_block.
 
 
 # ---------------------------------------------------------------- Path predicates
@@ -98,7 +93,7 @@ def is_creation_signal(target, working_dir_root, verdict=None):
         if verdict is not None:
             if (
                 not isinstance(verdict, dict)
-                or verdict.get("outcome") != "allow"
+                or verdict.get("outcome") != OUTCOME_ALLOW
                 or verdict.get("rule_key") != RULE_KEY_SESSION_DIR
             ):
                 return False
@@ -117,16 +112,16 @@ def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
     the setdefault chain; generic blocked bus fanout fires) and return
     the block dict."""
     template = (
-        SESSION_DIR_LIMIT_SUBAGENT_MESSAGE
+        messages.SESSION_DIR_LIMIT_SUBAGENT_MESSAGE
         if is_subagent
-        else SESSION_DIR_LIMIT_BLOCK_MESSAGE
+        else messages.SESSION_DIR_LIMIT_BLOCK_MESSAGE
     )
     message = template % {
         "root": str(working_dir_root).replace("\\", "/"),
         "claim": str(claim).replace("\\", "/") if claim else "",
     }
     emit(
-        "block", tool_name, SESSION_DIR_LIMIT_RULE_KEY, target,
+        OUTCOME_BLOCK, tool_name, RULE_KEY_SESSION_DIR_LIMIT, target,
         "per-session session directory limit", session_id, is_subagent,
     )
     return {"action": "block", "message": message}
@@ -190,16 +185,16 @@ def _orphan_notice(working_dir_root, names):
     the create_session_dir.py same-day advisory cap), cleanup guidance
     (the create + relocate path via the shared builder), then the
     allowlist registration alternative (tail)."""
-    lines = [ORPHAN_NOTICE_HEADER]
+    lines = [messages.ORPHAN_NOTICE_HEADER]
     lines.extend("  - %s" % name for name in names[:3])
     if len(names) > 3:
         lines.append("  (+%d more)" % (len(names) - 3))
-    lines.append(ORPHAN_NOTICE_CREATE_RELOCATE_LINE)
+    lines.append(messages.ORPHAN_NOTICE_CREATE_RELOCATE_LINE)
     lines.append(
         "  %s" % script_invocation_line("<task_name>", working_dir_root)
     )
-    lines.append(ORPHAN_NOTICE_MV_LINE)
-    lines.append(ORPHAN_NOTICE_TAIL)
+    lines.append(messages.ORPHAN_NOTICE_MV_LINE)
+    lines.append(messages.ORPHAN_NOTICE_TAIL)
     return "\n".join(lines)
 
 
@@ -235,7 +230,7 @@ def scan_orphans(working_dir_root, allowlist=None):
             )
             if (
                 isinstance(verdict, dict)
-                and verdict.get("outcome") == "block"
+                and verdict.get("outcome") == OUTCOME_BLOCK
             ):
                 orphans.append(name)
         if not orphans:
@@ -276,7 +271,7 @@ def guard_create(verdict, normalized, working_dir_root, session_id=None,
     try:
         if (
             not isinstance(verdict, dict)
-            or verdict.get("outcome") != "allow"
+            or verdict.get("outcome") != OUTCOME_ALLOW
             or verdict.get("rule_key") != RULE_KEY_SESSION_DIR
         ):
             return None
@@ -358,11 +353,7 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
 
 
 __all__ = [
-    "SESSION_DIR_LIMIT_RULE_KEY",
-    "SESSION_DIR_LIMIT_BLOCK_MESSAGE",
-    "SESSION_DIR_LIMIT_SUBAGENT_MESSAGE",
-    "ORPHAN_NOTICE_HEADER",
-    "ORPHAN_NOTICE_TAIL",
+    "RULE_KEY_SESSION_DIR_LIMIT",
     "guard_create",
     "guard_script",
     "scripts_path",

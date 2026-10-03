@@ -23,24 +23,11 @@ Key exports:
 
 import logging
 
-from . import config, state, subagents
+from . import config, messages, state, subagents
 from .audit import pending_violation_paths
-# Message templates live in the core leaf messages.py; same-name aliases
-# keep runtime_allowlist.* call sites and test import paths unchanged
-# (the EXTERNAL rejection message is single-sourced there).
-from .messages import (
-    ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE,
-    ALLOW_PATH_EMPTY_REJECTED_MESSAGE,
-    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,
-    ALLOW_PATH_LATCH_CONTEXT_LINE,
-    ALLOW_PATH_ROOT_REJECTED_MESSAGE,
-    ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,
-    ALLOW_PATH_TOOL_CONFIRM_DESCRIPTION,
-    ALLOW_PATH_TOOL_DESCRIPTION,
-    ALLOW_PATH_TOOL_PATH_DESCRIPTION,
-    RUNTIME_ALLOWLIST_ADDED_TEMPLATE,
-)
 from .events import (
+    OUTCOME_ALLOW,
+    OUTCOME_BLOCK,
     RULE_KEY_ALLOW_PATH_EXTERNAL_REJECTED,
     RULE_KEY_ALLOW_PATH_ROOT_REJECTED,
     RULE_KEY_ALLOW_PATH_SUBAGENT_REJECTED,
@@ -86,15 +73,15 @@ def runtime_allowlist_add(path, working_dir_root=None):
     """
     normalized = _normalize_allowlist_path(path)
     if not normalized:
-        return ALLOW_PATH_EMPTY_REJECTED_MESSAGE
+        return messages.ALLOW_PATH_EMPTY_REJECTED_MESSAGE
     if working_dir_root is not None and not within_working_dir(
         normalize_target(normalized, working_dir_root), working_dir_root
     ):
-        return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
+        return messages.ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
     with state.session.runtime_allowlist_lock:
         state.session.runtime_allowlist.add(normalized)
     logger.debug("dir-whip: runtime allowlist added: %s", normalized)
-    return RUNTIME_ALLOWLIST_ADDED_TEMPLATE % normalized
+    return messages.RUNTIME_ALLOWLIST_ADDED_TEMPLATE % normalized
 
 
 def is_runtime_allowlisted(path):
@@ -176,17 +163,17 @@ def refresh_allowlist_cache():
 # only after explicit user approval.
 ALLOW_PATH_TOOL_SCHEMA = {
     "name": "dir_whip_allow_path",
-    "description": ALLOW_PATH_TOOL_DESCRIPTION,
+    "description": messages.ALLOW_PATH_TOOL_DESCRIPTION,
     "parameters": {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": ALLOW_PATH_TOOL_PATH_DESCRIPTION,
+                "description": messages.ALLOW_PATH_TOOL_PATH_DESCRIPTION,
             },
             "confirm": {
                 "type": "boolean",
-                "description": ALLOW_PATH_TOOL_CONFIRM_DESCRIPTION,
+                "description": messages.ALLOW_PATH_TOOL_CONFIRM_DESCRIPTION,
             },
         },
         "required": ["path"],
@@ -227,12 +214,12 @@ def _confirmation_payload(path, session_id):
     """The confirmation payload for path; the latch-context conditional
     line is appended when the pending set is non-empty (latch active).
     Fail-open: an unresolved-paths check failure omits the line."""
-    payload = ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE % (
+    payload = messages.ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE % (
         str(path).replace("\\", "/")
     )
     try:
         if pending_violation_paths(session_id):
-            payload = payload + "\n" + ALLOW_PATH_LATCH_CONTEXT_LINE
+            payload = payload + "\n" + messages.ALLOW_PATH_LATCH_CONTEXT_LINE
     except Exception as exc:
         logger.debug(
             "dir-whip: allow_path latch-context check failed (fail-open): %s",
@@ -250,20 +237,20 @@ def _entry_rejection(path, session_id):
     # top-down only; parent-guidance variant).
     if subagents._is_subagent_session(session_id):
         emit(
-            "block", "allow-path", RULE_KEY_ALLOW_PATH_SUBAGENT_REJECTED, None,
+            OUTCOME_BLOCK, "allow-path", RULE_KEY_ALLOW_PATH_SUBAGENT_REJECTED, None,
             "subagent-rejected", session_id, True,
         )
-        return ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE
+        return messages.ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE
     if not path:
         return None
     # The Working Directory root itself is never allowlisted.
     working_dir_root, _ = config.resolved_config()
     if working_dir_root and _is_working_dir_root(path, working_dir_root):
         emit(
-            "block", "allow-path", RULE_KEY_ALLOW_PATH_ROOT_REJECTED, None,
+            OUTCOME_BLOCK, "allow-path", RULE_KEY_ALLOW_PATH_ROOT_REJECTED, None,
             "root-target", session_id, False,
         )
-        return ALLOW_PATH_ROOT_REJECTED_MESSAGE
+        return messages.ALLOW_PATH_ROOT_REJECTED_MESSAGE
     # An outside-root path is never allowlisted -- no entry is needed
     # there (writes are allowed and logged, external-write). Same lexical
     # domain as the classify chain (normalize_target + within_working_dir;
@@ -272,10 +259,10 @@ def _entry_rejection(path, session_id):
         normalize_target(str(path), working_dir_root), working_dir_root
     ):
         emit(
-            "block", "allow-path", RULE_KEY_ALLOW_PATH_EXTERNAL_REJECTED,
+            OUTCOME_BLOCK, "allow-path", RULE_KEY_ALLOW_PATH_EXTERNAL_REJECTED,
             None, "external-target", session_id, False,
         )
-        return ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
+        return messages.ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE
     return None
 
 
@@ -333,7 +320,7 @@ def _confirmed_add(args, path, session_id, kwargs):
         # relativizes the target (same privacy shape as the bus event
         # above).
         emit(
-            "allow", "allow-path", RULE_KEY_RUNTIME_ALLOWLIST_ADD, path,
+            OUTCOME_ALLOW, "allow-path", RULE_KEY_RUNTIME_ALLOWLIST_ADD, path,
             "runtime allowlist entry added", session_id,
             subagents._is_subagent_session(session_id),
         )

@@ -25,7 +25,7 @@ from .config import get_cached_config
 
 from .stats import stats_set_session
 
-from .events import RULE_KEY_SUBAGENT_START, RULE_KEY_SUBAGENT_STOP, emit
+from .events import OUTCOME_ALLOW, RULE_KEY_SUBAGENT_START, RULE_KEY_SUBAGENT_STOP, emit
 
 logger = logging.getLogger("dir-whip")
 
@@ -36,7 +36,7 @@ def _is_subagent_session(session_id):
         return session_id in state.session.child_session_ids
 
 
-def _audit_register_child(child_session_id, parent_session_id):
+def register_child(child_session_id, parent_session_id):
     """Record a child session's parent link (pending-set inheritance)."""
     try:
         with state.session.lock:
@@ -56,7 +56,7 @@ def _audit_unregister_child(child_session_id):
         logger.debug("dir-whip: audit unregister child error: %s", exc)
 
 
-def _record_top_session(session_id):
+def record_top_session(session_id):
     """Record the current top-level session (child-inheritance fallback)."""
     state.session.top_session = session_id
 
@@ -79,9 +79,9 @@ def owner_session(session_id):
     return session_id
 
 
-def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
-                      parent_session_id=None, parent_turn_id=None,
-                      parent_subagent_id=None, child_subagent_id=None, **kwargs):
+def subagent_start(child_session_id=None, child_role=None, child_goal=None,
+                   parent_session_id=None, parent_turn_id=None,
+                   parent_subagent_id=None, child_subagent_id=None, **kwargs):
     """subagent_start observer: track the child session.
 
     Adds child_session_id to child_session_ids (so on_session_start skips
@@ -94,7 +94,7 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
                 state.session.child_session_ids.add(child_session_id)
             # Record the parent link so the child's audit detections
             # resolve into the parent's pending-violation set.
-            _audit_register_child(child_session_id, parent_session_id)
+            register_child(child_session_id, parent_session_id)
         stats_set_session(is_subagent=True)
         detail = {
             "child_session_id": child_session_id,
@@ -113,16 +113,16 @@ def on_subagent_start(child_session_id=None, child_role=None, child_goal=None,
         # registered ctx when not yet initialized; result unused.
         get_cached_config(state.session.registered_ctx)
         emit(
-            "allow", "subagent", RULE_KEY_SUBAGENT_START, None,
+            OUTCOME_ALLOW, "subagent", RULE_KEY_SUBAGENT_START, None,
             json.dumps(detail), None, True,
         )
     except Exception as exc:
         logger.debug("dir-whip: subagent_start hook error: %s", exc)
 
 
-def on_subagent_stop(child_session_id=None, child_subagent_id=None,
-                     child_role=None, child_status=None, duration_ms=None,
-                     **kwargs):
+def subagent_stop(child_session_id=None, child_subagent_id=None,
+                  child_role=None, child_status=None, duration_ms=None,
+                  **kwargs):
     """subagent_stop observer: untrack the child session.
 
     Removes child_session_id from child_session_ids and closes the child
@@ -148,18 +148,11 @@ def on_subagent_stop(child_session_id=None, child_subagent_id=None,
         # registered ctx when not yet initialized; result unused.
         get_cached_config(state.session.registered_ctx)
         emit(
-            "allow", "subagent", RULE_KEY_SUBAGENT_STOP, None,
+            OUTCOME_ALLOW, "subagent", RULE_KEY_SUBAGENT_STOP, None,
             json.dumps(detail), None, True,
         )
     except Exception as exc:
         logger.debug("dir-whip: subagent_stop hook error: %s", exc)
 
-
-# Public thin aliases (interface convergence point); cross-module
-# consumers read them as module attributes (seam discipline, spec 5.1).
-register_child = _audit_register_child
-subagent_start = on_subagent_start
-subagent_stop = on_subagent_stop
-record_top_session = _record_top_session
 
 __all__ = ["_is_subagent_session", "owner_session", "register_child", "subagent_start", "subagent_stop", "record_top_session"]

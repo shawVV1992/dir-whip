@@ -37,14 +37,6 @@ from . import state, stats
 
 from .allowlist import parse_allowlist_raw
 
-# Message templates live in the core leaf messages.py; same-name aliases
-# keep config.* / test import paths unchanged (MS-2 pinned).
-from .messages import (
-    ALLOW_PATH_EMPTY_REJECTED_MESSAGE,  # noqa: F401
-    ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE,  # noqa: F401
-    RUNTIME_ALLOWLIST_ADDED_TEMPLATE,  # noqa: F401
-)
-
 from .paths import config_file_path, get_hermes_home
 
 # Session-scoped resolution: a desktop process registers under the ACTIVE
@@ -137,7 +129,7 @@ def resolve_working_dir_root(ctx, config_path=None):
         profile = getattr(ctx, "profile_name", None)
         if profile:
             hermes_home = get_hermes_home()
-            cfg_path = _profile_config_path(hermes_home, profile)
+            cfg_path = profile_config_path(hermes_home, profile)
             cwd = parse_terminal_cwd(cfg_path)
             if cwd:
                 logger.info(
@@ -191,7 +183,7 @@ def effective_working_dir_root(ctx):
     return state.session.working_dir_root
 
 
-def _profile_config_path(hermes_home, profile):
+def profile_config_path(hermes_home, profile):
     """Path to a profile's config.yaml, aware of both home layouts.
 
     At runtime Hermes sets HERMES_HOME to the PROFILE DIRECTORY itself for
@@ -213,14 +205,14 @@ def _profile_config_path(hermes_home, profile):
     return hermes_home / "profiles" / profile / "config.yaml"
 
 
-def _profile_terminal_cwd(ctx):
+def profile_terminal_cwd(ctx):
     """The current profile's terminal.cwd (None when unset/unparseable)."""
     try:
         profile = getattr(ctx, "profile_name", None)
         if not profile:
             return None
         hermes_home = get_hermes_home()
-        cfg_path = _profile_config_path(hermes_home, profile)
+        cfg_path = profile_config_path(hermes_home, profile)
         return parse_terminal_cwd(cfg_path)
     except Exception:
         return None
@@ -233,11 +225,6 @@ def set_session_profile(profile):
     paths.profile_home), not the register-time active profile's.
     """
     state.session.session_profile = profile
-
-
-# Session-directory detection (spec 5.9) lives in paths.py; the same-name
-# re-export keeps config.* / test import paths unchanged.
-from .paths import SESSION_DIR_RE, is_inside_session_dir  # noqa: F401
 
 
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
@@ -371,12 +358,7 @@ def reset_cache():
     stats.stats_reset()
 
 
-# Alias surface: profile probe helpers + report-facing lazy resolution.
-profile_terminal_cwd = _profile_terminal_cwd
-profile_config_path = _profile_config_path
-
-# Declared public surface; is_inside_session_dir / SESSION_DIR_RE are
-# re-exported from paths.py (consumer/test import paths).
+# Declared public surface.
 __all__ = [
     "get_cached_config",
     "resolved_config",
@@ -392,6 +374,4 @@ __all__ = [
     "effective_working_dir_root",
     "profile_terminal_cwd",
     "profile_config_path",
-    "is_inside_session_dir",
-    "SESSION_DIR_RE",
 ]

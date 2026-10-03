@@ -26,7 +26,6 @@ from pathlib import Path
 from . import allowlist_writer, state
 
 from .config import (
-    SESSION_DIR_RE,
     effective_working_dir_root,
     load_guard_config,
     parse_terminal_cwd,
@@ -34,7 +33,13 @@ from .config import (
     profile_terminal_cwd,
 )
 
-from .paths import dirwhip_home, get_hermes_home, is_absolute_any, paths_equal
+from .paths import (
+    SESSION_DIR_RE,
+    dirwhip_home,
+    get_hermes_home,
+    is_absolute_any,
+    paths_equal,
+)
 from .stats import stats_jsonl_path
 
 # Diagnostic log path: single source of truth from logsetup.

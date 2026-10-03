@@ -70,22 +70,15 @@ def _observe_unseen_tool(tool_name, session_id):
                 return
             state.session.unseen_tools.add(key)
         events.emit(
-            "allow", tool_name, "unseen:" + str(tool_name), None,
+            events.OUTCOME_ALLOW, tool_name, "unseen:" + str(tool_name), None,
             "non-write-class tool observed (once per session)", session_id,
             subagents._is_subagent_session(session_id),
         )
     except Exception as exc:
         logger.debug("dir-whip: unseen probe failed (fail-open): %s", exc)
 
-# Runtime allowlist surface: see runtime_allowlist.py.
-from .runtime_allowlist import (
-    ALLOW_PATH_TOOL_SCHEMA,
-    ALLOW_PATH_SUBAGENT_REJECTED_MESSAGE,  # noqa: F401
-    ALLOW_PATH_ROOT_REJECTED_MESSAGE,  # noqa: F401
-    ALLOW_PATH_CONFIRMATION_PAYLOAD_TEMPLATE,  # noqa: F401
-    ALLOW_PATH_LATCH_CONTEXT_LINE,  # noqa: F401
-)
-from .config import ALLOW_PATH_EXTERNAL_REJECTED_MESSAGE  # noqa: F401
+# Runtime allowlist tool schema (the message constants live in messages.py).
+from .runtime_allowlist import ALLOW_PATH_TOOL_SCHEMA
 
 # Bundled skill description (spec 3.1; converged sentence).
 SKILL_DESCRIPTION = (
@@ -290,7 +283,7 @@ def on_post_tool_call(tool_name=None, args=None, result=None, task_id=None,
                 session_id, task_id, is_subagent=subagents._is_subagent_session(session_id),
             )
         events.emit(
-            "allow", tool_name, "landed:" + str(tool_name), target,
+            events.OUTCOME_ALLOW, tool_name, "landed:" + str(tool_name), target,
             "write tool call completed (status: %s)" % (status or "ok"),
             session_id, subagents._is_subagent_session(session_id),
         )
@@ -313,7 +306,8 @@ def on_post_approval_response(choice=None, session_key=None, surface=None,
             else RULE_KEY_APPROVAL_DENIED
         )
         events.emit(
-            "allow" if granted else "block", "approval", rule_key, None,
+            events.OUTCOME_ALLOW if granted else events.OUTCOME_BLOCK,
+            "approval", rule_key, None,
             "host approval %s" % ("granted" if granted else "denied"),
             kwargs.get("session_id"), False,
         )
@@ -346,7 +340,7 @@ def on_pre_command(surface=None, command=None, alias_used=None, args_raw=None,
         if platform is not None:
             detail["platform"] = platform
         events.emit(
-            "allow", "command", "pre-command:" + str(command or ""), None,
+            events.OUTCOME_ALLOW, "command", "pre-command:" + str(command or ""), None,
             json.dumps(detail), None, False,
         )
     except Exception as exc:

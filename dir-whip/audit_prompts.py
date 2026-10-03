@@ -20,7 +20,7 @@ Key exports:
 import json
 import logging
 
-from . import state
+from . import messages, state
 
 from .audit import (
     AUDIT_PAIRED_TOOLS,
@@ -32,26 +32,12 @@ from .audit import (
 )
 
 from .events import (
+    OUTCOME_ALLOW,
+    OUTCOME_BLOCK,
     RULE_KEY_PRE_VERIFY_NUDGE,
     RULE_KEY_WRITE_AUDIT_GATE_BLOCK,
     bus_emit,
     emit,
-)
-
-# Message templates live in the core leaf messages.py.
-from .messages import (
-    AUDIT_NOTICE_HEADER_LINE,
-    AUDIT_NOTICE_TAIL_LINE,
-    GATE_BLOCK_FIX_LINE,
-    GATE_BLOCK_HEADER_LINE,
-    GATE_BLOCK_NEXT_LINE,
-    GATE_BLOCK_REASON_LINE,
-    GATE_BLOCK_SETTLE_LINE,
-    GATE_BLOCK_SUBAGENT_FIX_LINE,
-    GATE_BLOCK_SUBAGENT_NEXT_LINE,
-    GATE_BLOCK_SUBAGENT_REASON_LINE,
-    NUDGE_MESSAGE_TEMPLATE,
-    SETTLE_INSTRUCTION_TEMPLATE,
 )
 
 from .paths import (
@@ -85,7 +71,7 @@ def _settle_instruction(paths_display):
         str(home).replace("\\", "/") if home else "<home>/dir-whip"
     )
     return (
-        SETTLE_INSTRUCTION_TEMPLATE
+        messages.SETTLE_INSTRUCTION_TEMPLATE
         % (
             ", ".join(
                 '"%s"' % str(path).replace("\\", "/")
@@ -104,12 +90,12 @@ def _audit_notice_message(paths):
     USER ("ask the user to add") with the exact command instruction and
     the latch-period freeze explicit (all writes frozen incl. config
     edits)."""
-    lines = [AUDIT_NOTICE_HEADER_LINE]
+    lines = [messages.AUDIT_NOTICE_HEADER_LINE]
     for path in paths:
         lines.append("  - %s" % str(path).replace("\\", "/"))
     lines.append(
         _settle_instruction(paths)
-        + AUDIT_NOTICE_TAIL_LINE
+        + messages.AUDIT_NOTICE_TAIL_LINE
     )
     return "\n".join(lines)
 
@@ -191,26 +177,26 @@ def gate_unresolved(session_id, working_dir_root, allowlist):
 def _audit_gate_block_message(display_paths, is_subagent):
     """L3 gate block message: unresolved paths + remediation, with the
     [Reason]/[Next] cue (subagent variant: report to the parent)."""
-    lines = [GATE_BLOCK_HEADER_LINE]
+    lines = [messages.GATE_BLOCK_HEADER_LINE]
     for path in display_paths:
         lines.append("  - %s" % path)
     if is_subagent:
-        lines.append(GATE_BLOCK_SUBAGENT_FIX_LINE)
-        lines.append(GATE_BLOCK_SUBAGENT_REASON_LINE)
-        lines.append(GATE_BLOCK_SUBAGENT_NEXT_LINE)
+        lines.append(messages.GATE_BLOCK_SUBAGENT_FIX_LINE)
+        lines.append(messages.GATE_BLOCK_SUBAGENT_REASON_LINE)
+        lines.append(messages.GATE_BLOCK_SUBAGENT_NEXT_LINE)
     else:
         # The config-allowlist option is attributed to the USER with the
         # exact command and the latch-period freeze explicit.
-        lines.append(GATE_BLOCK_FIX_LINE)
+        lines.append(messages.GATE_BLOCK_FIX_LINE)
         # The gate blocks remediation mv/rm, so the message must name the
         # tool channel or the loop never closes.
         lines.append(
-            GATE_BLOCK_SETTLE_LINE % ", ".join(
+            messages.GATE_BLOCK_SETTLE_LINE % ", ".join(
                 '"%s"' % path for path in display_paths
             )
         )
-        lines.append(GATE_BLOCK_REASON_LINE)
-        lines.append(GATE_BLOCK_NEXT_LINE)
+        lines.append(messages.GATE_BLOCK_REASON_LINE)
+        lines.append(messages.GATE_BLOCK_NEXT_LINE)
     return "\n".join(lines)
 
 
@@ -225,12 +211,12 @@ def gate_block(tool_name, session_id, is_subagent, working_dir_root,
     """
     rel_paths = [relativize_target(path, working_dir_root) for path in unresolved]
     emit(
-        "block", tool_name, RULE_KEY_WRITE_AUDIT_GATE_BLOCK, None,
+        OUTCOME_BLOCK, tool_name, RULE_KEY_WRITE_AUDIT_GATE_BLOCK, None,
         "%d unresolved root write audit violation(s)" % len(unresolved),
         session_id, is_subagent,
     )
     bus_emit("write-audit-gate-block", {
-        "outcome": "block",
+        "outcome": OUTCOME_BLOCK,
         "rule_key": RULE_KEY_WRITE_AUDIT_GATE_BLOCK,
         "paths": list(rel_paths),
         "latch": "latched",
@@ -279,7 +265,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         # session-cumulative attempt ordinal (counter value AFTER
         # increment). Allow outcome -> no bus fanout (emit surface = 7).
         emit(
-            "allow", "verify", RULE_KEY_PRE_VERIFY_NUDGE, None,
+            OUTCOME_ALLOW, "verify", RULE_KEY_PRE_VERIFY_NUDGE, None,
             "continuation nudge issued (attempt %d)" % (count + 1),
             session_id, False,
         )
@@ -291,7 +277,7 @@ def pre_verify_nudge(session_id=None, changed_paths=None, **kwargs):
         return {
             "action": "continue",
             "message": (
-                NUDGE_MESSAGE_TEMPLATE
+                messages.NUDGE_MESSAGE_TEMPLATE
                 % (len(display), _settle_instruction(display),
                    keep_command)
             ),

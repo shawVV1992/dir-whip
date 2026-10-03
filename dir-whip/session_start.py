@@ -19,11 +19,9 @@ import datetime
 import json
 import logging
 
-from . import audit_prompts, claims, config, events, runtime_allowlist, subagents, session_dirs, state, stats
+from . import audit_prompts, claims, config, events, messages, runtime_allowlist, subagents, session_dirs, state, stats
 
-from .events import (RULE_KEY_ORPHAN_NOTICE, RULE_KEY_ORPHAN_NOTICE_FALLBACK, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
-
-from .messages import DISCIPLINE_BLOCK_MESSAGE
+from .events import (OUTCOME_ALLOW, RULE_KEY_ORPHAN_NOTICE, RULE_KEY_ORPHAN_NOTICE_FALLBACK, RULE_KEY_SESSION_REMINDER, RULE_KEY_SESSION_REMINDER_FALLBACK)
 
 from .paths import within_working_dir
 
@@ -42,7 +40,7 @@ def _record_session_reminder(session_id, status):
     sessions record their own skipped-child state. Allow outcome -> no bus
     fanout. Fail-open: events.emit never raises."""
     events.emit(
-        "allow", "session", RULE_KEY_SESSION_REMINDER, None,
+        OUTCOME_ALLOW, "session", RULE_KEY_SESSION_REMINDER, None,
         status, session_id, subagents._is_subagent_session(session_id),
     )
 
@@ -55,7 +53,7 @@ def _record_orphan_notice(session_id, reason):
     path only, so is_subagent is False by construction. Fail-open:
     events.emit never raises."""
     events.emit(
-        "allow", "session", RULE_KEY_ORPHAN_NOTICE, None,
+        OUTCOME_ALLOW, "session", RULE_KEY_ORPHAN_NOTICE, None,
         reason, session_id, False,
     )
 
@@ -66,7 +64,7 @@ def _record_orphan_notice_fallback(session_id):
     (5.17 pending-notes queue). Stats-only allow row, target None, no bus
     event. Fail-open: events.emit never raises."""
     events.emit(
-        "allow", "session", RULE_KEY_ORPHAN_NOTICE_FALLBACK, None,
+        OUTCOME_ALLOW, "session", RULE_KEY_ORPHAN_NOTICE_FALLBACK, None,
         "suppressed orphan notice re-delivered on the first eligible "
         "tool result",
         session_id, False,
@@ -81,7 +79,7 @@ def _record_reminder_fallback(session_id):
     Stats-only: the allow outcome with target None fans out NO bus event.
     Fail-open: events.emit never raises."""
     events.emit(
-        "allow", "session", RULE_KEY_SESSION_REMINDER_FALLBACK, None,
+        OUTCOME_ALLOW, "session", RULE_KEY_SESSION_REMINDER_FALLBACK, None,
         "session-start reminder re-delivered on the first eligible "
         "tool result",
         session_id, False,
@@ -99,7 +97,7 @@ def _inject_reminder(ctx, session_id):
     armed, and the debug line recording the method-existence detail.
     """
     has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
-    if has_method and ctx.inject_message(DISCIPLINE_BLOCK_MESSAGE):
+    if has_method and ctx.inject_message(messages.DISCIPLINE_BLOCK_MESSAGE):
         state.session.reminder_status = "injected"
         _record_session_reminder(session_id, "injected")
         return
@@ -130,7 +128,7 @@ def _is_error_json_result(result):
     return isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2
 
 
-def _append_reminder_fallback(audited_result, original_result, session_id):
+def append_reminder_fallback(audited_result, original_result, session_id):
     """One-shot pending-notes tail after an unavailable session start
     (v2.25 SCR-057: generalized queue -- reminder note + suppressed
     orphan notice ride the SAME first eligible call, single-tail
@@ -165,7 +163,7 @@ def _append_reminder_fallback(audited_result, original_result, session_id):
         if pending_reminder:
             state.session.reminder_pending_fallback = False
             _record_reminder_fallback(session_id)
-            parts.append(DISCIPLINE_BLOCK_MESSAGE)
+            parts.append(messages.DISCIPLINE_BLOCK_MESSAGE)
         if pending_orphan:
             state.session.orphan_pending_fallback = False
             _record_orphan_notice_fallback(session_id)
@@ -370,8 +368,6 @@ def session_start(session_id, ctx):
 
 # The assembly transform_tool_result adapter calls this public entry
 # (audit first, then the one-shot fallback note).
-append_reminder_fallback = _append_reminder_fallback
-
 __all__ = [
     "session_start",
     "append_reminder_fallback",

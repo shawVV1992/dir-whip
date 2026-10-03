@@ -4,12 +4,13 @@ Records one single-line verdict event per guard decision and fans out
 verdict-derived bus events (blocked / external-write) under a geometric
 outside-root basis; working_dir_root and profile resolve from state,
 session_id / is_subagent stay explicit params. No host imports; single
-definition point for every static RULE_KEY_* (values frozen).
+definition point for every static RULE_KEY_* and OUTCOME_* (values frozen).
 
 Layer: core
 Refs: spec 5.13, spec 5.14, SCR-052
 Key exports:
   - RULE_KEY_* -- the frozen static rule_key constants (single definition point).
+  - OUTCOME_* -- the frozen verdict-axis outcome constants (single definition point).
   - emit -- emit ONE verdict event (stats + jsonl + leveled log + bus sidecar); never raises.
   - bus_emit -- bare-name dir-whip bus event emit; silent degradation when the bus is absent.
 """
@@ -25,6 +26,15 @@ from .paths import normalize_target, relativize_target, within_working_dir
 from .stats import stats_record
 
 logger = logging.getLogger("dir-whip")
+
+# ---------------------------------------------------------------- Frozen outcome constants
+# Verdict-axis outcome values: the SINGLE definition point (values frozen
+# verbatim; spec 5.13). Non-verdict axes stay literal: approval
+# granted/denied/requested, bus event names, the "allowlisted" payload.
+OUTCOME_BLOCK = "block"
+OUTCOME_ALLOW = "allow"
+OUTCOME_FAIL_OPEN = "fail-open"
+OUTCOME_EXTERNAL_WRITE = "external-write"
 
 # ---------------------------------------------------------------- Frozen rule_key constants
 # Single definition point for every static rule_key; VALUES ARE FROZEN.
@@ -50,7 +60,7 @@ RULE_KEY_TERMINAL_MKDIR = "terminal-mkdir"
 RULE_KEY_TERMINAL_DOWNLOAD = "terminal-download"
 
 # Audit / session / observe rule_keys.
-SESSION_DIR_LIMIT_RULE_KEY = "session-dir-limit"
+RULE_KEY_SESSION_DIR_LIMIT = "session-dir-limit"
 RULE_KEY_WRITE_AUDIT_VIOLATION = "write-audit-violation"
 RULE_KEY_WRITE_AUDIT_GATE_BLOCK = "write-audit-gate-block"
 RULE_KEY_WRITE_AUDIT_SETTLE_REJECTED = "write-audit-settle-rejected"
@@ -133,22 +143,22 @@ def emit(outcome, tool, rule_key, target, reason, session_id, is_subagent):
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
         }
         line = json.dumps(event)
-        if outcome in ("block", "fail-open"):
+        if outcome in (OUTCOME_BLOCK, OUTCOME_FAIL_OPEN):
             logger.warning("dir-whip: verdict %s", line)
-        elif outside or outcome == "external-write":
+        elif outside or outcome == OUTCOME_EXTERNAL_WRITE:
             logger.info("dir-whip: verdict %s", line)
         else:
             logger.debug("dir-whip: verdict %s", line)
         # Verdict-derived bus events (privacy-shaped relative target),
         # same geometric basis as the log routing.
-        if outcome == "block" and rule_key not in _BUS_SKIP_RULE_KEYS:
+        if outcome == OUTCOME_BLOCK and rule_key not in _BUS_SKIP_RULE_KEYS:
             bus_emit("blocked", {
                 "outcome": outcome,
                 "rule_key": rule_key,
                 "target": rel_target,
             })
         elif (
-            (outside or outcome == "external-write")
+            (outside or outcome == OUTCOME_EXTERNAL_WRITE)
             and rule_key not in _BUS_SKIP_RULE_KEYS
         ):
             bus_emit("external-write", {
@@ -193,7 +203,11 @@ def bus_emit(event_name, payload):
 __all__ = [
     "emit",
     "bus_emit",
-    "SESSION_DIR_LIMIT_RULE_KEY",
+    "OUTCOME_BLOCK",
+    "OUTCOME_ALLOW",
+    "OUTCOME_FAIL_OPEN",
+    "OUTCOME_EXTERNAL_WRITE",
+    "RULE_KEY_SESSION_DIR_LIMIT",
     "RULE_KEY_EXTERNAL_WRITE",
     "RULE_KEY_RUNTIME_ALLOWLIST",
     "RULE_KEY_TIER0_ALLOWLIST",
