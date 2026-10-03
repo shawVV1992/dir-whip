@@ -16,6 +16,7 @@ Key exports:
 """
 
 import logging
+from types import MappingProxyType
 
 from .classify import evaluate_target, session_cwd
 
@@ -114,15 +115,16 @@ def _flag_value(*flags):
 # curl / wget targets classify through the same T0-T4 chain as the write
 # tools. Non-literal targets are never extracted and fall to the uncertain
 # tier; the blanket uncertain signal for curl / wget stays untouched for
-# non-extracted forms.
-_WRITE_SPECS = {
+# non-extracted forms. Read-only mapping (module-level state-form gate,
+# SCR-061 R5); every consumer uses .get().
+_WRITE_SPECS = MappingProxyType({
     "touch": (_all_literal_args, RULE_KEY_TERMINAL_TOUCH),
     "cp": (_last_literal_arg, RULE_KEY_TERMINAL_CP_MV),
     "mv": (_last_literal_arg, RULE_KEY_TERMINAL_CP_MV),
     "mkdir": (_all_literal_args, RULE_KEY_TERMINAL_MKDIR),
     "curl": (_flag_value("-o", "--output"), RULE_KEY_TERMINAL_DOWNLOAD),
     "wget": (_flag_value("-O", "--output-document"), RULE_KEY_TERMINAL_DOWNLOAD),
-}
+})
 
 
 def _segment_block_targets(seg):

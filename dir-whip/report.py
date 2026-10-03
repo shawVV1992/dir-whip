@@ -97,12 +97,6 @@ def _stats_writable():
                 pass
 
 
-# Report display labels for the resolution-chain sources: the
-# dir-whip-config source renders as "guard-config"; profile-config /
-# fail-open render as-is.
-_SOURCE_LABELS = {"dir-whip-config": "guard-config"}
-
-
 def plugin_version(path=None):
     """The plugin version from the sibling plugin.yaml (the single version
     source). Simple text parse, NO PyYAML: the first `version:` line. On
@@ -130,7 +124,10 @@ def _render_working_dir_line(ctx, working_dir_root):
     if not working_dir_root:
         return "Working Directory: (unresolved)"
     source = _resolution_source(ctx)
-    source = _SOURCE_LABELS.get(source, source)
+    # Display label: the dir-whip-config source renders as "guard-config";
+    # profile-config / fail-open render as-is.
+    if source == "dir-whip-config":
+        source = "guard-config"
     return "Working Directory: %s  (source: %s)" % (working_dir_root, source)
 
 

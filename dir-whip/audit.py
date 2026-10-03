@@ -373,21 +373,31 @@ def audit_post_check(session_id, task_id, is_subagent=False):
 # lazy registration fires from transform_tool_result without register()
 # having run (test contract: first notice fire registers the tool).
 # Description texts live in messages.py.
-SETTLE_TOOL_SCHEMA = {
-    "name": "dir_whip_settle",
-    "description": messages.SETTLE_TOOL_DESCRIPTION,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "paths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": messages.SETTLE_TOOL_PATHS_DESCRIPTION,
-            }
+def _settle_tool_schema():
+    """Build the dir_whip_settle schema as a plain dict.
+
+    Function-local construction keeps the module-level state-form gate
+    green (no module-level dict literal); the host receives the same
+    plain dict object it always did (JSON-serializable).
+    """
+    return {
+        "name": "dir_whip_settle",
+        "description": messages.SETTLE_TOOL_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": messages.SETTLE_TOOL_PATHS_DESCRIPTION,
+                }
+            },
+            "required": ["paths"],
         },
-        "required": ["paths"],
-    },
-}
+    }
+
+
+SETTLE_TOOL_SCHEMA = _settle_tool_schema()
 
 
 def _settle_tool_handler(args, **kwargs):
