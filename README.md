@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.3](https://img.shields.io/badge/version-0.8.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.4](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -340,7 +340,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.3
+[dir-whip] v0.8.4
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -363,7 +363,7 @@ it lives at `profiles/<name>/dir-whip/`.
 | Field | Meaning |
 | ----- | ------- |
 | `allowlist.files` | Root-level file basenames allowlist (e.g. `README.md`); name validation rejects `..`, absolute forms and path separators |
-| `allowlist.dirs` | Working-Directory-relative dir paths (e.g. `projects/foo`), **recursive subtree exemption**, multi-level allowed |
+| `allowlist.dirs` | Working-Directory-relative dir paths (e.g. `projects/foo`), **recursive subtree exemption**, multi-level allowed (exemption is root-level name equality — a multi-level entry does not exempt its parent directory) |
 | `allowlist` key missing | Strict empty fallback — the allowlist is empty and every root-level write is blocked |
 | `working_dir_root` | Explicit Working Directory override; `/dir-whip` prints a WARNING when it differs from the profile `terminal.cwd` |
 

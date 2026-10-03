@@ -1,6 +1,6 @@
 """All mutable plugin runtime state in five cohesive containers: session / audit / session_dirs / stats / config.
 
-session: registration-context slot, working_dir_root/profile, fail-open
+session: registration-context slot, working_dir_root/profile + resolution source, fail-open
 latch, emit switch, injected host callables, child-session set, parent
 links, top-session fallback, runtime allowlist set + lock. audit:
 pre-snapshots, pending violations, cap/nudge counters, injected classify
@@ -15,7 +15,7 @@ re-export individual fields.
 Layer: core
 Refs: spec 5.19
 Key exports:
-  - session -- container: registration ctx + working_dir_root/profile + switches + injected host callables + runtime allowlist.
+  - session -- container: registration ctx + working_dir_root/profile + resolution source + switches + injected host callables + runtime allowlist.
   - audit -- container: pending violations + pre-snapshots + cap/nudge counters + classify chain slot.
   - session_dirs -- container: per-session claims + pending markers + claim sidecar meta + classify chain slot.
   - stats -- container: outcome counters + session fields.

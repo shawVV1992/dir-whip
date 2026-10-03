@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.3](https://img.shields.io/badge/version-0.8.3-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.4](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -274,7 +274,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.3
+[dir-whip] v0.8.4
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -297,7 +297,7 @@ Health: Good
 | 字段 | 含义 |
 | ---- | ---- |
 | `allowlist.files` | 根级文件 basename 白名单（如 `README.md`）；名称校验禁止 `..`、绝对形式与路径分隔符 |
-| `allowlist.dirs` | 相对工作目录的目录路径（如 `projects/foo`），**递归子树豁免**，允许多级 |
+| `allowlist.dirs` | 相对工作目录的目录路径（如 `projects/foo`），**递归子树豁免**，允许多级（豁免按根级名称全等——多级条目不豁免其父目录） |
 | `allowlist` 键缺失 | 严格空回退——白名单为空，根级一切写入均拦截 |
 | `working_dir_root` | 显式工作目录覆盖；与当前档案 `terminal.cwd` 不一致时 `/dir-whip` 报告输出 WARNING |
 
