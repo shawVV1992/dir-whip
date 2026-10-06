@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.4](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.5](https://img.shields.io/badge/version-0.8.5-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -146,13 +146,13 @@ hermes plugins disable dir-whip
 **前置层（拦截，宽容快速）** —— 设计原则是**允许误放、绝不误拦**：
 
 - 写类工具集四种：`write_file` / `patch` / `terminal` / `execute_code`；前三者按目标判定，`execute_code` 目标不可静态解析——不做事前目标拦截，仅由审计层快照配对覆盖；其余工具与只读命令不进入判定。
-- **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地 / 可解析的 `mkdir`、`curl -o`、`wget -O` 目标——rule_key `terminal-mkdir` / `terminal-download`）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。
+- **三态判定**：确定性目标（工具路径、终端重定向 / `touch` / `cp`·`mv` 目的地 / 可解析的 `mkdir`、`curl -o`、`wget -O` 目标——rule_key `terminal-mkdir` / `terminal-download`）进入统一分类链；不确定写入意图（heredoc、解释器段首、嵌套 shell、`$`/反引号变量）放行并记日志；设备路径与只读命令静默豁免。可解析的下载目标**取代该命令段**的不确定信号（每个已解析段只记一行）；无可解析目标的 `curl` / `wget` 仍属不确定档。
 - **链感知提取**：命令链按 `&&` / `;` / `|` / 换行切段，仅段内提取目标；`=` 开头的重定向目标排除（仅限重定向槽位——`touch` / `mkdir` / `cp`·`mv` 字面参数形状不过滤）。
-- **统一分类链**（与审计层共用，判定永不矛盾），定稿 T0-T4、范围置首：
+- **统一分类链**（与审计层共用，判定永不矛盾——审计 diff 拿到与守卫同一份已解析白名单映射），定稿 T0-T4、范围置首：
 
 | 级别 | 判定范围 | 结果 | 说明 |
 |------|----------|------|------|
-| **T0** | 工作目录之外 | 放行记日志（`external-write`） | 链序范围置首：根外判定恒为 `external-write`——白名单条目不再可能掩盖该信号 |
+| **T0** | 工作目录之外 | 放行记日志（`external-write`） | 链序范围置首：根外判定恒为 `external-write`——白名单条目不再可能掩盖该信号；首段仅以 `..` 开头的路径仍在根**内** |
 | **T1** | 运行时白名单（当场授权） | 放行 | |
 | **T2** | config 白名单（`dirs` 子树 / 根级 `files` 条目） | 放行 | |
 | **T3** | 会话目录 | 放行 | |
@@ -274,7 +274,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.4
+[dir-whip] v0.8.5
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:

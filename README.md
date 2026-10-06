@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.4](https://img.shields.io/badge/version-0.8.4-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.5](https://img.shields.io/badge/version-0.8.5-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -185,17 +185,20 @@ false passes, never false blocks**:
   `terminal-download`) enter the unified classify chain; uncertain write
   intent (heredoc, interpreter-led segments, nested shells, `$`/backtick
   variables) is allowed + logged; device paths and read-only commands are
-  silently exempt.
+  silently exempt. A resolvable download target replaces THAT segment's
+  uncertain signal (one row per resolved segment); `curl` / `wget`
+  without a resolvable target stay uncertain.
 - **Chain-aware extraction**: command chains split on `&&` / `;` / `|` /
   newlines, targets extracted per segment; `=`-leading redirect targets
   excluded (redirect slots only — the `touch` / `mkdir` / `cp·mv`
   literal-argument shapes do not filter them).
 - **Unified classify chain** (shared with the audit layer — the two can
-  never disagree), scope-first T0-T4:
+  never disagree; the audit diff receives the same parsed allowlist
+  mapping the guard reads), scope-first T0-T4:
 
 | Tier | Scope judged | Verdict | Notes |
 |------|--------------|---------|-------|
-| **T0** | Outside the Working Directory | allowed + logged (`external-write`) | Scope-first: outside-root is ALWAYS `external-write` — an allowlist entry can no longer mask it |
+| **T0** | Outside the Working Directory | allowed + logged (`external-write`) | Scope-first: outside-root is ALWAYS `external-write` — an allowlist entry can no longer mask it; a first path segment merely beginning with `..` stays INSIDE the root |
 | **T1** | Runtime allowlist (on-the-spot grant) | allowed | |
 | **T2** | Config allowlist (`dirs` subtree / root-level `files` entry) | allowed | |
 | **T3** | Session Directory | allowed | |
@@ -340,7 +343,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.4
+[dir-whip] v0.8.5
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:

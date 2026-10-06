@@ -1,4 +1,4 @@
-# dir-whip installed (v0.8.4)
+# dir-whip installed (v0.8.5)
 
 **Plugin guard**: Active after next Hermes restart. Terminal writes are
 intercepted via chain-aware extraction (splits on `&&` / `;` / `|` /
@@ -12,7 +12,9 @@ for the target already exists, a conditional orphan-relocation line.
 
 **Write audit**: A post-hoc snapshot diff catches root writes the front
 guard lets through. The L1 notice names the file and the remediation;
-further writes are frozen until the file is moved or removed.
+further writes are frozen until the file is moved or removed. Root files
+listed in the allowlist `files` entries are never reported (the audit
+honors the same allowlist the guard reads).
 
 **Bundled skill**: the workspace-organization skill ships with the plugin.
 Load it explicitly when you need the full discipline reference; a short
