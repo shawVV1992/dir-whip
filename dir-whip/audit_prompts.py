@@ -11,6 +11,7 @@ Layer: core
 Refs: spec 5.18
 Key exports:
   - transform_tool_result -- L1 fire-once notice hook; appends the settle instruction notice.
+  - is_error_json_result -- single error-JSON predicate (shared with the session-start fallback).
   - gate_unresolved -- unresolved pending paths for the L3 gate (empty -> gate open).
   - gate_block -- standard block-channel response for the L3 latch.
   - pre_verify_nudge -- continuation-nudge decision; None = let the turn finish naturally.
@@ -101,6 +102,15 @@ def _audit_notice_message(paths):
     return "\n".join(lines)
 
 
+def is_error_json_result(result):
+    """Error-JSON tool result: an object carrying "error" and little else."""
+    try:
+        parsed = json.loads(result)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2
+
+
 def transform_tool_result(tool_name=None, args=None, result=None,
                              session_id=None, task_id=None, **kwargs):
     """L1 fire-once notice hook, registered at register().
@@ -131,14 +141,10 @@ def transform_tool_result(tool_name=None, args=None, result=None,
         )
         if not isinstance(result, str):
             return None
-        # Don't decorate error results: the model already has bigger
-        # problems; the notice waits for the next eligible result.
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2:
-                return None
-        except (ValueError, TypeError):
-            pass
+        # Don't decorate error results: the notice waits for the next
+        # eligible result.
+        if is_error_json_result(result):
+            return None
         pending = pending_violation_snapshot(session_id)
         unannounced = [p for p, entry in pending.items() if not entry["announced"]]
         if not unannounced:
@@ -315,6 +321,7 @@ def on_session_start(session_id):
 # continuation nudge + session-start reset.
 __all__ = [
     "transform_tool_result",
+    "is_error_json_result",
     "gate_unresolved",
     "gate_block",
     "PRE_VERIFY_NUDGE_CAP",

@@ -44,11 +44,6 @@ from .command_lex import is_session_dir_script, terminal_cp_mv_src
 
 logger = logging.getLogger("dir-whip")
 
-# The session-dir-limit rule_key is defined in events.py (single
-# definition point); this module re-exports the renamed constant for
-# consumer/test import paths. <root>/<claim> are substituted at build
-# time by _limit_block.
-
 
 # ---------------------------------------------------------------- Path predicates
 
@@ -361,7 +356,6 @@ def guard_script(tokens, working_dir_root, session_id=None, is_subagent=False,
 
 
 __all__ = [
-    "RULE_KEY_SESSION_DIR_LIMIT",
     "guard_create",
     "guard_script",
     "scripts_path",

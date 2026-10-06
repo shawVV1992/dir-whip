@@ -50,7 +50,6 @@ class _SessionState:
         self.session_cwd_fn = None       # host API injection slot (filled at register)
         self.agent_cwd_fn = None         # host API injection slot (conditional agent-CWD injection)
         self.project_active_fn: Callable[[], tuple[str, list[str]] | None] | None = None    # host API injection slot (project-exemption probe, called at on_start)
-        self.reminder_status: str | None = None      # injected|skipped-outside|skipped-child|unavailable
         self.reminder_pending_fallback = False  # unavailable reminder -> one-shot transform_tool_result fallback armed
         self.orphan_pending_fallback = False    # suppressed orphan notice -> same pending-notes fallback armed
         self.orphan_notice_text: str | None = None   # cached orphan notice text for the fallback tail

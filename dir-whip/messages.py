@@ -3,8 +3,7 @@
 Core leaf module: the static message constants/templates live here with
 zero imports, so every core module can import it safely with no cycle.
 Dynamic builders stay in their owning modules and draw their static text
-from these constants; the original modules keep same-name import aliases,
-so all test import paths stay intact. Message texts are frozen.
+from these constants (consumed as `messages.X`). Message texts are frozen.
 
 Layer: core
 Refs: spec 5.11, spec 5.20

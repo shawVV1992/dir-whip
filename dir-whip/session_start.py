@@ -16,7 +16,6 @@ Key exports:
 """
 
 import datetime
-import json
 import logging
 
 from . import audit_prompts, claims, config, events, messages, runtime_allowlist, subagents, session_dirs, state, stats
@@ -33,12 +32,9 @@ logger = logging.getLogger("dir-whip")
 
 
 def _record_session_reminder(session_id, status):
-    """One session-reminder stats row at a terminal reminder state:
-    allow/session, reason = the state literal (injected | skipped-outside
-    | skipped-child | skipped-project | unavailable -- all five states are
-    observable here), target=None. One row per session start; child
-    sessions record their own skipped-child state. Allow outcome -> no bus
-    fanout. Fail-open: events.emit never raises."""
+    """One session-reminder stats row per session start (target=None;
+    reason = the state literal). Allow outcome -> no bus fanout; fail-open:
+    events.emit never raises."""
     events.emit(
         OUTCOME_ALLOW, "session", RULE_KEY_SESSION_REMINDER, None,
         status, session_id, subagents._is_subagent_session(session_id),
@@ -98,7 +94,6 @@ def _inject_reminder(ctx, session_id):
     """
     has_method = bool(ctx) and callable(getattr(ctx, "inject_message", None))
     if has_method and ctx.inject_message(messages.DISCIPLINE_BLOCK_MESSAGE):
-        state.session.reminder_status = "injected"
         _record_session_reminder(session_id, "injected")
         return
     if not ctx:
@@ -107,7 +102,6 @@ def _inject_reminder(ctx, session_id):
         sub = "no-method"
     else:
         sub = "falsy-return"
-    state.session.reminder_status = "unavailable"
     state.session.reminder_pending_fallback = True
     _record_session_reminder(session_id, "unavailable:" + sub)
     logger.debug(
@@ -115,17 +109,6 @@ def _inject_reminder(ctx, session_id):
         "(inject_message present=%s); fallback armed",
         "unavailable:" + sub, has_method,
     )
-
-
-def _is_error_json_result(result):
-    """Error-result eligibility check (same shape as the audit L1 notice):
-    a JSON object carrying an "error" key and nothing else of note
-    (<=2 keys) is not decorated."""
-    try:
-        parsed = json.loads(result)
-    except (ValueError, TypeError):
-        return False
-    return isinstance(parsed, dict) and "error" in parsed and len(parsed) <= 2
 
 
 def append_reminder_fallback(audited_result, original_result, session_id):
@@ -157,7 +140,7 @@ def append_reminder_fallback(audited_result, original_result, session_id):
         )
         if not isinstance(text, str):
             return audited_result
-        if _is_error_json_result(text):
+        if audit_prompts.is_error_json_result(text):
             return audited_result
         parts = []
         if pending_reminder:
@@ -335,8 +318,6 @@ def session_start(session_id, ctx):
     Fail-open: the assembly adapter catches any top-level error.
     """
     if subagents._is_subagent_session(session_id):
-        state.session.reminder_status = "skipped-child"
-        # The five-state stats outlet covers skipped-child too.
         _record_session_reminder(session_id, "skipped-child")
         return
     _reset_session_scope(session_id)
@@ -345,7 +326,6 @@ def session_start(session_id, ctx):
     if cwd:
         active_id = _project_skip_id(cwd)
         if active_id:
-            state.session.reminder_status = "skipped-project"
             _record_session_reminder(session_id, "skipped-project")
             logger.debug(
                 "dir-whip: session-start reminder skipped "
@@ -355,7 +335,6 @@ def session_start(session_id, ctx):
             return
     working_dir_root, allowlist = config.resolved_config()
     if not discipline_applies(cwd, working_dir_root):
-        state.session.reminder_status = "skipped-outside"
         _record_session_reminder(session_id, "skipped-outside")
         logger.debug(
             "dir-whip: session-start reminder skipped "
