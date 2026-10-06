@@ -279,7 +279,7 @@ SETTLE_TOOL_PATHS_DESCRIPTION = (
 # runtime_allowlist.py).
 ALLOW_PATH_TOOL_DESCRIPTION = (
     "Add an absolute path to the dir-whip runtime allowlist so "
-    "file operations under that path are exempt for this session (Tier 0). "
+    "file operations under that path are exempt for this session. "
     "Use when the user explicitly specifies a path to write to. "
     "Two-step confirmation: call WITHOUT confirm to obtain the "
     "user-confirmation briefing, relay it to the user, then re-call with "
