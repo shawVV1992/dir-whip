@@ -215,6 +215,11 @@ def _register_tool_command_skill(ctx):
             logger.warning("dir-whip: register_tool failed: %s", exc)
     # The /dir-whip command (merged report) lives in report.py.
     report.register_dir_whip_commands(ctx)
+    # Constant-registration fallback: once a late dir_whip_settle
+    # registration has proven unavailable on this process, the tool is
+    # registered eagerly at register time instead.
+    if state.session.settle_eager_fallback:
+        audit.register_settle_tool()
     # Bundled skill (opt-in, qualified name); the once-per-session
     # discipline block replaced the always-on prompt.
     try:

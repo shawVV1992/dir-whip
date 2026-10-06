@@ -17,7 +17,7 @@ Key exports:
   - audit_norm_path -- deterministic pending-set key (absolute + native-normalized).
   - pending_violation_snapshot / pending_violation_paths -- read-only pending-set views (L3 gate input / settlement judgment).
   - pre_snapshot / audit_post_check -- allowed-terminal pre snapshot (cap-guarded) + terminal re-scan/diff violation post-check.
-  - SETTLE_TOOL_SCHEMA / settle_paths / lazy_register_settle_tool -- dir_whip_settle schema, quarantine core and lazy registration.
+  - SETTLE_TOOL_SCHEMA / settle_paths / register_settle_tool / lazy_register_settle_tool -- dir_whip_settle schema, quarantine core and both registration entries.
 
 Size: the write-audit lifecycle (snapshot / diff / gate / settle /
 quarantine) is one cohesive state machine over the pending set.
@@ -415,15 +415,13 @@ def _settle_tool_handler(args, **kwargs):
         return json.dumps({"error": "settle failed"})
 
 
-def lazy_register_settle_tool():
-    """Register dir_whip_settle on the FIRST L1 notice fire.
+def register_settle_tool():
+    """Register dir_whip_settle with the host; True when accepted.
 
-    Cross-module consumer: audit_prompts.transform_tool_result
-    (function-local import). The registry has no timing constraint (the
-    host rebuilds the per-turn tool list), so a late registration is
-    visible from the next turn on. Idempotent by nature (re-register
-    overwrites); attempted once per notice fire. Fail-open: any error is
-    logged and never blocks the notice.
+    The single registration implementation shared by the eager
+    (register-time fallback) and the lazy (first L1 notice) paths.
+    Fail-open: a missing ctx / register_tool or a raising registry logs
+    DEBUG and returns False.
     """
     try:
         ctx = state.session.registered_ctx
@@ -434,8 +432,31 @@ def lazy_register_settle_tool():
                 schema=SETTLE_TOOL_SCHEMA,
                 handler=_settle_tool_handler,
             )
+            return True
     except Exception as exc:
-        logger.debug("dir-whip: lazy settle registration failed: %s", exc)
+        logger.debug("dir-whip: settle tool registration failed: %s", exc)
+    return False
+
+
+def lazy_register_settle_tool():
+    """Register dir_whip_settle on the FIRST L1 notice fire.
+
+    Cross-module consumer: audit_prompts.transform_tool_result
+    (function-local import). The host rebuilds the per-turn tool list, so
+    a late registration is visible from the next turn on; idempotent by
+    nature, attempted once per notice fire. When the late registration
+    proves unavailable on this process, the sticky constant-registration
+    marker is armed so the NEXT register() call registers the tool
+    eagerly. Fail-open: never blocks the notice.
+    """
+    registered = register_settle_tool()
+    if not registered:
+        state.session.settle_eager_fallback = True
+        logger.debug(
+            "dir-whip: late settle registration unavailable; constant "
+            "registration armed for the next register()"
+        )
+    return registered
 
 
 def _pending_violation_remove(session_id, key):
@@ -608,6 +629,7 @@ __all__ = [
     "pre_snapshot",
     "audit_post_check",
     "SETTLE_TOOL_SCHEMA",
+    "register_settle_tool",
     "lazy_register_settle_tool",
     "settle_paths",
 ]

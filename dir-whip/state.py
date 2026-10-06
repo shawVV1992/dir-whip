@@ -55,6 +55,7 @@ class _SessionState:
         self.orphan_pending_fallback = False    # suppressed orphan notice -> same pending-notes fallback armed
         self.orphan_notice_text: str | None = None   # cached orphan notice text for the fallback tail
         self.log_handler_installed = False  # dir-whip.log attach idempotence flag
+        self.settle_eager_fallback = False  # late settle registration proven unavailable -> register() registers eagerly
         self.confirmation_issued = set()  # allow_path two-step confirmation issued set (guarded by self.lock)
         self.unseen_tools = set()        # unseen:<tool> probe throttle, (session_id, tool_name) keys (self.lock)
         self.child_session_ids = set()   # guarded by self.lock
