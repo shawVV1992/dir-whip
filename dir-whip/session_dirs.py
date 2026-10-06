@@ -110,16 +110,24 @@ def _limit_block(working_dir_root, claim, is_subagent, tool_name, target,
                  session_id):
     """Emit the session-dir-limit block verdict (stats accumulate via
     the setdefault chain; generic blocked bus fanout fires) and return
-    the block dict."""
-    template = (
-        messages.SESSION_DIR_LIMIT_SUBAGENT_MESSAGE
-        if is_subagent
-        else messages.SESSION_DIR_LIMIT_BLOCK_MESSAGE
-    )
-    message = template % {
-        "root": to_fwd(working_dir_root),
-        "claim": to_fwd(claim) if claim else "",
-    }
+    the block dict. A slot occupied by an in-flight creation with no
+    bound claim yet renders the pending-only variant (no empty claim)."""
+    if not claim:
+        message = (
+            messages.SESSION_DIR_LIMIT_PENDING_SUBAGENT_MESSAGE
+            if is_subagent
+            else messages.SESSION_DIR_LIMIT_PENDING_MESSAGE
+        )
+    else:
+        template = (
+            messages.SESSION_DIR_LIMIT_SUBAGENT_MESSAGE
+            if is_subagent
+            else messages.SESSION_DIR_LIMIT_BLOCK_MESSAGE
+        )
+        message = template % {
+            "root": to_fwd(working_dir_root),
+            "claim": to_fwd(claim),
+        }
     emit(
         OUTCOME_BLOCK, tool_name, RULE_KEY_SESSION_DIR_LIMIT, target,
         "per-session session directory limit", session_id, is_subagent,

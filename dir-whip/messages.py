@@ -124,6 +124,30 @@ SESSION_DIR_LIMIT_SUBAGENT_MESSAGE = (
     "the target directory the parent passed."
 )
 
+# Pending-only variants: the slot is occupied by an in-flight creation
+# with no bound claim yet (no <root>/<claim> line may be rendered).
+SESSION_DIR_LIMIT_PENDING_MESSAGE = (
+    "BLOCKED: One Session Directory per conversation.\n"
+    "A Session Directory creation is already in progress for this conversation.\n"
+    "Do not create another one: write deliverables to the in-flight "
+    "directory's Outputs/ (scratch: its .tmp/) once it exists.\n"
+    "User-specified path -> dir_whip_allow_path first.\n"
+    "[Reason] This conversation's Session Directory slot is already taken "
+    "by an in-flight creation; a second Session Directory is blocked.\n"
+    "[Next] Wait for the in-progress Session Directory, then write the "
+    "deliverable to its Outputs/ (or scratch to its .tmp/)."
+)
+
+SESSION_DIR_LIMIT_PENDING_SUBAGENT_MESSAGE = (
+    "BLOCKED: One Session Directory per conversation.\n"
+    "A Session Directory creation is already in progress for this conversation.\n"
+    "Fix: write to the target directory passed by the parent agent.\n"
+    "[Reason] This conversation's Session Directory slot is already taken "
+    "by an in-flight creation; subagents never create Session Directories.\n"
+    "[Next] Report the blocked target to the parent agent, or write to "
+    "the target directory the parent passed."
+)
+
 # Advisory notice: plain text, never blocks, at most once per top-level
 # session start.
 ORPHAN_NOTICE_HEADER = (
