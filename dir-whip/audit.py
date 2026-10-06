@@ -71,15 +71,13 @@ logger = logging.getLogger("dir-whip")
 # transform surface; no second literal list.
 AUDIT_PAIRED_TOOLS = ("terminal", "execute_code")
 
-# Audit entry guardrail: the DoS cap is an internal audit-owned constant
-# (de-configured); no config key adjusts it.
+# Internal DoS guardrail (de-configured; no config key adjusts it).
 WRITE_AUDIT_ENTRY_CAP = 2000
 
 # Classification chain, injected by the assembly layer at register().
 # The slot lives in the owner container (state.audit.classify_fn) and
 # survives reset_all. Unwired -> RuntimeError (production-unreachable:
-# register() wires before any hook runs; the fail-open hook adapter
-# catches it).
+# register() wires before any hook runs; the fail-open adapter catches it).
 
 
 def set_classifier(fn):
@@ -335,6 +333,10 @@ def audit_post_check(session_id, task_id, is_subagent=False):
         if after is None:
             return
         diff = diff_snapshots(before, after)
+        # allowlist is the PARSED {files, dirs} mapping stored by
+        # pre_snapshot; it reaches the diff UNCHANGED (any list() / key
+        # projection would fail-closed to an empty allowlist and
+        # misreport allowlisted root files as violations).
         # Script-vector creation observer: fires only when a
         # pending_create marker exists, binds the FIRST new compliant
         # session dir under the root and ALWAYS consumes the marker (a
@@ -344,7 +346,7 @@ def audit_post_check(session_id, task_id, is_subagent=False):
                 working_dir_root, session_id, diff.get("added", []),
             )
         classified = classify_diff(
-            diff, before, after, working_dir_root, list(allowlist), is_subagent,
+            diff, before, after, working_dir_root, allowlist, is_subagent,
         )
         for path in classified["violations"]:
             pending_violation_add(session_id, path)
@@ -365,9 +367,6 @@ def audit_post_check(session_id, task_id, is_subagent=False):
             })
     except Exception as exc:
         logger.debug("dir-whip: audit post check error (fail-open): %s", exc)
-
-
-# ---------------------------------------------------------------- L4 settlement family
 
 
 # ---------------------------------------------------------------- dir_whip_settle tool surface
