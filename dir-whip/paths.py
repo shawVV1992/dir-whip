@@ -31,8 +31,7 @@ from . import state
 
 logger = logging.getLogger("dir-whip")
 
-# MSYS-style forward-slash drive forms: matches /c/..., //c/... (single
-# drive letter) but NOT UNC \\server\share.
+# MSYS drive forms /c/..., //c/... (single drive letter; UNC unaffected).
 _MSYS_DRIVE_RE = re.compile(r"^//?([a-zA-Z])(?:/(.*))?$")
 _CYGWIN_DRIVE_RE = re.compile(r"^/cygdrive/([a-zA-Z])(?:/(.*))?$")
 
@@ -181,8 +180,6 @@ def normalize_target(path, working_dir_root):
     return _normalize_posix(path)
 
 
-# ---------------------------------------------------------------- Forward-slash rendering
-
 def to_fwd(path):
     """Forward-slash form of a path (single conversion point).
 
@@ -218,7 +215,8 @@ def within_working_dir(target, working_dir_root):
     except ValueError:
         # Different drive on Windows: cannot relate -> external.
         return False
-    return not rel.startswith("..")
+    # Only a proper parent or a climb-out is outside (a ".." name prefix stays inside).
+    return rel != os.pardir and not rel.startswith(os.pardir + os.sep)
 
 
 # ---------------------------------------------------------------- Privacy relativization (spec 5.13)
