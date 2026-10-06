@@ -1,7 +1,7 @@
 # dir-whip configuration
 # User-managed. See after-install.md for configuration instructions.
 #
-# RUNTIME LOCATION (SCR-013): the config that the plugin and the audit
+# RUNTIME LOCATION: the config that the plugin and the audit
 # actually read lives at HERMES_HOME/dir-whip/dir-whip-config.yaml
 # (Windows: %LOCALAPPDATA%/hermes/dir-whip/dir-whip-config.yaml;
 # POSIX: ~/.hermes/dir-whip/dir-whip-config.yaml). This file in the

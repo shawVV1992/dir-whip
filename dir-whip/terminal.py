@@ -11,6 +11,7 @@ Layer: core
 Refs: spec 4.1, spec 5.10
 Key exports:
   - terminal_block_targets -- chain-aware block-tier write targets as (target, rule_key) pairs.
+  - chain_targets_with_segment -- the same extraction with segment indexes (single implementation).
   - guard_terminal -- terminal write interception loop (guard() dispatch; None = allow).
   - is_terminal_uncertain -- uncertain write-intent detection -> allow + log tier.
 """
@@ -159,6 +160,19 @@ def _segment_block_targets(seg):
     return out
 
 
+def chain_targets_with_segment(tokens):
+    """[(segment index, target, rule_key)] over the chain-aware extraction.
+
+    Single extraction implementation; terminal_block_targets is its
+    public-shape projection. The segment index lets callers tell which
+    command segment a target came from (e.g. a resolved download).
+    """
+    out = []
+    for idx, seg in enumerate(chain_segments(tokens)):
+        out.extend((idx, target, rule_key) for target, rule_key in _segment_block_targets(seg))
+    return out
+
+
 def terminal_block_targets(tokens):
     """Block-tier write targets (spec 5.10, chain-aware).
 
@@ -172,10 +186,10 @@ def terminal_block_targets(tokens):
     the uncertain tier (allow + log) instead. Redirect targets starting
     with "=" (residue of an unquoted `>=` split) are never valid targets.
     """
-    out = []
-    for seg in chain_segments(tokens):
-        out.extend(_segment_block_targets(seg))
-    return out
+    return [
+        (target, rule_key)
+        for _idx, target, rule_key in chain_targets_with_segment(tokens)
+    ]
 
 
 # ---------------------------------------------------------------- Terminal decision layer
@@ -249,7 +263,7 @@ def guard_terminal(args, task_id, working_dir_root, allowlist,
             if act:
                 return act
 
-        if is_terminal_uncertain(tokens):
+        if is_terminal_uncertain(tokens, _resolved_download_segments(tokens)):
             emit(
                 OUTCOME_ALLOW, "terminal", RULE_KEY_TERMINAL_WRITE_UNCERTAIN, None,
                 "write intent detected, target uncertain", session_id, is_subagent,
@@ -271,22 +285,39 @@ _UNCERTAIN_COMMANDS = frozenset(
 )
 
 
-def is_terminal_uncertain(tokens):
+def _resolved_download_segments(tokens):
+    """Segment indexes whose curl/wget download target was extracted.
+
+    A resolvable download target fully determines that segment's write
+    intent, so its blanket uncertain-tier signal is suppressed (other
+    segments and other uncertain triggers are unaffected).
+    """
+    return frozenset(
+        idx
+        for idx, _target, rule_key in chain_targets_with_segment(tokens)
+        if rule_key == RULE_KEY_TERMINAL_DOWNLOAD
+    )
+
+
+def is_terminal_uncertain(tokens, resolved_download_segments=frozenset()):
     """Uncertain write-intent detection (5.10 allow-and-log tier).
 
     Any chain segment whose first token is python/node/sed/tee/curl/wget/
     dd, any nested-shell invocation (bash -c / sh -c / powershell
     -Command), any non-literal ($ or `) token, or any token starting with
     "=" (residue of an unquoted `>=` comparison split by a > redirect)
-    -> True.
+    -> True. A curl/wget segment listed in resolved_download_segments is
+    skipped (its download target was extracted and judged on the chain).
     """
     if not tokens:
         return False
-    for seg in chain_segments(tokens):
+    for idx, seg in enumerate(chain_segments(tokens)):
         if not seg:
             continue
         first = seg[0]
         if first in _UNCERTAIN_COMMANDS:
+            if first in ("curl", "wget") and idx in resolved_download_segments:
+                continue
             return True
         if first in _NESTED_SHELLS and any(
             t == "-c" or t.lower() == "-command" for t in seg
@@ -299,6 +330,7 @@ def is_terminal_uncertain(tokens):
 
 __all__ = [
     "terminal_block_targets",
+    "chain_targets_with_segment",
     "guard_terminal",
     "is_terminal_uncertain",
 ]

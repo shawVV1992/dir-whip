@@ -5,6 +5,9 @@ READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild
 
 Layer: skill-subprocess
 Refs: spec 4.4, spec v2.6, spec v2.7, spec v2.26
+Contract: the `_ws_*` allowlist predicates below are consumed across
+module by audit_workspace.py / search_workspace.py (sibling contract,
+not a private implementation detail).
 Key exports:
   - hermes_home -- Hermes home (HERMES_HOME override first; Windows LOCALAPPDATA/hermes, POSIX ~/.hermes).
   - normalize_path -- exact-match normalization (MSYS mapping, drive inheritance, normpath; POSIX normpath identity).

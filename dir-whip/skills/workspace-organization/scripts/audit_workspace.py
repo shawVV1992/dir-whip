@@ -5,6 +5,8 @@ Boundary validation: an explicit --workspace must equal the resolved Working Dir
 
 Layer: skill-subprocess
 Refs: spec 3.4, spec 4.4, spec 5.7, spec 8.1, spec v2.7
+Contract: the `workspace_resolver._ws_*` predicates are consumed here by
+name (sibling contract, parity-locked).
 Key exports:
   - main -- CLI entry: resolve/validate the root, run the checks + inventory, emit plain/JSON/gate output; exit 0/1/2.
   - list_expired_tmp -- read-only expired session .tmp/ inventory (find_tmp_entries + is_old); never deletes.

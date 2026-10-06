@@ -5,6 +5,8 @@ Locates files without an index (metadata only: session name / rel_path / size / 
 
 Layer: skill-subprocess
 Refs: spec 4.4, spec 4.6
+Contract: the `workspace_resolver._ws_*` predicates are consumed here by
+name (sibling contract, parity-locked).
 Key exports:
   - main -- CLI entry: parse args, validate the boundary, scan + filter + order + truncate, emit plain or JSON; exit 0/1/2 (spec 4.6).
   - scan -- enumerate the search domain: real session-name dirs, per-file lstat records, fail-open {path, error} entries (spec 4.6).
