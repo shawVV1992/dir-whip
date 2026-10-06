@@ -22,6 +22,9 @@ internal/
 .opencode/
 .slim/
 
+# Local pi workspace
+.pi/
+
 # Tests (not published)
 tests/
 
