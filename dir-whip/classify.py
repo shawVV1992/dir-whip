@@ -14,7 +14,7 @@ Key exports:
   - classify_target -- unified T0-T4 verdict chain (single definition; front + audit layers share).
   - evaluate_target -- shared target evaluation: resolve -> normalize -> classify -> session-dir gate -> emit -> block.
   - session_cwd -- session CWD accessor for relative-target resolution (terminal consumer).
-  - parsed_allowlist_raw -- fail-closed raw-allowlist parser (guard consumer).
+  - parse_allowlist_safe -- never-raising parsed-allowlist helper (guard consumer).
 """
 
 import logging
@@ -101,8 +101,8 @@ def _resolve_terminal_target(target, working_dir_root):
 
 # ---------------------------------------------------------------- Allowlist parsing
 
-def parsed_allowlist_raw(raw):
-    """Parse raw allowlist value into {files, dirs} via allowlist module."""
+def parse_allowlist_safe(raw):
+    """Parse a raw allowlist value into {files, dirs}; never raises."""
     try:
         return parse_allowlist(raw)
     except Exception:
@@ -120,7 +120,7 @@ def _resolve_parsed_allowlist(allowlist):
     try:
         if isinstance(allowlist, dict) and "files" in allowlist and "dirs" in allowlist:
             return allowlist
-        return parsed_allowlist_raw(allowlist)
+        return parse_allowlist_safe(allowlist)
     except Exception:
         return {"files": set(), "dirs": set()}
 
@@ -334,5 +334,5 @@ __all__ = [
     "classify_target",
     "evaluate_target",
     "session_cwd",
-    "parsed_allowlist_raw",
+    "parse_allowlist_safe",
 ]

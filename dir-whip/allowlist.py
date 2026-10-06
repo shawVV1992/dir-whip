@@ -25,6 +25,7 @@ import re
 
 import yaml
 
+from .paths import casefold_basis
 from .paths import config_file_path
 from .paths import is_absolute_any as _is_absolute_any
 from .paths import to_fwd
@@ -230,9 +231,7 @@ def is_allowlist_dir(path, working_dir_root, parsed):
     r = _normalize_for_match(working_dir_root)
     if not t or not r:
         return False
-    cf = os.name == "nt" or (
-        _is_absolute_any(t) and _is_absolute_any(r)
-    )
+    cf = casefold_basis(t, r)
     t_cmp = t.casefold() if cf else t
     r_cmp = r.casefold() if cf else r
     r_cmp = r_cmp.rstrip("/")

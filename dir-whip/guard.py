@@ -22,7 +22,7 @@ from . import messages, state
 from .audit import pre_snapshot
 from .audit_prompts import gate_block, gate_unresolved
 
-from .classify import evaluate_target, parsed_allowlist_raw
+from .classify import evaluate_target, parse_allowlist_safe
 
 from .config import get_cached_config
 
@@ -94,7 +94,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
         if result is None:
             pre_snapshot(
                 session_id, task_id, working_dir_root,
-                parsed_allowlist_raw(allowlist),
+                parse_allowlist_safe(allowlist),
             )
         return result
 
@@ -105,7 +105,7 @@ def guard(tool_name, args, task_id=None, **kwargs):
         # (cap-guarded) and allow.
         pre_snapshot(
             session_id, task_id, working_dir_root,
-            parsed_allowlist_raw(allowlist),
+            parse_allowlist_safe(allowlist),
         )
         return None
 

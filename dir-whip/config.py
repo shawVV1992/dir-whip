@@ -99,7 +99,7 @@ def load_guard_config(config_path=None):
     return result
 
 
-def resolve_working_dir_root(ctx, config_path=None):
+def resolve_working_dir_root(ctx, config_path=None, cfg=None):
     """Resolve the Working Directory for the current profile (spec 5.5).
 
     3-step chain (deliberately different from the script-side 4-step
@@ -112,10 +112,14 @@ def resolve_working_dir_root(ctx, config_path=None):
     register() (cached); None -> all guard checks allow. The resolving
     step is recorded in state.session.working_dir_source for the
     report (dir-whip-config / profile-config / fail-open).
+
+    cfg: an already-loaded dir-whip-config.yaml result (the caller loaded
+    it for its own keys); omitted -> the file is read here, once.
     """
     # 1. dir-whip-config.yaml explicit value (authoritative when set)
     try:
-        cfg = load_guard_config(config_path)
+        if cfg is None:
+            cfg = load_guard_config(config_path)
         working_dir_root = cfg.get("working_dir_root")
         if working_dir_root:
             logger.info(
@@ -235,11 +239,10 @@ def set_session_profile(profile):
 # ---------------------------------------------------------------- Config cache (spec 5.5/5.8)
 
 def _resolve_config(ctx, config_path=None):
-    """Resolve working_dir_root + the raw allowlist value."""
-    working_dir_root = resolve_working_dir_root(ctx, config_path)
+    """Resolve working_dir_root + the raw allowlist value (ONE config read)."""
     cfg = load_guard_config(config_path)
-    allowlist = cfg.get("allowlist", [])
-    return (working_dir_root, allowlist)
+    working_dir_root = resolve_working_dir_root(ctx, config_path, cfg=cfg)
+    return (working_dir_root, cfg.get("allowlist", []))
 
 
 def _resolve_registered_config():

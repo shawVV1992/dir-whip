@@ -203,6 +203,9 @@ def within_working_dir(target, working_dir_root):
     """
     target_fwd = to_fwd(target)
     root_fwd = to_fwd(working_dir_root)
+    # Drive-rooted pairs only; allowlist.is_allowlist_dir and
+    # report.relativize_input use paths.casefold_pair's nt-or-both-rooted
+    # basis (a deliberately wider lexical domain).
     if _DRIVE_ROOTED_RE.match(target_fwd) and _DRIVE_ROOTED_RE.match(root_fwd):
         target_cf = target_fwd.casefold()
         root_cf = root_fwd.casefold()
@@ -217,6 +220,19 @@ def within_working_dir(target, working_dir_root):
         return False
     # Only a proper parent or a climb-out is outside (a ".." name prefix stays inside).
     return rel != os.pardir and not rel.startswith(os.pardir + os.sep)
+
+
+def casefold_basis(a, b):
+    """True when a/b path comparisons casefold: always on Windows, and
+    for two rooted (drive/MSYS/backslash) forms on any host."""
+    return os.name == "nt" or (is_absolute_any(a) and is_absolute_any(b))
+
+
+def casefold_pair(a, b):
+    """Comparison forms of two paths (folding per paths.casefold_basis)."""
+    if casefold_basis(a, b):
+        return a.casefold(), b.casefold()
+    return a, b
 
 
 # ---------------------------------------------------------------- Privacy relativization (spec 5.13)
@@ -298,6 +314,8 @@ __all__ = [
     "normalize_target",
     "relativize_target",
     "within_working_dir",
+    "casefold_basis",
+    "casefold_pair",
     "is_absolute_any",
     "to_fwd",
     "is_inside_session_dir",

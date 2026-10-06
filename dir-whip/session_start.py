@@ -148,12 +148,14 @@ def append_reminder_fallback(audited_result, original_result, session_id):
             _record_reminder_fallback(session_id)
             parts.append(messages.DISCIPLINE_BLOCK_MESSAGE)
         if pending_orphan:
-            state.session.orphan_pending_fallback = False
-            _record_orphan_notice_fallback(session_id)
             notice = state.session.orphan_notice_text
-            state.session.orphan_notice_text = None
             if notice:
+                state.session.orphan_pending_fallback = False
+                state.session.orphan_notice_text = None
+                _record_orphan_notice_fallback(session_id)
                 parts.append(notice)
+        if not parts:
+            return audited_result
         return text + "\n\n" + "\n\n".join(parts)
     except Exception as exc:
         logger.debug("dir-whip: reminder fallback failed (fail-open): %s", exc)

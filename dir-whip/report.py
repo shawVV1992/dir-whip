@@ -37,6 +37,7 @@ from .config import (
 
 from .paths import (
     SESSION_DIR_RE,
+    casefold_pair,
     dirwhip_home,
     is_absolute_any,
     paths_equal,
@@ -261,9 +262,7 @@ def relativize_input(token, working_dir_root):
     """
     t = to_fwd(token).strip()
     r = to_fwd(working_dir_root).rstrip("/")
-    cf = os.name == "nt" or (is_absolute_any(t) and is_absolute_any(r))
-    t_cmp = t.casefold() if cf else t
-    r_cmp = r.casefold() if cf else r
+    t_cmp, r_cmp = casefold_pair(t, r)
     if t_cmp == r_cmp:
         return None, "'%s' is the Working Directory itself" % token
     if t_cmp.startswith(r_cmp + "/"):
