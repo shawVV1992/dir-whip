@@ -23,8 +23,7 @@ Key exports:
 import os
 import re
 
-import yaml
-
+from . import yamlio
 from .paths import casefold_basis
 from .paths import config_file_path
 from .paths import is_absolute_any as _is_absolute_any
@@ -268,8 +267,7 @@ def load_allowlist_state(path=None):
         path = config_file_path()
     raw = None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = yamlio.load_file(path)
         raw = data.get("allowlist") if isinstance(data, dict) else None
     except Exception:
         raw = None

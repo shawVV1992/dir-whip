@@ -22,8 +22,6 @@ Key exports:
 import logging
 from pathlib import Path
 
-import yaml
-
 logger = logging.getLogger("dir-whip")
 
 # plugins.plugin_utils is a host package (absent in the test venv);
@@ -33,7 +31,7 @@ try:
 except ImportError:
     lazy_singleton = None
 
-from . import state, stats
+from . import state, stats, yamlio
 
 from .allowlist import parse_allowlist_raw
 
@@ -52,12 +50,12 @@ def parse_terminal_cwd(config_path):
     Returns the cwd string or None if not found/unparseable.
     """
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = yamlio.load_file(config_path)
         if data and isinstance(data, dict):
             terminal = data.get("terminal", {})
             if isinstance(terminal, dict):
-                return terminal.get("cwd")
+                cwd = terminal.get("cwd")
+                return cwd if isinstance(cwd, str) else None
     except Exception:
         pass
     return None
@@ -87,11 +85,11 @@ def load_guard_config(config_path=None):
         return result
 
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = yamlio.load_file(config_path)
         if data and isinstance(data, dict):
-            if data.get("working_dir_root"):
-                result["working_dir_root"] = data["working_dir_root"]
+            root = data.get("working_dir_root")
+            if isinstance(root, str) and root:
+                result["working_dir_root"] = root
             result["allowlist"] = parse_allowlist_raw(data.get("allowlist"))
     except Exception as exc:
         logger.debug("dir-whip: failed to load dir-whip-config.yaml: %s", exc)
