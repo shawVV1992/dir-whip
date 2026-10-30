@@ -103,24 +103,183 @@ def _precheck_profile_config_path(hh, profile):
     return os.path.join(hh, "profiles", profile, "config.yaml")
 
 
-def _plugins_from_yaml(path):
-    """PyYAML fast path: (enabled, disabled), or None for the line scan."""
-    try:
-        import yaml  # noqa: PLC0415
+def _strip_yaml_comment(line):
+    """Strip a YAML line comment, quote-aware.
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        if isinstance(data, dict):
-            plugins = data.get("plugins")
-            if isinstance(plugins, dict):
-                en = plugins.get("enabled")
-                dis = plugins.get("disabled")
-                enabled = [str(x) for x in en if isinstance(x, str)] if isinstance(en, list) else []
-                disabled = [str(x) for x in dis if isinstance(x, str)] if isinstance(dis, list) else []
-                return enabled, disabled
-        return [], []
-    except Exception:
+    A '#' starts a comment only OUTSIDE quotes and at line start or after
+    whitespace: ``a#b`` stays intact and a '#' inside a quoted scalar is
+    preserved.
+    """
+    quote = None
+    idx = 0
+    length = len(line)
+    while idx < length:
+        char = line[idx]
+        if quote == '"':
+            if char == "\\":
+                idx += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if idx + 1 < length and line[idx + 1] == "'":
+                    idx += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (idx == 0 or line[idx - 1] in (" ", "\t")):
+            return line[:idx]
+        idx += 1
+    return line
+
+
+_YAML11_BOOL_VALUES = frozenset(
+    "y Y yes Yes YES n N no No NO true True TRUE false False FALSE "
+    "on On ON off Off OFF".split()
+)
+_YAML11_NULL_VALUES = frozenset(("~", "null", "Null", "NULL"))
+_YAML11_INT_RE = re.compile(
+    r"^[-+]?(?:"
+    r"0b[0-1_]+|"
+    r"0[0-7_]+|"
+    r"(?:0|[1-9][0-9_]*)|"
+    r"0x[0-9a-fA-F_]+|"
+    r"[1-9][0-9_]*(?::[0-5]?[0-9])+"
+    r")$"
+)
+_YAML11_FLOAT_RE = re.compile(
+    r"^[-+]?(?:"
+    r"[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|"
+    r"\.[0-9_]+(?:[eE][-+][0-9]+)?|"
+    r"[1-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|"
+    r"\.(?:inf|Inf|INF)"
+    r")$|^\.(?:nan|NaN|NAN)$"
+)
+_YAML11_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _decode_yaml_scalar(value):
+    """Decode one YAML scalar body (comments already stripped).
+
+    Quoted values always decode to strings (double quotes via JSON
+    escapes, single quotes via doubled-quote unescaping). An UNQUOTED
+    YAML 1.1 bool / null / int / float / date scalar decodes to None so
+    the script agrees with the core layer's non-string filtering (a
+    config ``[yes, no]`` must not enable plugins named yes/no). Out of
+    scope: timestamps carrying a time of day stay text here (documented
+    parity-domain gap).
+    """
+    value = value.strip()
+    if not value:
+        return ""
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, str):
+            return decoded
+        return value
+    if value.startswith("'"):
+        if len(value) >= 2 and value.endswith("'"):
+            return value[1:-1].replace("''", "'")
+        return value
+    if value in _YAML11_BOOL_VALUES or value in _YAML11_NULL_VALUES:
         return None
+    if (
+        _YAML11_INT_RE.match(value)
+        or _YAML11_FLOAT_RE.match(value)
+        or _YAML11_DATE_RE.match(value)
+    ):
+        return None
+    return value
+
+
+def _split_flow_scalars(body):
+    """Quote-aware comma split of a flow-list body (brackets removed)."""
+    parts = []
+    buf = []
+    quote = None
+    idx = 0
+    length = len(body)
+    while idx < length:
+        char = body[idx]
+        if quote == '"':
+            buf.append(char)
+            if char == "\\" and idx + 1 < length:
+                buf.append(body[idx + 1])
+                idx += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            buf.append(char)
+            if char == "'":
+                if idx + 1 < length and body[idx + 1] == "'":
+                    buf.append("'")
+                    idx += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+            buf.append(char)
+        elif char == ",":
+            item = _decode_yaml_scalar("".join(buf))
+            if item:
+                parts.append(item)
+            buf = []
+        else:
+            buf.append(char)
+        idx += 1
+    item = _decode_yaml_scalar("".join(buf))
+    if item:
+        parts.append(item)
+    return parts
+
+
+def _split_flow_list(rest):
+    """Parse a YAML flow list body ``[a, b]`` / ``a, b`` into strings.
+
+    Bracketed bodies decode through JSON first (quoted commas and
+    escapes); a quote-aware comma scan is the fallback for YAML-only
+    scalars such as single-quoted entries.
+    """
+    text = _strip_yaml_comment(rest).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        if not text.endswith("]"):
+            return []
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+        try:
+            loaded = json.loads(text)
+        except Exception:
+            loaded = None
+        if isinstance(loaded, list):
+            return [
+                item.strip()
+                for item in loaded
+                if isinstance(item, str) and item.strip()
+            ]
+        return _split_flow_scalars(inner)
+    return _split_flow_scalars(text)
+
+
+def _apply_plugins_inline_map(rest, enabled, disabled):
+    """Parse a one-line ``plugins: {enabled: [...], disabled: [...]}`` map."""
+    body = rest.strip()
+    if body.startswith("{"):
+        body = body[1:]
+    if body.endswith("}"):
+        body = body[:-1]
+    for key, target in (("enabled", enabled), ("disabled", disabled)):
+        match = re.search(r"\b" + key + r"\s*:\s*\[([^\]]*)\]", body)
+        if match:
+            target.extend(_split_flow_list("[" + match.group(1) + "]"))
 
 
 def _apply_plugins_key_line(stripped, key, target, state):
@@ -128,20 +287,21 @@ def _apply_plugins_key_line(stripped, key, target, state):
     appends entries; an empty body enters block-list mode for `key`."""
     rest = stripped[len(key) + 1:].strip()
     if rest:
-        inner = rest.strip("[]").strip()
-        if inner:
-            for part in inner.split(","):
-                part = part.strip().strip("'\"")
-                if part:
-                    target.append(part)
+        if rest.startswith("["):
+            target.extend(_split_flow_list(rest))
+        else:
+            value = _decode_yaml_scalar(rest)
+            if value:
+                target.append(value)
         state.update(key=None, in_list=False)
     else:
         state.update(key=key, in_list=True)
 
 
 def _plugins_from_lines(path):
-    """Stdlib line scan for plugins.enabled / plugins.disabled (inline and
-    block forms); ([], []) when the file is unreadable."""
+    """Stdlib line scan for plugins.enabled / plugins.disabled (inline map,
+    inline list and block list forms; quoted scalars and comments decoded);
+    ([], []) when the file is unreadable."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
@@ -151,11 +311,15 @@ def _plugins_from_lines(path):
     disabled = []
     state = {"in_plugins": False, "key": None, "in_list": False}
     for raw in lines:
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
+        stripped = _strip_yaml_comment(raw).strip()
+        if not stripped:
             continue
         if raw.startswith("plugins:"):
+            rest = _strip_yaml_comment(raw[len("plugins:"):]).strip()
             state.update(in_plugins=True, key=None, in_list=False)
+            if rest.startswith("{"):
+                _apply_plugins_inline_map(rest, enabled, disabled)
+                state.update(in_plugins=False, key=None, in_list=False)
         elif not state["in_plugins"]:
             continue
         elif raw[0] not in (" ", "\t") and ":" in raw:
@@ -165,7 +329,7 @@ def _plugins_from_lines(path):
         elif stripped.startswith("disabled:"):
             _apply_plugins_key_line(stripped, "disabled", disabled, state)
         elif state["in_list"] and state["key"] and stripped.startswith("- "):
-            val = stripped[2:].strip().strip("'\"")
+            val = _decode_yaml_scalar(stripped[2:])
             if val:
                 (enabled if state["key"] == "enabled" else disabled).append(val)
         elif state["in_list"] and state["key"]:
@@ -177,13 +341,12 @@ def _plugins_from_lines(path):
 def _precheck_parse_plugins_lists(path):
     """Parse plugins.enabled / plugins.disabled from config.yaml.
 
-    Uses yaml.safe_load when available, else a minimal line scan that
-    handles both inline (enabled: [dir-whip]) and block
-    (enabled:\\n  - dir-whip) forms. Returns (enabled, disabled) lists.
+    The stdlib line scan is the single parser (the PyYAML
+    fast path; the orphaned wrapper was removed with it): handles the
+    inline map (plugins: {enabled: [...], disabled: [...]}), inline list
+    (enabled: [dir-whip]) and block (enabled:\\n  - dir-whip) forms.
+    Returns (enabled, disabled) lists.
     """
-    parsed = _plugins_from_yaml(path)
-    if parsed is not None:
-        return parsed
     return _plugins_from_lines(path)
 
 

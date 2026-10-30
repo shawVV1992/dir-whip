@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Shared READ-ONLY Working Directory resolver for the skill CLIs -- the ONLY cross-import exception, parity-locked with dir-whip/config.py.
 
-READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only (minimal line-based config parsing, mirroring the plugin's PyYAML-based parser); duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7; legacy v2.6 flat tagged lists ignored fail-closed).
+READ-ONLY by design: never writes to HERMES_HOME (no persisted state, no rebuild, no hermes_cli import); resolves the current profile's Working Directory via the layered chain (spec 4.4): dir-whip-config.yaml working_dir_root (authoritative) -> HERMES_SESSION_PROFILE profile config.yaml terminal.cwd -> profile enumeration + TERMINAL_CWD candidate roots + path matching -> fail-open None + exactly ONE concise stderr WARNING. Self-contained stdlib only: the line parser below is the SINGLE script-side config parser (scripts stay backend-independent); it duplicates the structured allowlist mapping ``{files, dirs}`` with root-relative entries (no import) to keep parity with dir-whip/allowlist.py (spec v2.7; legacy v2.6 flat tagged lists ignored fail-closed).
 
 Layer: skill-subprocess
-Refs: spec 4.4, spec v2.6, spec v2.7, spec v2.26
+Refs: spec 4.4, spec v2.6, spec v2.7, spec v2.26, spec v2.28
 Contract: the `_ws_*` allowlist predicates below are consumed across
 module by audit_workspace.py / search_workspace.py (sibling contract,
 not a private implementation detail).
@@ -23,6 +23,7 @@ exception).
 """
 
 import datetime
+import json
 import os
 import posixpath
 import re
@@ -145,13 +146,181 @@ def is_session_name(name):
     return True
 
 
+def _strip_yaml_comment(line):
+    """Strip a YAML line comment, quote-aware.
+
+    A '#' starts a comment only OUTSIDE quotes and at line start or after
+    whitespace: ``a#b`` stays intact and a '#' inside a quoted scalar is
+    preserved.
+    """
+    quote = None
+    idx = 0
+    length = len(line)
+    while idx < length:
+        char = line[idx]
+        if quote == '"':
+            if char == "\\":
+                idx += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if idx + 1 < length and line[idx + 1] == "'":
+                    idx += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (idx == 0 or line[idx - 1] in (" ", "\t")):
+            return line[:idx]
+        idx += 1
+    return line
+
+
+_YAML11_BOOL_VALUES = frozenset(
+    "y Y yes Yes YES n N no No NO true True TRUE false False FALSE "
+    "on On ON off Off OFF".split()
+)
+_YAML11_NULL_VALUES = frozenset(("~", "null", "Null", "NULL"))
+_YAML11_INT_RE = re.compile(
+    r"^[-+]?(?:"
+    r"0b[0-1_]+|"
+    r"0[0-7_]+|"
+    r"(?:0|[1-9][0-9_]*)|"
+    r"0x[0-9a-fA-F_]+|"
+    r"[1-9][0-9_]*(?::[0-5]?[0-9])+"
+    r")$"
+)
+_YAML11_FLOAT_RE = re.compile(
+    r"^[-+]?(?:"
+    r"[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|"
+    r"\.[0-9_]+(?:[eE][-+][0-9]+)?|"
+    r"[1-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|"
+    r"\.(?:inf|Inf|INF)"
+    r")$|^\.(?:nan|NaN|NAN)$"
+)
+_YAML11_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _decode_yaml_scalar(value):
+    """Decode one YAML scalar body (comments already stripped).
+
+    Quoted values always decode to strings (double quotes via JSON
+    escapes, single quotes via doubled-quote unescaping). An UNQUOTED
+    YAML 1.1 bool / null / int / float / date scalar decodes to None so
+    the script agrees with the core layer's non-string filtering (a
+    config ``[yes, no]`` must not allowlist files named yes/no). Out of
+    scope: timestamps carrying a time of day stay text here (documented
+    parity-domain gap; allowlist validation rejects their ':' anyway).
+    """
+    value = value.strip()
+    if not value:
+        return ""
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, str):
+            return decoded
+        return value
+    if value.startswith("'"):
+        if len(value) >= 2 and value.endswith("'"):
+            return value[1:-1].replace("''", "'")
+        return value
+    if value in _YAML11_BOOL_VALUES or value in _YAML11_NULL_VALUES:
+        return None
+    if (
+        _YAML11_INT_RE.match(value)
+        or _YAML11_FLOAT_RE.match(value)
+        or _YAML11_DATE_RE.match(value)
+    ):
+        return None
+    return value
+
+
+def _split_flow_scalars(body):
+    """Quote-aware comma split of a flow-list body (brackets removed)."""
+    parts = []
+    buf = []
+    quote = None
+    idx = 0
+    length = len(body)
+    while idx < length:
+        char = body[idx]
+        if quote == '"':
+            buf.append(char)
+            if char == "\\" and idx + 1 < length:
+                buf.append(body[idx + 1])
+                idx += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            buf.append(char)
+            if char == "'":
+                if idx + 1 < length and body[idx + 1] == "'":
+                    buf.append("'")
+                    idx += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+            buf.append(char)
+        elif char == ",":
+            item = _decode_yaml_scalar("".join(buf))
+            if item:
+                parts.append(item)
+            buf = []
+        else:
+            buf.append(char)
+        idx += 1
+    item = _decode_yaml_scalar("".join(buf))
+    if item:
+        parts.append(item)
+    return parts
+
+
+def _split_flow_list(rest):
+    """Parse a YAML flow list body ``[a, b]`` / ``a, b`` into strings.
+
+    Bracketed bodies decode through JSON first (quoted commas and
+    escapes); a quote-aware comma scan is the fallback for YAML-only
+    scalars such as single-quoted entries.
+    """
+    text = _strip_yaml_comment(rest).strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        if not text.endswith("]"):
+            return []
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+        try:
+            loaded = json.loads(text)
+        except Exception:
+            loaded = None
+        if isinstance(loaded, list):
+            return [
+                item.strip()
+                for item in loaded
+                if isinstance(item, str) and item.strip()
+            ]
+        return _split_flow_scalars(inner)
+    return _split_flow_scalars(text)
+
+
 def parse_terminal_cwd(config_path):
     """Parse terminal.cwd from a Hermes config.yaml (minimal parser).
 
-    Mirrors dir-whip/config.py parse_terminal_cwd (PyYAML-based): the
-    `terminal:` block starts at column 0, `cwd:` is read inside it,
-    quoted values are stripped; empty/placeholder value -> None;
-    missing/unreadable file -> None.
+    Mirrors dir-whip/config.py parse_terminal_cwd: the `terminal:` block
+    starts at column 0, `cwd:` is read inside it; line comments are
+    stripped outside quotes and quoted values are decoded; empty /
+    placeholder value -> None; missing/unreadable file -> None. The
+    flow-mapping form ``terminal: {cwd: ...}`` is outside this line
+    parser's domain (spec v2.28 parity scope).
     """
     try:
         with open(config_path, "r", encoding="utf-8") as f:
@@ -160,13 +329,15 @@ def parse_terminal_cwd(config_path):
         return None
     in_terminal = False
     for line in lines:
-        stripped = line.strip()
+        stripped = _strip_yaml_comment(line).strip()
+        if not stripped:
+            continue
         if stripped == "terminal:":
             in_terminal = True
             continue
         if in_terminal:
             if stripped.startswith("cwd:"):
-                value = stripped[4:].strip().strip("'\"")
+                value = _decode_yaml_scalar(stripped[4:].strip())
                 return value if value else None
             if not line.startswith(" ") and not line.startswith("\t"):
                 in_terminal = False
@@ -176,8 +347,9 @@ def parse_terminal_cwd(config_path):
 def _parse_yaml_scalar(path, key):
     """Minimal line-based parser for a top-level scalar YAML key.
 
-    The key must start at column 0 (comments and indented keys are
-    skipped); quoted values are stripped; empty/missing -> None.
+    The key must start at column 0 (indented keys are skipped); line
+    comments are stripped outside quotes and quoted values are decoded;
+    empty/missing -> None.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -187,7 +359,9 @@ def _parse_yaml_scalar(path, key):
     prefix = key + ":"
     for line in lines:
         if line.startswith(prefix):
-            value = line[len(prefix):].strip().strip("'\"")
+            value = _decode_yaml_scalar(
+                _strip_yaml_comment(line[len(prefix):])
+            )
             return value if value else None
     return None
 
@@ -484,56 +658,23 @@ def _ws_is_allowlist_dir_name(name, dirs_entries):
     return False
 
 
-def _split_flow_list(rest):
-    """Parse a YAML flow list body ``[a, b]`` / ``a, b`` into string parts."""
-    inner = rest.strip().strip("[]").strip()
-    parts = []
-    if inner:
-        for part in inner.split(","):
-            part = part.strip().strip("'\"")
-            if part:
-                parts.append(part)
-    return parts
-
-
-def _parse_allowlist_yaml(data):
-    """Extract the structured allowlist from parsed YAML (spec v2.7 parity).
-
-    Reads the single key ``allowlist`` (mapping form). Legacy flat values /
-    old keys are ignored fail-closed; the legacy entry count is returned
-    alongside for the clean-break hint.
-    """
-    empty = {"files": [], "dirs": [], "legacy": 0}
-    if not isinstance(data, dict):
-        return dict(empty)
-    raw = data.get("allowlist")
-    parsed = _ws_parse_allowlist(raw)
-    legacy = 0
-    if isinstance(raw, list):
-        legacy = sum(1 for x in raw if isinstance(x, str) and x.strip())
-    return {
-        "files": sorted(parsed.get("files") or []),
-        "dirs": sorted(parsed.get("dirs") or []),
-        "legacy": legacy,
-    }
-
-
 def _apply_allowlist_inline(rest, raw_map, legacy_items):
     """Inline allowlist body: mapping {...} -> sub-key scan; flat [...] ->
     legacy entries (counted, ignored fail-closed)."""
-    if rest.startswith("{"):
-        body = rest.strip("{}")
+    text = _strip_yaml_comment(rest).strip()
+    if text.startswith("{"):
+        body = text[1:]
+        if body.endswith("}"):
+            body = body[:-1]
         # minimal inline-mapping scan: files:[...], dirs:[...]
-        m_files = re.search(r"files\s*:\s*\[([^\]]*)\]", body)
-        m_dirs = re.search(r"dirs\s*:\s*\[([^\]]*)\]", body)
-        if m_files:
-            raw_map["files"].extend(_split_flow_list(m_files.group(1)))
-        if m_dirs:
-            raw_map["dirs"].extend(_split_flow_list(m_dirs.group(1)))
-    elif rest.startswith("["):
-        inner = rest.strip("[]").strip()
-        if inner:
-            legacy_items.extend(_split_flow_list(inner))
+        for key in ("files", "dirs"):
+            match = re.search(
+                r"\b" + key + r"\s*:\s*\[([^\]]*)\]", body
+            )
+            if match:
+                raw_map[key].extend(_split_flow_list(match.group(1)))
+    elif text.startswith("["):
+        legacy_items.extend(_split_flow_list(text))
 
 
 def _apply_allowlist_subkey(stripped, raw_map, in_sub):
@@ -548,13 +689,15 @@ def _apply_allowlist_subkey(stripped, raw_map, in_sub):
                 return None
             return key
     if in_sub and stripped.startswith("- "):
-        raw_map[in_sub].append(stripped[2:].strip().strip("'\""))
+        value = _decode_yaml_scalar(stripped[2:])
+        if value:
+            raw_map[in_sub].append(value)
         return in_sub
     return None
 
 
 def _parse_allowlist_lines(path):
-    """Line-based structured allowlist parser (PyYAML unavailable, spec v2.7).
+    """Line-based structured allowlist parser (the single script parser).
 
     Handles the mapping block form::
 
@@ -563,8 +706,10 @@ def _parse_allowlist_lines(path):
           dirs: ["proj/sub"]
 
     and the inline mapping ``allowlist: {files: [...], dirs: [...]}``.
-    A legacy FLAT value (inline ``["file:a", ...]`` or a ``- item`` block)
-    is IGNORED fail-closed and counted for the clean-break hint.
+    Line comments are stripped outside quotes; quoted scalars are decoded
+    (quoted commas / '#' stay inside a single entry). A legacy FLAT value
+    (inline ``["file:a", ...]`` or a ``- item`` block) is IGNORED
+    fail-closed and counted for the clean-break hint.
     Returns {"files": [...], "dirs": [...], "legacy": N}.
     """
     result = {"files": [], "dirs": [], "legacy": 0}
@@ -578,8 +723,8 @@ def _parse_allowlist_lines(path):
     raw_map = {"files": [], "dirs": []}
     legacy_items = []
     for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        stripped = _strip_yaml_comment(line).strip()
+        if not stripped:
             continue
         indented = line[:1] in (" ", "\t")
         if stripped.startswith("allowlist:"):
@@ -594,6 +739,11 @@ def _parse_allowlist_lines(path):
             if not indented:
                 in_map = False
                 in_sub = None
+            elif stripped.startswith("- ") and in_sub is None:
+                # Legacy flat block list entries are counted, not parsed.
+                value = _decode_yaml_scalar(stripped[2:])
+                if value:
+                    legacy_items.append(value)
             else:
                 in_sub = _apply_allowlist_subkey(stripped, raw_map, in_sub)
     parsed = _ws_parse_allowlist({
@@ -611,25 +761,17 @@ def allowlist_state(hh=None):
     """Structured allowlist state from dir-whip-config.yaml (spec v2.7).
 
     Reads the ``allowlist`` mapping from <HERMES_HOME>/dir-whip/
-    dir-whip-config.yaml. Returns {"files": [sorted basenames],
-    "dirs": [sorted relative paths], "legacy": N} where N counts ignored
-    legacy flat entries (clean-break hint). STRICT fallback: missing
-    config/key -> empty state (fail-closed, matching the plugin guard so
-    guard and audit never disagree).
+    dir-whip-config.yaml through the line parser -- the SINGLE script-side
+    read path (the line parser is the single script-side parser). Returns {"files": [sorted
+    basenames], "dirs": [sorted relative paths], "legacy": N} where N
+    counts ignored legacy flat entries (clean-break hint). STRICT fallback:
+    missing config/key -> empty state (fail-closed, matching the plugin
+    guard so guard and audit never disagree).
     """
     if hh is None:
         hh = hermes_home()
     path = os.path.join(hh, GUARD_SUBDIR, CONFIG_FILE)
-    try:
-        import yaml  # noqa: PLC0415 -- optional dependency, fallback below
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-        return _parse_allowlist_yaml(data)
-    except ImportError:
-        return _parse_allowlist_lines(path)
-    except Exception:
-        return {"files": [], "dirs": [], "legacy": 0}
+    return _parse_allowlist_lines(path)
 
 
 def validate_workspace(path, hh=None, env=None):
