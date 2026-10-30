@@ -1,7 +1,7 @@
 """Single YAML read entry point for the plugin core -- backend-detecting ``load_file``.
 
 Read a file once, then parse with ruamel.yaml (YAML 1.1, safe, last-value-
-wins) when installed, else PyYAML (the 0.8.5 behavior), else fail open.
+wins) when installed, else PyYAML (the legacy behavior), else fail open.
 Third-party imports stay function-local so a missing or broken YAML
 package can never break ``import dirwhip``; missing/unreadable/invalid
 files log and return None, and duplicate keys keep PyYAML's last-value-
