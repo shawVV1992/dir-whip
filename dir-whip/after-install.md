@@ -1,4 +1,9 @@
-# dir-whip installed (v0.8.5)
+# dir-whip installed (v0.8.6)
+
+**Compatibility**: works on Hermes 0.22.5+ where PyYAML is no longer a core
+dependency. The plugin prefers `ruamel.yaml`, falls back to PyYAML, and with
+neither installed it still loads with the guard disabled and one WARNING in
+dir-whip.log. Scripts use a stdlib line parser and never import `yaml`.
 
 **Plugin guard**: Active after next Hermes restart. Terminal writes are
 intercepted via chain-aware extraction (splits on `&&` / `;` / `|` /

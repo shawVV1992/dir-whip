@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.5](https://img.shields.io/badge/version-0.8.5-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.6](https://img.shields.io/badge/version-0.8.6-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [中文版](./README-zh.md) | [English](./README.md)
 
@@ -343,7 +343,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.5
+[dir-whip] v0.8.6
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -385,15 +385,18 @@ session start):
 
 ![Config resolution chain — plugin side](assert/image/config-plugin-chain-en.svg)
 
-- Safe YAML parsing (`safe_load`): a missing or unparseable file falls
-  back to an empty config (strict empty allowlist) while Working
-  Directory resolution continues through the profile `terminal.cwd` —
-  the guard stays enabled; only when the whole resolution chain fails
-  does the guard turn off (`State: disabled`, Health lists the issues).
-  A `/dir-whip` WARNING prints when the override differs from the
-  profile `terminal.cwd`.
+- Safe YAML parsing through one `yamlio` seam: `ruamel.yaml` first
+  (YAML 1.1, safe), PyYAML as the legacy fallback. A missing or unparseable
+  file falls back to an empty config (strict empty allowlist) while Working
+  Directory resolution continues through the profile `terminal.cwd` — the
+  guard stays enabled; only when the whole resolution chain fails does the
+  guard turn off (`State: disabled`, Health lists the issues). With neither
+  backend installed the plugin still loads, logs one WARNING and the guard
+  fails open. Duplicate YAML keys keep the last value and log a WARNING.
+  A `/dir-whip` WARNING prints when the override differs from the profile
+  `terminal.cwd`.
 
-**Script side** (standalone · line-parse fallback when no yaml library):
+**Script side** (standalone · stdlib line parser; no `yaml` import):
 
 ![Config resolution chain — script side](assert/image/config-script-chain-en.svg)
 

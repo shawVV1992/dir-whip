@@ -3,7 +3,7 @@
 # dir-whip
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version: 0.8.5](https://img.shields.io/badge/version-0.8.5-blue.svg)](https://github.com/shawVV1992/dir-whip)
+[![Version: 0.8.6](https://img.shields.io/badge/version-0.8.6-blue.svg)](https://github.com/shawVV1992/dir-whip)
 
 [English](./README.md) | [中文版](./README-zh.md)
 
@@ -274,7 +274,7 @@ Agent: dir_whip_settle(paths=["notes.txt"])
 ```text
 /dir-whip
 
-[dir-whip] v0.8.5
+[dir-whip] v0.8.6
 State: enabled
 Working Directory: E:/HermesWorkspace/default  (source: guard-config)
 Allowlist:
@@ -314,9 +314,9 @@ allowlist:
 
 ![config 解析链——插件侧](assert/image/config-plugin-chain.svg)
 
-- 安全 YAML 解析（`safe_load`）：文件缺失或解析失败回退空配置（白名单严格为空），Working Directory 解析链继续走档案 `terminal.cwd`——守卫保持开启；仅当整条解析链失败时守卫才关闭（`State: disabled`，Health 列出问题）。覆盖值与档案 `terminal.cwd` 不一致时 `/dir-whip` 输出 WARNING。
+- 安全 YAML 解析统一走 `yamlio` 入口：优先 `ruamel.yaml`（YAML 1.1，safe），PyYAML 为旧环境回退。文件缺失或解析失败回退空配置（白名单严格为空），Working Directory 解析链继续走档案 `terminal.cwd`——守卫保持开启；仅当整条解析链失败时守卫才关闭（`State: disabled`，Health 列出问题）。两个后端都不可用时插件仍可加载，记一条 WARNING，守卫 fail-open。重复 YAML 键保留后值并记 WARNING。覆盖值与档案 `terminal.cwd` 不一致时 `/dir-whip` 输出 WARNING。
 
-**脚本侧**（独立运行 · 无 yaml 库时行解析兜底）：
+**脚本侧**（独立运行 · stdlib 行解析；不 import `yaml`）：
 
 ![config 解析链——脚本侧](assert/image/config-script-chain.svg)
 
